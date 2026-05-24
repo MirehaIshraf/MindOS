@@ -196,6 +196,7 @@ export function DevPage() {
             <Row label="storage" value={devState?.storage ?? health?.storage ?? "-"} />
             <Row label="database" value={devState?.database_path ?? health?.database_path ?? "-"} />
             <Row label="event count" value={String(devState?.event_count ?? health?.event_count ?? 0)} />
+            <Row label="file events" value={String(devState?.file_system_event_count ?? 0)} />
             <Row label="task count" value={String(devState?.task_count ?? health?.task_count ?? 0)} />
             <Row label="chat sessions" value={String(devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
             <Row label="chat messages" value={String(devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />

@@ -55,6 +55,7 @@ def dev_state() -> dict[str, object]:
     payload: dict[str, object] = {
         "storage": settings.storage_backend,
         "event_count": event_service.count_events(),
+        "file_system_event_count": event_service.count_by_source().get("file_system", 0),
         "task_count": task_service.count_tasks(),
         "chat_session_count": chat_service.count_sessions(),
         "chat_message_count": chat_service.count_messages(),

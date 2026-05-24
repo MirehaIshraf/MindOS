@@ -20,6 +20,7 @@ const categories = [
 
 const sources = [
   { label: "All Sources", value: undefined },
+  { label: "File System", value: "file_system" },
   { label: "Manual", value: "manual" },
   { label: "VSCode", value: "vscode" },
   { label: "Browser", value: "browser" },
@@ -388,7 +389,13 @@ function truncate(value: string, maxLength: number) {
 }
 
 function formatSourceLabel(source: string) {
-  return source === "mindos" ? "MindOS" : source;
+  if (source === "mindos") {
+    return "MindOS";
+  }
+  if (source === "file_system") {
+    return "File System";
+  }
+  return source;
 }
 
 function formatCategoryLabel(category: string) {

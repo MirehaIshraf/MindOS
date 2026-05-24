@@ -48,6 +48,25 @@ STORAGE_BACKEND=memory
 
 To reset SQLite data, use the Dev page clear buttons for events, chats, and tasks. You can also delete `data/mindos.db` manually while the backend is stopped.
 
+## File System Manual Import
+
+MindOS can manually import local text and code files from a folder path you provide through the Connectors page or API:
+
+- `POST /connectors/file-system/preview`
+- `POST /connectors/file-system/import`
+
+The import is local-only. The backend reads files from the selected folder on your machine and stores the file contents in your local MindOS database as Memory events.
+
+Supported by default:
+
+- Text/docs: `.txt`, `.md`, `.markdown`, `.rst`, `.csv`, `.json`, `.yaml`, `.yml`, `.xml`
+- Code: `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, `.java`, `.kt`, `.go`, `.rs`, `.c`, `.cpp`, `.h`, `.hpp`, `.cs`, `.php`, `.rb`, `.swift`, `.dart`, `.scala`, `.sql`, `.html`, `.css`, `.scss`
+- Config/build files: `.env.example`, `.gitignore`, `Dockerfile`, `docker-compose.yml`, `package.json`, `requirements.txt`, `pyproject.toml`, `pom.xml`, `build.gradle`, `settings.gradle`
+
+The importer skips noisy or unsafe folders such as `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `dist`, `build`, `target`, `.idea`, `.vscode`, `.next`, `coverage`, and `logs/archive`.
+
+It also skips binary files, files above the configured size limit, `.env`, and files containing obvious private key or secret markers. Live file watching is not implemented yet.
+
 ## Setup
 
 ```powershell

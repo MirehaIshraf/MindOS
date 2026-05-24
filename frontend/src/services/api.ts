@@ -6,7 +6,11 @@ import type {
   ChatRequestPayload,
   ChatResponse,
   ChatSessionsResponse,
+  ConnectorListResponse,
   DevState,
+  FileImportPayload,
+  FileImportResult,
+  FilePreviewResult,
   IngestEventRequest,
   IngestEventResponse,
   MemoryEvent,
@@ -75,10 +79,6 @@ export async function getDevState(): Promise<DevState> {
 export async function ingestEvent(data: IngestEventRequest): Promise<IngestEventResponse> {
   const response = await api.post<IngestEventResponse>("/ingest", data);
   return response.data;
-}
-
-function notImplemented(): never {
-  throw new Error("Not implemented yet");
 }
 
 export async function searchEvents(
@@ -168,9 +168,20 @@ export async function getTaskHistory(limit = 20): Promise<TaskHistoryResponse> {
 }
 
 export async function getPlaybooks(): Promise<never> {
-  return notImplemented();
+  throw new Error("Not implemented yet");
 }
 
-export async function getConnectors(): Promise<never> {
-  return notImplemented();
+export async function getConnectors(): Promise<ConnectorListResponse> {
+  const response = await api.get<ConnectorListResponse>("/connectors");
+  return response.data;
+}
+
+export async function previewFileImport(payload: FileImportPayload): Promise<FilePreviewResult> {
+  const response = await api.post<FilePreviewResult>("/connectors/file-system/preview", payload);
+  return response.data;
+}
+
+export async function importFiles(payload: FileImportPayload): Promise<FileImportResult> {
+  const response = await api.post<FileImportResult>("/connectors/file-system/import", payload);
+  return response.data;
 }

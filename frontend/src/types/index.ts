@@ -64,6 +64,7 @@ export type DevState = {
   storage: string;
   database_path?: string;
   event_count: number;
+  file_system_event_count?: number;
   task_count: number;
   chat_session_count: number;
   chat_message_count: number;
@@ -208,4 +209,44 @@ export type TaskHistoryItem = {
 export type TaskHistoryResponse = {
   tasks: TaskHistoryItem[];
   total: number;
+};
+
+export type Connector = {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  status: string;
+  enabled: boolean;
+  events_count?: number | null;
+  last_event_at?: string | null;
+  supports_manual_import?: boolean | null;
+  supports_live_watch?: boolean | null;
+};
+
+export type ConnectorListResponse = {
+  connectors: Connector[];
+};
+
+export type FileImportPayload = {
+  folder_path: string;
+  recursive: boolean;
+  max_files: number;
+  max_file_size_kb: number;
+  allowed_extensions?: string[] | null;
+};
+
+export type FilePreviewResult = {
+  total_candidates: number;
+  preview_files: Array<Record<string, string | number>>;
+  skipped: Array<Record<string, string | number>>;
+};
+
+export type FileImportResult = {
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  events_created: string[];
+  skipped: Array<Record<string, string | number>>;
+  failed: Array<Record<string, string | number>>;
+  message: string;
 };
