@@ -3,6 +3,7 @@ export type BackendHealth = {
   app: string;
   environment: string;
   storage: string;
+  database_path?: string;
   event_count: number;
   task_count?: number;
   chat_session_count?: number;
@@ -61,11 +62,13 @@ export type IngestEventResponse = {
 
 export type DevState = {
   storage: string;
+  database_path?: string;
   event_count: number;
   task_count: number;
   chat_session_count: number;
   chat_message_count: number;
   events_by_source: Record<string, number>;
+  events_by_category: Record<string, number>;
 };
 
 export type SeedSampleEventsResponse = {

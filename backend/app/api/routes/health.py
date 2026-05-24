@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.core.config import get_settings
+from app.core.database import get_database_path
 from app.services.event_service import EventService
 from app.services.chat_service import chat_service
 from app.services.task_service import task_service
@@ -12,7 +13,7 @@ event_service = EventService()
 @router.get("/health")
 def health_check() -> dict[str, str | int]:
     settings = get_settings()
-    return {
+    payload: dict[str, str | int] = {
         "status": "ok",
         "app": settings.app_name,
         "environment": settings.app_env,
@@ -23,3 +24,6 @@ def health_check() -> dict[str, str | int]:
         "chat_message_count": chat_service.count_messages(),
         "search_mode": "keyword",
     }
+    if settings.storage_backend.lower() == "sqlite":
+        payload["database_path"] = str(get_database_path())
+    return payload

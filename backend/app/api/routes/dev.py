@@ -1,14 +1,17 @@
 from fastapi import APIRouter
 
 from app.core.config import get_settings
+from app.core.database import get_database_path
 from app.services.event_service import EventService
 from app.services.ingestion_service import IngestionService
 from app.services.chat_service import chat_service
+from app.services.search_service import SearchService
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/dev", tags=["dev"])
 ingestion_service = IngestionService()
 event_service = EventService()
+search_service = SearchService()
 
 
 @router.post("/sample-events")
@@ -48,11 +51,16 @@ def clear_chats() -> dict[str, str]:
 @router.get("/state")
 def dev_state() -> dict[str, object]:
     settings = get_settings()
-    return {
+    search_stats = search_service.get_search_stats()
+    payload: dict[str, object] = {
         "storage": settings.storage_backend,
         "event_count": event_service.count_events(),
         "task_count": task_service.count_tasks(),
         "chat_session_count": chat_service.count_sessions(),
         "chat_message_count": chat_service.count_messages(),
         "events_by_source": event_service.count_by_source(),
+        "events_by_category": search_stats.by_category,
     }
+    if settings.storage_backend.lower() == "sqlite":
+        payload["database_path"] = str(get_database_path())
+    return payload

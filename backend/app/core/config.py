@@ -6,7 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "MindOS"
     app_env: str = "development"
-    storage_backend: str = "memory"
+    storage_backend: str = "sqlite"
+    sqlite_path: str = "data/mindos.db"
     frontend_url: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(

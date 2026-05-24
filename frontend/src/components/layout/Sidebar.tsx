@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
+import { useAppStore } from "../../store/appStore";
+
 const navItems = [
   { label: "Chat", path: "/chat", icon: MessageSquare, primary: true },
   { label: "Memory", path: "/memory", icon: Database },
@@ -19,6 +21,8 @@ const navItems = [
 ];
 
 export function Sidebar() {
+  const storageMode = useAppStore((state) => state.storageMode);
+
   return (
     <aside className="fixed left-0 top-0 flex h-screen w-[260px] flex-col border-r border-app-border bg-app-sidebar">
       <div className="border-b border-app-border px-6 py-5">
@@ -67,7 +71,7 @@ export function Sidebar() {
         </div>
         <div className="mt-2 flex items-center justify-between">
           <span>storage</span>
-          <span className="text-app-text">memory</span>
+          <span className="text-app-text">{storageMode ?? "sqlite"}</span>
         </div>
         <div className="mt-2 flex items-center justify-between">
           <span>mode</span>

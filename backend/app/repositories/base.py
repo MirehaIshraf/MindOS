@@ -17,11 +17,17 @@ class EventRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_recent_events(self, source: str | None = None, limit: int = 20) -> list[Event]:
+    def list_recent_events(
+        self,
+        source: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        include_hidden: bool = False,
+    ) -> list[Event]:
         raise NotImplementedError
 
     @abstractmethod
-    def list_all_events(self) -> list[Event]:
+    def list_all_events(self, include_hidden: bool = True) -> list[Event]:
         raise NotImplementedError
 
     @abstractmethod
@@ -134,9 +140,29 @@ class PlaybookRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def create(self, name: str, description: str = "", steps: list[str] | None = None) -> Playbook:
+        raise NotImplementedError
+
+    @abstractmethod
     def list(self) -> list[Playbook]:
         raise NotImplementedError
 
     @abstractmethod
     def get(self, playbook_id: str) -> Playbook | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, playbook_id: str, updates: dict) -> Playbook | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, playbook_id: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count(self) -> int:
         raise NotImplementedError

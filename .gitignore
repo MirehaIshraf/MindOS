@@ -17,6 +17,10 @@ dist/
 .env.*
 !.env.example
 
+# Local data
+backend/data/
+data/
+
 # Logs
 *.log
 

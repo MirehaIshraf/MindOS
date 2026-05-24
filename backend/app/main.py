@@ -13,7 +13,9 @@ from app.api.routes import (
     tasks,
 )
 from app.core.config import get_settings
+from app.core.database import get_database_path, initialize_database
 from app.core.logging import setup_logging
+import logging
 
 
 setup_logging()
@@ -42,6 +44,16 @@ app.include_router(tasks.router)
 app.include_router(playbooks.router)
 app.include_router(connectors.router)
 app.include_router(dev.router)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    logger = logging.getLogger(__name__)
+    if settings.storage_backend.lower() == "sqlite":
+        initialize_database()
+        logger.info("MindOS storage initialized", extra={"storage": "sqlite", "database_path": str(get_database_path())})
+    else:
+        logger.info("MindOS storage initialized", extra={"storage": "memory"})
 
 
 @app.get("/")

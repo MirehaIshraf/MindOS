@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.dependencies import get_event_repository, get_task_repository
 from app.domain.enums import EmbeddingStatus, EventSource, TaskStatus, TaskType
 from app.integrations.tools.mock_email_tool import MockEmailTool
 from app.integrations.tools.mock_github_tool import MockGitHubTool
 from app.integrations.tools.mock_jira_tool import MockJiraTool
-from app.repositories.memory_event_repository import MemoryEventRepository, get_memory_event_repository
-from app.repositories.memory_task_repository import MemoryTaskRepository, get_memory_task_repository
+from app.repositories.base import EventRepository, TaskRepository
 from app.schemas.tasks import (
     TaskCancelRequest,
     TaskConfirmRequest,
@@ -22,12 +22,12 @@ from app.services.search_service import SearchService
 class TaskService:
     def __init__(
         self,
-        task_repository: MemoryTaskRepository | None = None,
-        event_repository: MemoryEventRepository | None = None,
+        task_repository: TaskRepository | None = None,
+        event_repository: EventRepository | None = None,
         search_service: SearchService | None = None,
     ) -> None:
-        self._task_repository = task_repository or get_memory_task_repository()
-        self._event_repository = event_repository or get_memory_event_repository()
+        self._task_repository = task_repository or get_task_repository()
+        self._event_repository = event_repository or get_event_repository()
         self._search_service = search_service or SearchService()
         self._pending_confirmations: dict[str, dict] = {}
         self._email_tool = MockEmailTool()

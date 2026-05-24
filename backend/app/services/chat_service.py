@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
+from app.core.dependencies import get_chat_repository, get_event_repository
 from app.domain.enums import EmbeddingStatus, EventSource
 from app.integrations.llm.fake_llm import FakeLLMClient
-from app.repositories.memory_chat_repository import MemoryChatRepository, get_memory_chat_repository
-from app.repositories.memory_event_repository import MemoryEventRepository, get_memory_event_repository
+from app.repositories.base import ChatRepository, EventRepository
 from app.schemas.chat import (
     ChatMessagesResponse,
     ChatRequest,
@@ -27,13 +27,13 @@ class ChatService:
         self,
         search_service: SearchService | None = None,
         llm: FakeLLMClient | None = None,
-        chat_repository: MemoryChatRepository | None = None,
-        event_repository: MemoryEventRepository | None = None,
+        chat_repository: ChatRepository | None = None,
+        event_repository: EventRepository | None = None,
     ) -> None:
         self._search_service = search_service or SearchService()
         self._llm = llm or FakeLLMClient()
-        self._chat_repository = chat_repository or get_memory_chat_repository()
-        self._event_repository = event_repository or get_memory_event_repository()
+        self._chat_repository = chat_repository or get_chat_repository()
+        self._event_repository = event_repository or get_event_repository()
 
     def placeholder(self) -> dict[str, str]:
         return {

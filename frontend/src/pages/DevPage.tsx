@@ -194,11 +194,15 @@ export function DevPage() {
           <div className="mt-4 space-y-3 text-sm">
             <Row label="status" value={backendOnline ? "online" : "offline"} tone={backendOnline ? "success" : "danger"} />
             <Row label="storage" value={devState?.storage ?? health?.storage ?? "-"} />
+            <Row label="database" value={devState?.database_path ?? health?.database_path ?? "-"} />
             <Row label="event count" value={String(devState?.event_count ?? health?.event_count ?? 0)} />
             <Row label="task count" value={String(devState?.task_count ?? health?.task_count ?? 0)} />
             <Row label="chat sessions" value={String(devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
             <Row label="chat messages" value={String(devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />
           </div>
+          {devState?.storage === "sqlite" || health?.storage === "sqlite" ? (
+            <p className="mt-4 text-xs leading-5 text-app-muted">SQLite data persists across backend restarts.</p>
+          ) : null}
           {sourceCounts.length > 0 ? (
             <div className="mt-4 flex flex-wrap gap-2">
               {sourceCounts.map(([source, count]) => (

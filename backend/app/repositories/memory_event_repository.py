@@ -19,13 +19,19 @@ class MemoryEventRepository(EventRepository):
     def get_event_by_id(self, event_id: str) -> Event | None:
         return self._events.get(event_id)
 
-    def list_recent_events(self, source: str | None = None, limit: int = 20) -> list[Event]:
+    def list_recent_events(
+        self,
+        source: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        include_hidden: bool = False,
+    ) -> list[Event]:
         events = list(self._events.values())
         if source:
             events = [event for event in events if event.source.value == source]
         return sorted(events, key=lambda event: event.timestamp, reverse=True)[:limit]
 
-    def list_all_events(self) -> list[Event]:
+    def list_all_events(self, include_hidden: bool = True) -> list[Event]:
         return list(self._events.values())
 
     def count_events(self) -> int:

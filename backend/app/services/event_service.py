@@ -1,12 +1,13 @@
+from app.core.dependencies import get_event_repository
 from app.domain.models import Event
-from app.repositories.memory_event_repository import MemoryEventRepository, get_memory_event_repository
+from app.repositories.base import EventRepository
 from app.schemas.events import EventResponse
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
 
 
 class EventService:
-    def __init__(self, event_repository: MemoryEventRepository | None = None) -> None:
-        self._event_repository = event_repository or get_memory_event_repository()
+    def __init__(self, event_repository: EventRepository | None = None) -> None:
+        self._event_repository = event_repository or get_event_repository()
 
     def list_recent_events(
         self,

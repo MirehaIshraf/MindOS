@@ -2,8 +2,9 @@ import json
 import re
 from datetime import datetime, timezone
 
+from app.core.dependencies import get_event_repository
 from app.domain.models import Event
-from app.repositories.memory_event_repository import MemoryEventRepository, get_memory_event_repository
+from app.repositories.base import EventRepository
 from app.schemas.search import SearchResponse, SearchResult, SearchStatsResponse
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
 
@@ -11,8 +12,8 @@ STOP_WORDS = {"a", "the", "to", "of", "in", "and", "or", "for", "with"}
 
 
 class SearchService:
-    def __init__(self, event_repository: MemoryEventRepository | None = None) -> None:
-        self._event_repository = event_repository or get_memory_event_repository()
+    def __init__(self, event_repository: EventRepository | None = None) -> None:
+        self._event_repository = event_repository or get_event_repository()
 
     def search_events(
         self,

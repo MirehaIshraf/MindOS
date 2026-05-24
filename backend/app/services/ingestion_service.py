@@ -1,15 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.core.dependencies import get_event_repository
 from app.domain.enums import EmbeddingStatus
 from app.domain.models import Event
-from app.repositories.memory_event_repository import MemoryEventRepository, get_memory_event_repository
+from app.repositories.base import EventRepository
 from app.schemas.ingest import IngestEventRequest
 
 
 class IngestionService:
-    def __init__(self, event_repository: MemoryEventRepository | None = None) -> None:
-        self._event_repository = event_repository or get_memory_event_repository()
+    def __init__(self, event_repository: EventRepository | None = None) -> None:
+        self._event_repository = event_repository or get_event_repository()
 
     def ingest_event(self, request: IngestEventRequest) -> Event:
         return self._event_repository.create_event(self._to_event_data(request))
