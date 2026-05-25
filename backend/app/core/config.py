@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: int = 120
     ollama_num_ctx: int = 8192
     ollama_thinking_mode: bool = False
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    kimi_api_key: str = ""
+    kimi_base_url: str = ""
+    selected_chat_model: str = "ollama-qwen3"
     chat_context_direct_limit: int = 4
     chat_context_related_per_event: int = 1
     chat_context_max_chars_per_event: int = 700

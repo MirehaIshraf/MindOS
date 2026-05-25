@@ -31,6 +31,8 @@ class MemoryChatRepository(ChatRepository):
             content=content,
             sources_used=metadata.get("sources_used", []),
             model=metadata.get("model"),
+            provider=metadata.get("provider"),
+            model_display_name=metadata.get("model_display_name"),
             search_mode=metadata.get("search_mode"),
             task_hint=metadata.get("task_hint"),
             context_summary=metadata.get("context_summary"),

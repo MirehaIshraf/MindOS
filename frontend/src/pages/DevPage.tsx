@@ -8,16 +8,18 @@ import {
   clearEvents,
   clearRelationships,
   clearTasks,
+  getErrorMessage,
   getDevState,
   getHealth,
   getRecentEvents,
   getStatus,
   ingestEvent,
+  planTask,
   rebuildRelationships,
   seedSampleEvents,
   testLLM,
 } from "../services/api";
-import type { BackendHealth, BackendStatus, ContextPackage, DevState, EventSource, MemoryEvent, TestLLMResponse } from "../types";
+import type { BackendHealth, BackendStatus, ContextPackage, DevState, EventSource, MemoryEvent, TaskPlanningResponse, TestLLMResponse } from "../types";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
@@ -46,11 +48,13 @@ export function DevPage() {
   const [contextResult, setContextResult] = useState<ContextPackage | null>(null);
   const [llmTestMessage, setLlmTestMessage] = useState("Say hello from MindOS");
   const [llmTestResult, setLlmTestResult] = useState<TestLLMResponse | null>(null);
+  const [plannerInstruction, setPlannerInstruction] = useState("Create a Jira ticket for the login bug");
+  const [plannerResult, setPlannerResult] = useState<TaskPlanningResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
-  const backendOnline = health !== null;
+  const backendOnline = status !== null;
 
   useEffect(() => {
     void refreshAll();
@@ -60,22 +64,30 @@ export function DevPage() {
     setLoadingAction("refresh");
     setError(null);
     try {
-      const [healthResponse, stateResponse, eventsResponse] = await Promise.all([
-        getHealth(),
-        getDevState(),
-        getRecentEvents(undefined, 20, undefined, true),
-      ]);
       const statusResponse = await getStatus();
-      setHealth(healthResponse);
       setStatus(statusResponse);
-      setDevState(stateResponse);
-      setEvents(eventsResponse.events);
-    } catch {
+      try {
+        const [healthResponse, stateResponse, eventsResponse] = await Promise.all([
+          getHealth(),
+          getDevState(),
+          getRecentEvents(undefined, 20, undefined, true),
+        ]);
+        setHealth(healthResponse);
+        setDevState(stateResponse);
+        setEvents(eventsResponse.events);
+      } catch (secondaryError) {
+        console.error("DevPage secondary state refresh failed", secondaryError);
+        setHealth(null);
+        setDevState(null);
+        setEvents([]);
+      }
+    } catch (caughtError) {
+      console.error("DevPage status refresh failed", caughtError);
       setHealth(null);
       setStatus(null);
       setDevState(null);
       setEvents([]);
-      setError("Backend is offline or unavailable.");
+      setError(getErrorMessage(caughtError));
     } finally {
       setLoadingAction(null);
     }
@@ -230,6 +242,24 @@ export function DevPage() {
     }
   }
 
+  async function handlePlanTask() {
+    if (!plannerInstruction.trim()) {
+      setError("Task planner instruction is required.");
+      return;
+    }
+    setLoadingAction("planTask");
+    setError(null);
+    setMessage(null);
+    setPlannerResult(null);
+    try {
+      setPlannerResult(await planTask({ instruction: plannerInstruction, use_context: true }));
+    } catch {
+      setError("Could not plan task.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   async function handleManualIngest() {
     const title = form.title.trim();
     const type = form.type.trim();
@@ -283,16 +313,16 @@ export function DevPage() {
           <SectionHeader icon={<HeartPulse size={18} />} title="Backend Health" />
           <div className="mt-4 space-y-3 text-sm">
             <Row label="status" value={backendOnline ? "online" : "offline"} tone={backendOnline ? "success" : "danger"} />
-            <Row label="storage" value={devState?.storage ?? health?.storage ?? "-"} />
-            <Row label="database" value={devState?.database_path ?? health?.database_path ?? "-"} />
-            <Row label="event count" value={String(devState?.event_count ?? health?.event_count ?? 0)} />
+            <Row label="storage" value={status?.storage ?? devState?.storage ?? health?.storage ?? "-"} />
+            <Row label="database" value={status?.database_path ?? devState?.database_path ?? health?.database_path ?? "-"} />
+            <Row label="event count" value={String(status?.event_count ?? devState?.event_count ?? health?.event_count ?? 0)} />
             <Row label="file events" value={String(devState?.file_system_event_count ?? 0)} />
             <Row label="log events" value={String(devState?.logs_event_count ?? 0)} />
             <Row label="git events" value={String(devState?.git_event_count ?? 0)} />
-            <Row label="task count" value={String(devState?.task_count ?? health?.task_count ?? 0)} />
-            <Row label="chat sessions" value={String(devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
-            <Row label="chat messages" value={String(devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />
-            <Row label="relationships" value={String(devState?.relationship_count ?? 0)} />
+            <Row label="task count" value={String(status?.task_count ?? devState?.task_count ?? health?.task_count ?? 0)} />
+            <Row label="chat sessions" value={String(status?.chat_session_count ?? devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
+            <Row label="chat messages" value={String(status?.chat_message_count ?? devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />
+            <Row label="relationships" value={String(status?.relationship_count ?? devState?.relationship_count ?? 0)} />
           </div>
           {devState?.storage === "sqlite" || health?.storage === "sqlite" ? (
             <p className="mt-4 text-xs leading-5 text-app-muted">SQLite data persists across backend restarts.</p>
@@ -318,7 +348,10 @@ export function DevPage() {
               tone={(status?.ollama_available ?? devState?.ollama_available) ? "success" : "danger"}
             />
             <Row label="chat model" value={status?.chat_model ?? devState?.chat_model ?? "qwen3:8b"} />
+            <Row label="selected model" value={status?.selected_chat_model ?? "-"} />
             <Row label="active LLM" value={status?.active_llm ?? devState?.active_llm ?? "fake-llm"} />
+            <Row label="active provider" value={status?.active_provider ?? "-"} />
+            <Row label="enabled models" value={String(status?.available_chat_models_count ?? status?.available_chat_models?.length ?? 0)} />
             <Row label="num ctx" value={String(status?.ollama_num_ctx ?? devState?.ollama_num_ctx ?? "-")} />
             <Row label="direct limit" value={String(status?.chat_context_direct_limit ?? devState?.chat_context_direct_limit ?? "-")} />
             <Row label="related each" value={String(status?.chat_context_related_per_event ?? devState?.chat_context_related_per_event ?? "-")} />
@@ -327,6 +360,33 @@ export function DevPage() {
           </div>
           {!(status?.ollama_available ?? devState?.ollama_available) ? (
             <p className="mt-4 text-xs leading-5 text-amber-200">Start Ollama and pull qwen3:8b to enable local chat.</p>
+          ) : null}
+          {status?.available_chat_models && status.available_chat_models.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {status.available_chat_models.map((model) => (
+                <Badge key={model.id} variant={model.type === "cloud" ? "warning" : "success"}>
+                  {model.display_name}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+          {status?.providers ? (
+            <div className="mt-4 space-y-2 text-sm">
+              {Object.entries(status.providers).map(([provider, details]) => (
+                <Row
+                  key={provider}
+                  label={provider}
+                  value={details.available === true ? "available" : details.configured ? "configured" : "not configured"}
+                  tone={details.available === true || details.configured ? "success" : "danger"}
+                />
+              ))}
+            </div>
+          ) : null}
+          {status ? (
+            <details className="mt-4 rounded-md border border-app-border bg-zinc-950 p-3">
+              <summary className="cursor-pointer text-xs text-app-muted">Raw Status JSON</summary>
+              <pre className="mt-3 max-h-72 overflow-auto text-xs leading-5 text-app-text">{JSON.stringify(status, null, 2)}</pre>
+            </details>
           ) : null}
           <div className="mt-4 space-y-3">
             <Button variant="secondary" onClick={refreshAll} loading={loadingAction === "refresh"}>
@@ -420,6 +480,29 @@ export function DevPage() {
                 {contextResult.warnings.length > 0 ? (
                   <p className="text-amber-200">{contextResult.warnings.join("; ")}</p>
                 ) : null}
+              </div>
+            ) : null}
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Activity size={18} />} title="Task Planner Debug" />
+          <div className="mt-4 space-y-3">
+            <LabeledInput label="Instruction" value={plannerInstruction} onChange={setPlannerInstruction} />
+            <Button variant="primary" onClick={handlePlanTask} loading={loadingAction === "planTask"}>
+              Plan Task
+            </Button>
+            {plannerResult ? (
+              <div className="space-y-3 rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="info">{plannerResult.plan.task_type}</Badge>
+                  <Badge>confidence {plannerResult.plan.confidence.toFixed(2)}</Badge>
+                  <Badge>{plannerResult.model}</Badge>
+                  <Badge>{plannerResult.provider}</Badge>
+                </div>
+                {plannerResult.warning ? <p className="text-amber-200">{plannerResult.warning}</p> : null}
+                {plannerResult.context_summary ? <p className="text-app-muted">{plannerResult.context_summary}</p> : null}
+                <JsonPreview value={plannerResult.plan} />
               </div>
             ) : null}
           </div>
@@ -556,6 +639,14 @@ function StatusMessage({ variant, message }: { variant: "success" | "danger"; me
     >
       {message}
     </div>
+  );
+}
+
+function JsonPreview({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-72 overflow-auto rounded-md border border-app-border bg-black/20 p-3 text-xs leading-5 text-app-text">
+      {JSON.stringify(value, null, 2)}
+    </pre>
   );
 }
 

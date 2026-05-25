@@ -1,9 +1,20 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 
-from app.schemas.tasks import TaskCancelRequest, TaskConfirmRequest, TaskExecuteRequest, TaskHistoryResponse, TaskResponse
+from app.schemas.tasks import (
+    TaskCancelRequest,
+    TaskConfirmRequest,
+    TaskExecuteRequest,
+    TaskHistoryResponse,
+    TaskPlanningRequest,
+    TaskPlanningResponse,
+    TaskResponse,
+)
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("")
@@ -13,7 +24,20 @@ def tasks_ready() -> dict[str, str]:
 
 @router.post("/execute", response_model=TaskResponse)
 def execute_task(request: TaskExecuteRequest) -> TaskResponse:
-    return task_service.execute_task(request)
+    try:
+        return task_service.execute_task(request)
+    except Exception as error:
+        logger.exception("Failed to execute task")
+        raise HTTPException(status_code=500, detail=f"Task execution failed: {error}") from error
+
+
+@router.post("/plan", response_model=TaskPlanningResponse)
+def plan_task(request: TaskPlanningRequest) -> TaskPlanningResponse:
+    try:
+        return task_service.plan_task(request)
+    except Exception as error:
+        logger.exception("Failed to plan task")
+        raise HTTPException(status_code=500, detail=f"Task planning failed: {error}") from error
 
 
 @router.post("/confirm", response_model=TaskResponse)

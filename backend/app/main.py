@@ -9,6 +9,7 @@ from app.api.routes import (
     events,
     health,
     ingest,
+    models,
     playbooks,
     search,
     tasks,
@@ -38,6 +39,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(ingest.router)
+app.include_router(models.router)
 app.include_router(events.router)
 app.include_router(search.router)
 app.include_router(chat.router)

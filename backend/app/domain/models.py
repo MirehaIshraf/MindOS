@@ -55,6 +55,8 @@ class ChatStoredMessage(BaseModel):
     content: str
     sources_used: list[dict[str, Any]] = Field(default_factory=list)
     model: str | None = None
+    provider: str | None = None
+    model_display_name: str | None = None
     search_mode: str | None = None
     task_hint: str | None = None
     context_summary: str | None = None

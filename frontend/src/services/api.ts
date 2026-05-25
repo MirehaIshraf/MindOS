@@ -1,9 +1,11 @@
 import axios from "axios";
+import type { AxiosError } from "axios";
 
 import type {
   BackendHealth,
   BackendStatus,
   ChatMessagesResponse,
+  ChatModelsResponse,
   ChatRequestPayload,
   ChatResponse,
   ChatSessionsResponse,
@@ -20,6 +22,8 @@ import type {
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
+  ModelConfig,
+  ModelSettingsResponse,
   IngestEventRequest,
   IngestEventResponse,
   MemoryEvent,
@@ -29,6 +33,7 @@ import type {
   SearchStatsResponse,
   SeedSampleEventsResponse,
   TaskHistoryResponse,
+  TaskPlanningResponse,
   TaskResponse,
   TestLLMResponse,
 } from "../types";
@@ -38,14 +43,46 @@ export const api = axios.create({
   timeout: 5000,
 });
 
+export function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const axiosError = error as AxiosError<{ detail?: unknown; message?: string }>;
+    if (axiosError.response?.data?.detail) {
+      return typeof axiosError.response.data.detail === "string"
+        ? axiosError.response.data.detail
+        : JSON.stringify(axiosError.response.data.detail);
+    }
+    if (axiosError.response?.data?.message) {
+      return axiosError.response.data.message;
+    }
+    if (axiosError.response) {
+      return `Request failed with status ${axiosError.response.status}`;
+    }
+    if (axiosError.request) {
+      return "Backend may be offline.";
+    }
+  }
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+export const getApiErrorMessage = getErrorMessage;
+
+function logApiError(endpoint: string, error: unknown) {
+  console.error(`${endpoint} failed`, error);
+}
+
 export async function getHealth(): Promise<BackendHealth> {
   const response = await api.get<BackendHealth>("/health");
   return response.data;
 }
 
 export async function getStatus(): Promise<BackendStatus> {
-  const response = await api.get<BackendStatus>("/status");
-  return response.data;
+  try {
+    const response = await api.get<BackendStatus>("/status", { timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    logApiError("GET /status", error);
+    throw error;
+  }
 }
 
 export const healthCheck = getHealth;
@@ -168,6 +205,62 @@ export async function sendChatMessage(payload: ChatRequestPayload): Promise<Chat
   return response.data;
 }
 
+export async function getModelSettings(): Promise<ModelSettingsResponse> {
+  try {
+    const response = await api.get<ModelSettingsResponse>("/models/settings", { timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    logApiError("GET /models/settings", error);
+    throw error;
+  }
+}
+
+export async function getChatModels(): Promise<ModelConfig[]> {
+  const response = await api.get<ChatModelsResponse>("/models/chat", { timeout: 30000 });
+  return response.data.models;
+}
+
+export async function getChatModelsResponse(): Promise<ChatModelsResponse> {
+  try {
+    const response = await api.get<ChatModelsResponse>("/models/chat", { timeout: 30000 });
+    return response.data;
+  } catch (error) {
+    logApiError("GET /models/chat", error);
+    throw error;
+  }
+}
+
+export async function selectChatModel(modelId: string): Promise<{ status: string; selected_chat_model: string }> {
+  const response = await api.post<{ status: string; selected_chat_model: string }>("/models/select", { model_id: modelId });
+  return response.data;
+}
+
+export async function updateProviderConfig(payload: {
+  provider: string;
+  api_key?: string | null;
+  base_url?: string | null;
+  enabled?: boolean;
+}): Promise<{ status: string; provider: string; configured: boolean; enabled: boolean; has_api_key: boolean }> {
+  const response = await api.post<{ status: string; provider: string; configured: boolean; enabled: boolean; has_api_key: boolean }>(
+    "/models/provider-config",
+    payload,
+  );
+  return response.data;
+}
+
+export async function setModelEnabled(modelId: string, enabled: boolean): Promise<{ status: string; model_id: string; enabled: boolean }> {
+  const response = await api.post<{ status: string; model_id: string; enabled: boolean }>(`/models/${modelId}/enabled`, {
+    model_id: modelId,
+    enabled,
+  });
+  return response.data;
+}
+
+export async function getProviderHealth(): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>("/models/providers/health");
+  return response.data;
+}
+
 export async function testLLM(message: string): Promise<TestLLMResponse> {
   const response = await api.post<TestLLMResponse>("/dev/test-llm", { message }, { timeout: 130000 });
   return response.data;
@@ -190,12 +283,38 @@ export async function deleteChatSession(sessionId: string): Promise<{ status: "d
   return response.data;
 }
 
-export async function executeTask(instruction: string, dryRun = true): Promise<TaskResponse> {
-  const response = await api.post<TaskResponse>("/tasks/execute", {
-    instruction,
-    dry_run: dryRun,
-  });
-  return response.data;
+export async function executeTask(instruction: string, dryRun = true, modelId?: string | null): Promise<TaskResponse> {
+  try {
+    const response = await api.post<TaskResponse>(
+      "/tasks/execute",
+      {
+        instruction,
+        dry_run: dryRun,
+        model_id: modelId ?? null,
+        use_context: true,
+      },
+      { timeout: 130000 },
+    );
+    return response.data;
+  } catch (error) {
+    logApiError("POST /tasks/execute", error);
+    throw error;
+  }
+}
+
+export async function planTask(payload: {
+  instruction: string;
+  task_type?: string | null;
+  model_id?: string | null;
+  use_context?: boolean;
+}): Promise<TaskPlanningResponse> {
+  try {
+    const response = await api.post<TaskPlanningResponse>("/tasks/plan", payload, { timeout: 130000 });
+    return response.data;
+  } catch (error) {
+    logApiError("POST /tasks/plan", error);
+    throw error;
+  }
 }
 
 export async function confirmTask(confirmationToken: string): Promise<TaskResponse> {

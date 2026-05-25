@@ -32,7 +32,7 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
 
         {!isUser && (message.model || message.searchMode) ? (
           <p className="mt-3 text-xs text-app-muted">
-            {message.model}
+            {message.modelDisplayName ?? message.model}
             {message.model && message.searchMode ? " - " : null}
             {message.searchMode ? `${message.searchMode} memory` : null}
           </p>

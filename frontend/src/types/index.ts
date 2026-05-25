@@ -22,6 +22,12 @@ export type ModelRuntimeStatus = {
   chat_context_related_per_event?: number;
   chat_context_max_total_chars?: number;
   chat_history_limit?: number;
+  selected_chat_model?: string;
+  available_chat_models_count?: number;
+  available_chat_models?: Array<Pick<ModelConfig, "id" | "display_name" | "provider" | "type" | "available">>;
+  providers?: Record<string, { configured: boolean; enabled?: boolean; has_api_key?: boolean; available: boolean | null }>;
+  active_provider?: string;
+  model_warning?: string | null;
 };
 
 export type BackendStatus = ModelRuntimeStatus & {
@@ -106,6 +112,9 @@ export type DevState = {
   chat_model?: string;
   active_llm?: string;
   ollama_models?: string[];
+  selected_chat_model?: string;
+  available_chat_models_count?: number;
+  providers?: Record<string, { configured: boolean; enabled?: boolean; has_api_key?: boolean; available: boolean | null }>;
   ollama_num_ctx?: number;
   chat_context_direct_limit?: number;
   chat_context_related_per_event?: number;
@@ -184,6 +193,8 @@ export type ChatMessage = {
   timestamp: string;
   sourcesUsed?: ChatSource[];
   model?: string;
+  provider?: string;
+  modelDisplayName?: string;
   searchMode?: string;
   taskHint?: string | null;
   taskInstruction?: string;
@@ -198,6 +209,7 @@ export type ChatRequestPayload = {
   history: Array<{ role: string; content: string; timestamp?: string }>;
   use_context?: boolean;
   session_id?: string | null;
+  model_id?: string | null;
 };
 
 export type ChatResponse = {
@@ -205,6 +217,8 @@ export type ChatResponse = {
   reply: string;
   sources_used: ChatSource[];
   model: string;
+  provider: string;
+  model_display_name: string;
   search_mode: string;
   task_hint?: string | null;
   warning?: string | null;
@@ -232,6 +246,8 @@ export type StoredChatMessage = {
   content: string;
   sources_used?: ChatSource[];
   model?: string | null;
+  provider?: string | null;
+  model_display_name?: string | null;
   search_mode?: string | null;
   task_hint?: string | null;
   context_summary?: string | null;
@@ -243,6 +259,8 @@ export type StoredChatMessage = {
 
 export type TestLLMResponse = {
   model: string;
+  provider?: string;
+  model_display_name?: string;
   reply: string;
   warning: string | null;
 };
@@ -252,7 +270,77 @@ export type ChatMessagesResponse = {
   total: number;
 };
 
-export type TaskPreview = Record<string, string | null | undefined>;
+export type ModelProvider = {
+  id: string;
+  name: string;
+  type: "local" | "cloud" | string;
+  configured: boolean;
+  enabled: boolean;
+  requires_api_key: boolean;
+  has_api_key: boolean;
+  available: boolean | null;
+  privacy_note: string;
+};
+
+export type ModelConfig = {
+  id: string;
+  provider: string;
+  display_name: string;
+  model_id: string;
+  type: "local" | "cloud" | string;
+  enabled: boolean;
+  configured: boolean;
+  available: boolean;
+  status: string;
+  supports_tools: boolean;
+  supports_vision: boolean;
+  default_context_profile: string;
+  privacy_level: "local_private" | "cloud_external" | string;
+  description: string;
+};
+
+export type ModelSettingsResponse = {
+  providers: ModelProvider[];
+  models: ModelConfig[];
+  selected_chat_model: string;
+};
+
+export type ChatModelsResponse = {
+  models: ModelConfig[];
+  selected_chat_model: string;
+  warning?: string | null;
+};
+
+export type TaskPreview = Record<string, unknown>;
+
+export type TaskPlan = {
+  task_type: string;
+  confidence: number;
+  title?: string | null;
+  description?: string | null;
+  priority?: string | null;
+  recipient?: string | null;
+  subject?: string | null;
+  body?: string | null;
+  repo?: string | null;
+  branch_name?: string | null;
+  commit_message?: string | null;
+  pr_title?: string | null;
+  pr_body?: string | null;
+  report_markdown?: string | null;
+  evidence: Array<Record<string, unknown>>;
+  missing_fields: string[];
+  safety_notes: string[];
+};
+
+export type TaskPlanningResponse = {
+  plan: TaskPlan;
+  model: string;
+  provider: string;
+  warning?: string | null;
+  context_summary?: string | null;
+  context_stats?: Record<string, unknown> | null;
+};
 
 export type TaskResponse = {
   task_id: string | null;
@@ -264,6 +352,10 @@ export type TaskResponse = {
   confirmation_token: string | null;
   message: string;
   sources_used?: Array<Record<string, unknown>>;
+  planner_model?: string | null;
+  planner_provider?: string | null;
+  planner_warning?: string | null;
+  context_stats?: Record<string, unknown> | null;
 };
 
 export type TaskHistoryItem = {
@@ -276,6 +368,11 @@ export type TaskHistoryItem = {
   confirmation_token?: string | null;
   created_at: string;
   completed_at: string | null;
+  planner_model?: string | null;
+  planner_provider?: string | null;
+  planner_warning?: string | null;
+  context_stats?: Record<string, unknown> | null;
+  sources_used?: Array<Record<string, unknown>>;
 };
 
 export type TaskHistoryResponse = {

@@ -4,10 +4,10 @@ from app.core.config import get_settings
 from app.core.database import get_database_path
 from app.services.event_service import EventService
 from app.services.ingestion_service import IngestionService
-from app.integrations.llm.fake_llm import FakeLLMClient
-from app.integrations.llm.ollama_llm import OllamaLLMClient, OllamaLLMError
 from app.services.chat_service import chat_service
-from app.services.model_runtime_service import OLLAMA_FALLBACK_WARNING, model_runtime_service
+from app.services.model_registry_service import model_registry_service
+from app.services.model_router_service import model_router_service
+from app.services.model_runtime_service import model_runtime_service
 from app.services.search_service import SearchService
 from app.services.task_service import task_service
 from app.services.relationship_service import relationship_service
@@ -73,36 +73,22 @@ def clear_relationships() -> dict[str, str]:
 
 @router.post("/test-llm")
 def test_llm(payload: dict[str, str]) -> dict[str, object]:
-    settings = get_settings()
     message = payload.get("message", "Say hello from MindOS")
-    warning = None
-    model = "fake-llm"
-
-    if settings.enable_local_llm:
-        try:
-            if not model_runtime_service.is_model_available(settings.ollama_chat_model):
-                raise OllamaLLMError("Ollama model is unavailable.")
-            model = settings.ollama_chat_model
-            reply = OllamaLLMClient().generate_response(
-                message=message,
-                history=[],
-                context="No local memory context was requested for this model runtime test.",
-                system_prompt="You are MindOS. Reply briefly and do not reveal hidden reasoning.",
-            )
-            return {"model": model, "reply": reply, "warning": warning}
-        except (OllamaLLMError, RuntimeError):
-            warning = OLLAMA_FALLBACK_WARNING
-
-    if settings.enable_local_llm and warning is None:
-        warning = OLLAMA_FALLBACK_WARNING
-
-    reply = FakeLLMClient().generate_response(
-        message=message,
-        history=[],
-        context=[{"title": "Model runtime test", "source": "mindos", "type": "debug", "content_preview": message}],
-        system_prompt="You are MindOS. Reply briefly.",
+    result = model_router_service.generate(
+        messages=[
+            {"role": "system", "content": "You are MindOS. Reply briefly and do not reveal hidden reasoning."},
+            {"role": "user", "content": message},
+        ],
+        requested_model_id=payload.get("model_id"),
+        options={},
     )
-    return {"model": model, "reply": reply, "warning": warning}
+    return {
+        "model": result.model_used,
+        "provider": result.provider,
+        "model_display_name": result.model_display_name,
+        "reply": result.reply,
+        "warning": result.warning,
+    }
 
 
 @router.get("/state")
@@ -123,6 +109,9 @@ def dev_state() -> dict[str, object]:
         "events_by_source": event_service.count_by_source(),
         "events_by_category": search_stats.by_category,
         **model_runtime_service.get_status(),
+        "selected_chat_model": model_registry_service.get_chat_models_response().selected_chat_model,
+        "available_chat_models_count": len(model_registry_service.list_chat_models()),
+        "providers": model_registry_service.provider_status(),
     }
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())

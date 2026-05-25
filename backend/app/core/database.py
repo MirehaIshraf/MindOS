@@ -91,6 +91,14 @@ class RelationshipRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class AppSettingRecord(Base):
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+
 def get_database_path() -> Path:
     settings = get_settings()
     return Path(settings.sqlite_path)

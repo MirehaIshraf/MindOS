@@ -13,12 +13,14 @@ from app.schemas.tasks import (
     TaskExecuteRequest,
     TaskHistoryItem,
     TaskHistoryResponse,
+    TaskPlan,
+    TaskPlanningRequest,
+    TaskPlanningResponse,
     TaskPreview,
     TaskResponse,
 )
-from app.schemas.context import ContextEvent, ContextPackage
-from app.services.context_builder_service import ContextBuilderService
 from app.services.relationship_service import relationship_service
+from app.services.task_planner_service import task_planner_service
 
 
 class TaskService:
@@ -26,11 +28,9 @@ class TaskService:
         self,
         task_repository: TaskRepository | None = None,
         event_repository: EventRepository | None = None,
-        context_builder: ContextBuilderService | None = None,
     ) -> None:
         self._task_repository = task_repository or get_task_repository()
         self._event_repository = event_repository or get_event_repository()
-        self._context_builder = context_builder or ContextBuilderService()
         self._pending_confirmations: dict[str, dict] = {}
         self._email_tool = MockEmailTool()
         self._jira_tool = MockJiraTool()
@@ -42,10 +42,16 @@ class TaskService:
         }
 
     def execute_task(self, request: TaskExecuteRequest) -> TaskResponse:
-        task_type = classify_task(request.instruction)
-        context_package = self._context_builder.build_task_context(request.instruction, limit=5, related_per_event=2)
-        sources = context_sources(context_package)
-        preview = self._build_preview(task_type, request.instruction, context_package)
+        planning = task_planner_service.plan_task(
+            TaskPlanningRequest(
+                instruction=request.instruction,
+                model_id=request.model_id,
+                use_context=request.use_context,
+            )
+        )
+        task_type = TaskType(planning.plan.task_type)
+        sources = planning.plan.evidence
+        preview = plan_to_preview(planning.plan, planning.context_summary, planning)
 
         if task_type == TaskType.unknown:
             task = self._task_repository.create_task_log(
@@ -65,7 +71,7 @@ class TaskService:
                 preview=preview,
                 result=task.result,
             )
-            return self._response(task.id, TaskStatus.failed, task_type, request.instruction, preview, task.result, None, "I could not classify this task yet.", sources)
+            return self._response(task.id, TaskStatus.failed, task_type, request.instruction, preview, task.result, None, "I could not classify this task yet.", sources, planning)
 
         if task_type in {TaskType.suggest_branch_name, TaskType.generate_commit_message, TaskType.weekly_report}:
             result = self._complete_read_only_task(task_type, preview)
@@ -77,8 +83,8 @@ class TaskService:
                 result=result,
             )
             task = self._task_repository.update_task_log(task.id, status=TaskStatus.completed.value, result=result, completed_at=datetime.now(timezone.utc))
-            self._record_completed_task_event(task.id, task_type, request.instruction, preview, result)
-            return self._response(task.id, TaskStatus.completed, task_type, request.instruction, preview, result, None, "Task completed with a mock-safe preview.", sources)
+            self._record_completed_task_event(task.id, task_type, request.instruction, preview, result, planning)
+            return self._response(task.id, TaskStatus.completed, task_type, request.instruction, preview, result, None, "Task completed with a mock-safe preview.", sources, planning)
 
         token = str(uuid4())
         task = self._task_repository.create_task_log(
@@ -95,6 +101,10 @@ class TaskService:
             "instruction": request.instruction,
             "preview": preview,
             "sources_used": sources,
+            "planner_model": planning.model,
+            "planner_provider": planning.provider,
+            "planner_warning": planning.warning,
+            "context_stats": planning.context_stats,
             "created_at": datetime.now(timezone.utc),
         }
         self._record_task_memory_event(
@@ -109,6 +119,10 @@ class TaskService:
             extra_metadata={
                 "confirmation_required": True,
                 "mock": True,
+                "planner_model": planning.model,
+                "planner_provider": planning.provider,
+                "evidence_count": len(planning.plan.evidence),
+                "safety_notes": planning.plan.safety_notes,
             },
         )
         return self._response(
@@ -121,20 +135,26 @@ class TaskService:
             token,
             "Review this mock task preview before confirming.",
             sources,
+            planning,
         )
 
     def confirm_task(self, request: TaskConfirmRequest) -> TaskResponse:
         pending = self._pending_confirmations.get(request.confirmation_token)
         task = self._task_repository.find_by_confirmation_token(request.confirmation_token)
         if pending is None and task is not None:
+            restored_preview = TaskPreview(**(task.preview or {}))
             pending = {
                 "token": request.confirmation_token,
                 "task_id": task.id,
                 "task_type": task.task_type,
                 "instruction": task.instruction,
-                "preview": TaskPreview(**(task.preview or {})),
-                "sources_used": [],
+                "preview": restored_preview,
+                "sources_used": restored_preview.evidence,
                 "created_at": task.created_at,
+                "planner_model": (task.preview or {}).get("planner_model"),
+                "planner_provider": (task.preview or {}).get("planner_provider"),
+                "planner_warning": (task.preview or {}).get("planner_warning"),
+                "context_stats": (task.preview or {}).get("context_stats"),
             }
 
         if pending is None or task is None:
@@ -165,6 +185,10 @@ class TaskService:
                 confirmation_token=None,
                 message="Confirmation token was not found or already used.",
                 sources_used=[],
+                planner_model=None,
+                planner_provider=None,
+                planner_warning=None,
+                context_stats=None,
             )
 
         task_type: TaskType = pending["task_type"]
@@ -179,6 +203,10 @@ class TaskService:
                 confirmation_token=None,
                 message="This task is no longer waiting for confirmation.",
                 sources_used=[],
+                planner_model=(task.preview or {}).get("planner_model"),
+                planner_provider=(task.preview or {}).get("planner_provider"),
+                planner_warning=(task.preview or {}).get("planner_warning"),
+                context_stats=(task.preview or {}).get("context_stats"),
             )
 
         preview: TaskPreview = pending["preview"]
@@ -202,6 +230,7 @@ class TaskService:
             result=result,
             extra_metadata={"mock": True},
         )
+        planning = planning_from_preview(preview)
         return self._response(
             task.id,
             TaskStatus.completed,
@@ -212,6 +241,7 @@ class TaskService:
             None,
             "Mock task completed. No real external action was performed.",
             pending["sources_used"],
+            planning,
         )
 
     def cancel_task(self, request: TaskCancelRequest) -> TaskResponse:
@@ -238,6 +268,7 @@ class TaskService:
             result=cancelled.result,
             extra_metadata={"mock": True},
         )
+        planning = planning_from_preview(preview)
         return self._response(
             cancelled.id,
             TaskStatus.cancelled,
@@ -248,7 +279,11 @@ class TaskService:
             None,
             "Task cancelled. No mock action was executed.",
             [],
+            planning,
         )
+
+    def plan_task(self, request: TaskPlanningRequest) -> TaskPlanningResponse:
+        return task_planner_service.plan_task(request)
 
     def list_history(self, limit: int = 20) -> TaskHistoryResponse:
         tasks = self._task_repository.list_recent_tasks(limit=max(1, min(limit, 100)))
@@ -258,20 +293,29 @@ class TaskService:
         return self._to_history_response(self._task_repository.list_pending_tasks())
 
     def _to_history_response(self, tasks) -> TaskHistoryResponse:
-        items = [
-            TaskHistoryItem(
-                id=task.id,
-                task_type=task.task_type.value,
-                instruction=task.instruction,
-                status=task.status.value,
-                preview=task.preview,
-                result=task.result,
-                confirmation_token=task.confirmation_token if task.status == TaskStatus.confirmation_required else None,
-                created_at=task.created_at,
-                completed_at=task.completed_at,
+        items = []
+        for task in tasks:
+            preview = task.preview or ({} if task.status == TaskStatus.confirmation_required else None)
+            preview_data = preview if isinstance(preview, dict) else {}
+            sources_used = normalize_sources(preview_data.get("evidence", []))
+            items.append(
+                TaskHistoryItem(
+                    id=task.id,
+                    task_type=task.task_type.value,
+                    instruction=task.instruction,
+                    status=task.status.value,
+                    preview=preview,
+                    result=task.result,
+                    confirmation_token=task.confirmation_token if task.status == TaskStatus.confirmation_required else None,
+                    created_at=task.created_at,
+                    completed_at=task.completed_at,
+                    planner_model=preview_data.get("planner_model"),
+                    planner_provider=preview_data.get("planner_provider"),
+                    planner_warning=preview_data.get("planner_warning"),
+                    context_stats=preview_data.get("context_stats"),
+                    sources_used=sources_used,
+                )
             )
-            for task in tasks
-        ]
         return TaskHistoryResponse(tasks=items, total=len(items))
 
     def clear_tasks(self) -> None:
@@ -280,26 +324,6 @@ class TaskService:
 
     def count_tasks(self) -> int:
         return self._task_repository.count_tasks()
-
-    def _build_preview(self, task_type: TaskType, instruction: str, context_package: ContextPackage) -> TaskPreview:
-        summary = context_package.summary
-        title = infer_title(instruction, context_package)
-        branch_name = infer_branch_name(instruction, context_package)
-        commit_message = infer_commit_message(instruction, context_package)
-
-        if task_type == TaskType.suggest_branch_name:
-            return TaskPreview(branch_name=branch_name, context_summary=summary)
-        if task_type == TaskType.generate_commit_message:
-            return TaskPreview(commit_message=commit_message, context_summary=summary)
-        if task_type == TaskType.weekly_report:
-            return TaskPreview(report_markdown=build_report(context_package), context_summary=summary)
-        if task_type == TaskType.create_jira_ticket:
-            return TaskPreview(title=title, description=build_description(instruction, summary), priority="medium", context_summary=summary)
-        if task_type == TaskType.draft_email:
-            return TaskPreview(recipient="", subject=title, body=build_description(instruction, summary), context_summary=summary)
-        if task_type == TaskType.create_pull_request:
-            return TaskPreview(repo="", pr_title=title, pr_body=build_description(instruction, summary), branch_name=branch_name, context_summary=summary)
-        return TaskPreview(context_summary=summary)
 
     def _complete_read_only_task(self, task_type: TaskType, preview: TaskPreview) -> dict:
         if task_type == TaskType.suggest_branch_name:
@@ -327,6 +351,7 @@ class TaskService:
         instruction: str,
         preview: TaskPreview,
         result: dict,
+        planning: TaskPlanningResponse | None = None,
     ) -> None:
         if task_type == TaskType.suggest_branch_name:
             title = "Suggested branch name for JWT fix" if result.get("branch_name") == "fix/jwt-login-expiry" else "Suggested branch name"
@@ -353,6 +378,10 @@ class TaskService:
             extra_metadata={
                 "instruction": instruction,
                 "mock": True,
+                "planner_model": planning.model if planning else None,
+                "planner_provider": planning.provider if planning else None,
+                "evidence_count": len(preview.evidence),
+                "safety_notes": preview.safety_notes,
             },
         )
 
@@ -378,6 +407,10 @@ class TaskService:
             "mock": True,
             "memory_category": "report" if event_type == "report_generated" else "task",
             "hidden_from_default": False,
+            "planner_model": preview.model_dump().get("planner_model") if preview else None,
+            "planner_provider": preview.model_dump().get("planner_provider") if preview else None,
+            "evidence_count": len(preview.evidence) if preview else 0,
+            "safety_notes": preview.safety_notes if preview else [],
         }
         if extra_metadata:
             metadata.update(extra_metadata)
@@ -406,6 +439,7 @@ class TaskService:
         token: str | None,
         message: str,
         sources: list[dict],
+        planning: TaskPlanningResponse | None = None,
     ) -> TaskResponse:
         return TaskResponse(
             task_id=task_id,
@@ -417,89 +451,66 @@ class TaskService:
             confirmation_token=token,
             message=message,
             sources_used=sources,
+            planner_model=planning.model if planning else None,
+            planner_provider=planning.provider if planning else None,
+            planner_warning=planning.warning if planning else None,
+            context_stats=planning.context_stats if planning else None,
         )
 
 
-def classify_task(instruction: str) -> TaskType:
-    text = instruction.lower().strip()
-    if "branch name" in text or text.startswith("suggest branch"):
-        return TaskType.suggest_branch_name
-    if "commit message" in text or "generate commit" in text:
-        return TaskType.generate_commit_message
-    if ("jira" in text or "ticket" in text) and any(word in text for word in ["create", "draft", "make"]):
-        return TaskType.create_jira_ticket
-    if "email" in text and any(word in text for word in ["draft", "write", "send"]):
-        return TaskType.draft_email
-    if "pull request" in text or "pr" in text:
-        return TaskType.create_pull_request
-    if "weekly report" in text or "report" in text:
-        return TaskType.weekly_report
-    return TaskType.unknown
-
-
-def context_sources(context_package: ContextPackage) -> list[dict]:
-    sources = []
-    for source_kind, events in [("direct", context_package.direct_events), ("related", context_package.related_events)]:
-        for event in events:
-            sources.append(
-                {
-                    "event_id": event.event_id,
-                    "source": event.source,
-                    "type": event.type,
-                    "title": event.title,
-                    "content_preview": event.content_preview,
-                    "score": event.score,
-                    "match_reason": event.match_reason,
-                    "source_kind": source_kind,
-                }
-            )
-    return sources
-
-
-def context_events(context_package: ContextPackage) -> list[ContextEvent]:
-    return [*context_package.direct_events, *context_package.related_events]
-
-
-def infer_title(instruction: str, context_package: ContextPackage) -> str:
-    events = context_events(context_package)
-    if events:
-        return events[0].title
-    return instruction.strip().rstrip(".")[:80]
-
-
-def infer_branch_name(instruction: str, context_package: ContextPackage) -> str:
-    events = context_events(context_package)
-    text = f"{instruction} {' '.join(event.title for event in events[:3])}".lower()
-    if "jwt" in text or "login" in text or "auth" in text:
-        return "fix/jwt-login-expiry"
-    words = [word for word in text.replace("_", "-").split() if word.isalnum()][:4]
-    return "work/" + "-".join(words or ["mindos-task"])
-
-
-def infer_commit_message(instruction: str, context_package: ContextPackage) -> str:
-    events = context_events(context_package)
-    text = f"{instruction} {' '.join(event.title for event in events[:3])}".lower()
-    if "jwt" in text or "auth" in text or "login" in text:
-        return "fix(auth): handle expired JWT refresh flow"
-    return "chore: update local work context"
-
-
-def build_description(instruction: str, summary: str) -> str:
-    return f"{instruction.strip()}\n\nContext:\n{summary}"
-
-
-def build_report(context_package: ContextPackage) -> str:
-    events = context_events(context_package)
-    activity = "\n".join(f"- {event.title} ({event.source})" for event in events[:8]) or "- No matching activity found."
-    sources = ", ".join(group.source for group in context_package.source_groups) or "none"
-    return (
-        "# Weekly Work Report\n\n"
-        f"## Summary\n{context_package.summary}\n\n"
-        f"## Sources\n{sources}\n\n"
-        f"## Key Activity\n{activity}\n\n"
-        "## Issues Found\n- Review related failures or warnings in local memory.\n\n"
-        "## Suggested Next Actions\n- Confirm priorities and prepare follow-up tasks if needed."
+def plan_to_preview(plan: TaskPlan, context_summary: str | None, planning: TaskPlanningResponse | None = None) -> TaskPreview:
+    return TaskPreview(
+        title=plan.title,
+        description=plan.description,
+        priority=plan.priority,
+        recipient=plan.recipient,
+        subject=plan.subject,
+        body=plan.body,
+        repo=plan.repo,
+        branch_name=plan.branch_name,
+        commit_message=plan.commit_message,
+        pr_title=plan.pr_title,
+        pr_body=plan.pr_body,
+        report_markdown=plan.report_markdown,
+        context_summary=context_summary,
+        confidence=plan.confidence,
+        evidence=plan.evidence,
+        missing_fields=plan.missing_fields,
+        safety_notes=plan.safety_notes,
+        planner_model=planning.model if planning else None,
+        planner_provider=planning.provider if planning else None,
+        planner_warning=planning.warning if planning else None,
+        context_stats=planning.context_stats if planning else None,
     )
+
+
+def planning_from_preview(preview: TaskPreview) -> TaskPlanningResponse:
+    return TaskPlanningResponse(
+        plan=TaskPlan(
+            task_type=TaskType.unknown.value,
+            confidence=preview.confidence or 0,
+            evidence=preview.evidence,
+            missing_fields=preview.missing_fields,
+            safety_notes=preview.safety_notes,
+        ),
+        model=preview.planner_model or "unknown",
+        provider=preview.planner_provider or "unknown",
+        warning=preview.planner_warning,
+        context_summary=preview.context_summary,
+        context_stats=preview.context_stats,
+    )
+
+
+def normalize_sources(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    sources = []
+    for item in value:
+        if isinstance(item, dict):
+            sources.append(item)
+        elif item is not None:
+            sources.append({"source": "memory", "title": str(item), "reason": ""})
+    return sources
 
 
 task_service = TaskService()

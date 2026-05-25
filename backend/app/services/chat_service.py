@@ -1,11 +1,9 @@
 from datetime import datetime, timezone
 
+from app.core.config import get_settings
 from app.core.dependencies import get_chat_repository, get_event_repository
 from app.domain.enums import EmbeddingStatus, EventSource
-from app.core.config import get_settings
 from app.integrations.llm.base import LLMClient
-from app.integrations.llm.fake_llm import FakeLLMClient
-from app.integrations.llm.ollama_llm import OllamaLLMClient, OllamaLLMError
 from app.repositories.base import ChatRepository, EventRepository
 from app.schemas.chat import (
     ChatContextStats,
@@ -19,7 +17,7 @@ from app.schemas.chat import (
 )
 from app.schemas.context import ContextEvent, ContextPackage
 from app.services.context_builder_service import ContextBuilderService
-from app.services.model_runtime_service import OLLAMA_FALLBACK_WARNING, model_runtime_service
+from app.services.model_router_service import model_router_service
 from app.services.response_cleaner import clean_llm_response
 from app.services.relationship_service import relationship_service
 
@@ -79,7 +77,6 @@ class ChatService:
     ) -> None:
         self._context_builder = context_builder or ContextBuilderService()
         self._llm = llm
-        self._fake_llm = FakeLLMClient()
         self._chat_repository = chat_repository or get_chat_repository()
         self._event_repository = event_repository or get_event_repository()
 
@@ -114,12 +111,13 @@ class ChatService:
         history = [message.model_dump(mode="json") for message in request.history]
         task_hint = detect_task_hint(request.message)
         answer_style = detect_answer_style(request.message, task_hint)
-        reply, model_name, llm_warning = self._generate_reply(
+        reply, model_name, provider, model_display_name, llm_warning = self._generate_reply(
             message=request.message,
             history=history,
             context_package=context_package,
             task_hint=task_hint,
             answer_style=answer_style,
+            model_id=request.model_id,
         )
         reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
@@ -137,6 +135,8 @@ class ChatService:
             {
                 "sources_used": sources_payload,
                 "model": model_name,
+                "provider": provider,
+                "model_display_name": model_display_name,
                 "search_mode": "keyword",
                 "task_hint": task_hint,
                 "context_summary": context_package.summary if context_package else "",
@@ -153,6 +153,8 @@ class ChatService:
             role="assistant",
             metadata={
                 "model": model_name,
+                "provider": provider,
+                "model_display_name": model_display_name,
                 "search_mode": "keyword",
                 "sources_used_count": len(sources_used),
                 "task_hint": task_hint,
@@ -166,6 +168,8 @@ class ChatService:
             reply=reply,
             sources_used=sources_used,
             model=model_name,
+            provider=provider,
+            model_display_name=model_display_name,
             search_mode="keyword",
             task_hint=task_hint,
             warning=warning,
@@ -239,46 +243,43 @@ class ChatService:
         context_package: ContextPackage | None,
         task_hint: str | None,
         answer_style: str,
-    ) -> tuple[str, str, str | None]:
+        model_id: str | None,
+    ) -> tuple[str, str, str, str, str | None]:
         system_prompt = prompt_for_answer_style(task_hint, answer_style)
         if self._llm is not None:
             return (
                 self._llm.generate_response(message=message, history=history, context=context_package, system_prompt=system_prompt),
                 getattr(self._llm, "model", "custom-llm"),
+                "custom",
+                getattr(self._llm, "model", "Custom LLM"),
                 None,
             )
 
         settings = get_settings()
-        if settings.enable_local_llm:
-            try:
-                if not model_runtime_service.is_model_available(settings.ollama_chat_model):
-                    raise OllamaLLMError("Ollama model is unavailable.")
-                formatted_context = self._context_builder.format_context_for_llm(context_package) if context_package else ""
-                client = OllamaLLMClient()
-                return (
-                    client.generate_response(
-                        message=message,
-                        history=history,
-                        context=formatted_context,
-                        system_prompt=system_prompt,
-                    ),
-                    settings.ollama_chat_model,
-                    None,
-                )
-            except (OllamaLLMError, RuntimeError):
-                pass
-
-        warning = OLLAMA_FALLBACK_WARNING if settings.enable_local_llm else None
-        return (
-            self._fake_llm.generate_response(
-                message=message,
-                history=history,
-                context=context_package,
-                system_prompt=system_prompt,
-            ),
-            "fake-llm",
-            warning,
+        formatted_context = self._context_builder.format_context_for_llm(context_package) if context_package else ""
+        recent_history = [
+            {"role": item.get("role", "user"), "content": item.get("content", "")}
+            for item in history[-settings.chat_history_limit :]
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "Local memory context:\n\n"
+                    + (formatted_context if formatted_context else "No local memory context was found for this request.")
+                ),
+            },
+            *recent_history,
+            {"role": "user", "content": f"/no_think\n\nUser question: {message}"},
+        ]
+        result = model_router_service.generate(
+            messages=messages,
+            requested_model_id=model_id,
+            options={"context_package": context_package},
         )
+        return result.reply, result.model_used, result.provider, result.model_display_name, result.warning
 
 def context_sources(context_package: ContextPackage | None) -> list[ChatSource]:
     if context_package is None:

@@ -1,4 +1,4 @@
-import { History, MessageSquare, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { History, MessageSquare, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -6,8 +6,8 @@ import { ChatInput } from "../components/chat/ChatInput";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
-import { deleteChatSession, getChatMessages, getChatSessions, sendChatMessage } from "../services/api";
-import type { ChatMessage as ChatMessageRecord, ChatSession, StoredChatMessage } from "../types";
+import { deleteChatSession, getChatMessages, getChatSessions, getChatModelsResponse, selectChatModel, sendChatMessage } from "../services/api";
+import type { ChatMessage as ChatMessageRecord, ChatSession, ModelConfig, StoredChatMessage } from "../types";
 
 const examplePrompts = [
   "What did I work on this week?",
@@ -29,10 +29,14 @@ export function ChatPage() {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [useContext, setUseContext] = useState(true);
+  const [chatModels, setChatModels] = useState<ModelConfig[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string>("");
+  const [modelError, setModelError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void refreshSessions();
+    void refreshChatModels();
   }, []);
 
   useEffect(() => {
@@ -51,6 +55,7 @@ export function ChatPage() {
   }, [isReplying]);
 
   const loadingMessages = useMemo(() => loadingStatusMessages(pendingStyle), [pendingStyle]);
+  const selectedModel = chatModels.find((model) => model.id === selectedModelId) ?? chatModels[0];
 
   async function refreshSessions() {
     setSessionError(null);
@@ -59,6 +64,35 @@ export function ChatPage() {
       setSessions(response.sessions);
     } catch {
       setSessionError("Could not load recent chats.");
+    }
+  }
+
+  async function refreshChatModels() {
+    setModelError(null);
+    try {
+      const response = await getChatModelsResponse();
+      const models = response.models.length > 0 ? response.models : [fakeModel()];
+      setChatModels(models);
+      setSelectedModelId((current) =>
+        current || (models.some((model) => model.id === response.selected_chat_model) ? response.selected_chat_model : models[0].id),
+      );
+      setModelError(response.warning ?? null);
+    } catch (caughtError) {
+      console.error("Could not load chat models.", caughtError);
+      const fallback = fakeModel();
+      setChatModels([fallback]);
+      setSelectedModelId((current) => current || fallback.id);
+      setModelError("Model settings unavailable. Using fallback.");
+    }
+  }
+
+  async function handleModelChange(modelId: string) {
+    setSelectedModelId(modelId);
+    setModelError(null);
+    try {
+      await selectChatModel(modelId);
+    } catch {
+      setModelError("Could not save selected model. This chat will still try it.");
     }
   }
 
@@ -87,6 +121,7 @@ export function ChatPage() {
         history,
         use_context: useContext,
         session_id: currentSessionId,
+        model_id: selectedModelId || undefined,
       });
       setCurrentSessionId(response.session_id);
       setMessages((current) => [
@@ -94,6 +129,8 @@ export function ChatPage() {
         createMessage("assistant", response.reply, {
           sourcesUsed: response.sources_used,
           model: response.model,
+          provider: response.provider,
+          modelDisplayName: response.model_display_name,
           searchMode: response.search_mode,
           taskHint: response.task_hint,
           taskInstruction: content,
@@ -153,18 +190,25 @@ export function ChatPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-[850px] flex-col">
-      <div className="mb-4 space-y-3">
+    <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[900px] flex-col">
+      <div className="relative mb-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-app-muted">
-            <Badge variant="info">{currentSessionId ? "Saved chat" : "New chat"}</Badge>
-            {sessionError ? <span className="text-red-300">{sessionError}</span> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedModelId}
+              onChange={(event) => void handleModelChange(event.target.value)}
+              className="h-10 min-w-48 rounded-md border border-app-border bg-app-panel px-3 text-sm text-app-text outline-none focus:border-app-primary"
+              aria-label="Chat model"
+            >
+              {chatModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name}
+                </option>
+              ))}
+            </select>
+            {selectedModel ? <Badge variant={selectedModel.type === "cloud" ? "warning" : "success"}>{selectedModel.type === "cloud" ? "Cloud" : "Local"}</Badge> : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="ghost" onClick={() => void refreshSessions()}>
-              <RefreshCw size={16} />
-              Refresh
-            </Button>
             <Button type="button" variant="secondary" onClick={() => setSessionsOpen((open) => !open)}>
               <History size={16} />
               Recent Chats
@@ -173,20 +217,13 @@ export function ChatPage() {
               <Plus size={16} />
               New Chat
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={handleNewChat}
-              disabled={messages.length === 0 && input.length === 0}
-            >
-              <Trash2 size={16} />
-              Clear Chat
-            </Button>
           </div>
         </div>
+        {modelError ? <p className="text-xs text-amber-200">{modelError}</p> : null}
+        {sessionError ? <p className="text-xs text-red-300">{sessionError}</p> : null}
 
         {sessionsOpen ? (
-          <div className="rounded-md border border-app-border bg-app-panel p-3">
+          <div className="absolute right-0 z-20 w-full max-w-md rounded-md border border-app-border bg-app-panel p-3 shadow-xl shadow-black/30">
             {sessions.length === 0 ? (
               <p className="text-sm text-app-muted">No saved chats yet.</p>
             ) : (
@@ -217,6 +254,9 @@ export function ChatPage() {
             )}
           </div>
         ) : null}
+        {selectedModel?.type === "cloud" ? (
+          <p className="text-xs text-amber-200">Cloud model: selected memory context may be sent to provider.</p>
+        ) : null}
       </div>
 
       <div className="flex-1 space-y-4 pb-6">
@@ -226,11 +266,7 @@ export function ChatPage() {
               <MessageSquare size={28} />
             </div>
             <h1 className="text-3xl font-semibold text-app-text">MindOS</h1>
-            <p className="mt-3 text-base text-app-text">Your local AI workspace with memory of your work.</p>
-            <p className="mt-4 max-w-2xl text-sm leading-6 text-app-muted">
-              Ask about your files, code editor activity, browser research, GitHub, Jira, logs, emails, or ask MindOS
-              to prepare a task.
-            </p>
+            <p className="mt-3 text-base text-app-text">Ask about your local work memory.</p>
             <div className="mt-8 flex max-w-3xl flex-wrap justify-center gap-3">
               {examplePrompts.map((prompt) => (
                 <button key={prompt} type="button" onClick={() => setInput(prompt)}>
@@ -244,7 +280,13 @@ export function ChatPage() {
             <ChatMessage
               key={message.id}
               message={message}
-              onOpenTask={(instruction) => navigate(`/tasks?instruction=${encodeURIComponent(instruction)}`)}
+              onOpenTask={(instruction) =>
+                navigate(
+                  `/tasks?instruction=${encodeURIComponent(instruction)}${
+                    selectedModelId ? `&model_id=${encodeURIComponent(selectedModelId)}` : ""
+                  }`,
+                )
+              }
             />
           ))
         )}
@@ -259,6 +301,7 @@ export function ChatPage() {
       </div>
 
       <div className="sticky bottom-0 bg-app-background pb-4 pt-3">
+        <p className="mb-2 text-xs text-app-muted">{useContext ? "Using local memory" : "Local memory off"}</p>
         <ChatInput
           value={input}
           onChange={setInput}
@@ -270,6 +313,25 @@ export function ChatPage() {
       </div>
     </div>
   );
+}
+
+function fakeModel(): ModelConfig {
+  return {
+    id: "fake-llm",
+    provider: "fake",
+    display_name: "FakeLLM fallback",
+    model_id: "fake-llm",
+    type: "local",
+    enabled: true,
+    configured: true,
+    available: true,
+    status: "available",
+    supports_tools: false,
+    supports_vision: false,
+    default_context_profile: "fast_chat",
+    privacy_level: "local_private",
+    description: "Fallback development model",
+  };
 }
 
 function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageRecord[] {
@@ -286,6 +348,8 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       timestamp: message.created_at,
       sourcesUsed: message.sources_used ?? [],
       model: message.model ?? undefined,
+      provider: message.provider ?? undefined,
+      modelDisplayName: message.model_display_name ?? undefined,
       searchMode: message.search_mode ?? undefined,
       taskHint: message.task_hint ?? undefined,
       taskInstruction: message.role === "assistant" ? lastUserInstruction : undefined,

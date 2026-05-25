@@ -5,6 +5,7 @@ from app.core.database import get_database_path
 from app.services.event_service import EventService
 from app.services.chat_service import chat_service
 from app.services.model_runtime_service import model_runtime_service
+from app.services.model_registry_service import model_registry_service
 from app.services.relationship_service import relationship_service
 from app.services.task_service import task_service
 
@@ -52,4 +53,29 @@ def status() -> dict[str, object]:
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())
     payload.update(model_runtime_service.get_status())
+    chat_models_response = model_registry_service.get_chat_models_response()
+    selected_model = next(
+        (model for model in chat_models_response.models if model.id == chat_models_response.selected_chat_model),
+        model_registry_service.fake_model(),
+    )
+    payload.update(
+        {
+            "selected_chat_model": chat_models_response.selected_chat_model,
+            "available_chat_models_count": len(chat_models_response.models),
+            "available_chat_models": [
+                {
+                    "id": model.id,
+                    "display_name": model.display_name,
+                    "provider": model.provider,
+                    "type": model.type,
+                    "available": model.available,
+                }
+                for model in chat_models_response.models
+            ],
+            "providers": model_registry_service.provider_status(),
+            "active_provider": selected_model.provider if selected_model else "fake",
+            "active_llm": selected_model.model_id if selected_model else "fake-llm",
+            "model_warning": chat_models_response.warning,
+        }
+    )
     return payload

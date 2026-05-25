@@ -6,7 +6,8 @@ import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
-import { cancelTask, confirmTask, executeTask, getPendingTasks, getTaskHistory } from "../services/api";
+import { TaskPreviewDetails } from "../components/tasks/TaskPreviewDetails";
+import { cancelTask, confirmTask, executeTask, getErrorMessage, getPendingTasks, getTaskHistory } from "../services/api";
 import type { TaskHistoryItem, TaskResponse } from "../types";
 
 const exampleTasks = [
@@ -20,12 +21,14 @@ const exampleTasks = [
 export function TasksPage() {
   const [searchParams] = useSearchParams();
   const [taskText, setTaskText] = useState("");
+  const [modelId, setModelId] = useState<string | null>(null);
   const [activeTask, setActiveTask] = useState<TaskResponse | null>(null);
   const [pendingTasks, setPendingTasks] = useState<TaskHistoryItem[]>([]);
   const [history, setHistory] = useState<TaskHistoryItem[]>([]);
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastTaskApiError, setLastTaskApiError] = useState<Record<string, unknown> | null>(null);
   const pendingSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,6 +36,7 @@ export function TasksPage() {
     if (instruction) {
       setTaskText(instruction);
     }
+    setModelId(searchParams.get("model_id"));
   }, [searchParams]);
 
   useEffect(() => {
@@ -62,13 +66,16 @@ export function TasksPage() {
 
     setLoadingAction("execute");
     setError(null);
+    setLastTaskApiError(null);
     try {
-      const response = await executeTask(instruction);
+      const response = await executeTask(instruction, true, modelId);
       setActiveTask(response);
       setTaskText("");
       await refreshTasks();
-    } catch {
-      setError("Could not prepare task. Backend may be offline.");
+    } catch (caughtError) {
+      console.error("TasksPage failed to execute task", caughtError);
+      setError(getErrorMessage(caughtError));
+      setLastTaskApiError(taskApiErrorDetails(caughtError));
     } finally {
       setLoadingAction(null);
     }
@@ -81,8 +88,9 @@ export function TasksPage() {
       const response = await confirmTask(confirmationToken);
       setActiveTask(response);
       await refreshTasks();
-    } catch {
-      setError("Could not confirm task.");
+    } catch (caughtError) {
+      console.error("TasksPage failed to confirm task", caughtError);
+      setError(getErrorMessage(caughtError));
     } finally {
       setLoadingAction(null);
     }
@@ -95,8 +103,9 @@ export function TasksPage() {
       const response = await cancelTask(taskId);
       setActiveTask(response);
       await refreshTasks();
-    } catch {
-      setError("Could not cancel task.");
+    } catch (caughtError) {
+      console.error("TasksPage failed to cancel task", caughtError);
+      setError(getErrorMessage(caughtError));
     } finally {
       setLoadingAction(null);
     }
@@ -122,6 +131,14 @@ export function TasksPage() {
       </div>
 
       {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
+      {lastTaskApiError ? (
+        <details className="rounded-md border border-app-border bg-app-panel p-4">
+          <summary className="cursor-pointer text-sm text-app-muted">Last task API error</summary>
+          <pre className="mt-3 max-h-72 overflow-auto rounded-md bg-zinc-950 p-3 text-xs leading-5 text-app-text">
+            {JSON.stringify(lastTaskApiError, null, 2)}
+          </pre>
+        </details>
+      ) : null}
 
       <Card className="space-y-4">
         <textarea
@@ -143,6 +160,7 @@ export function TasksPage() {
             Prepare Task
           </Button>
         </div>
+        {loadingAction === "execute" ? <p className="text-sm text-app-muted">Planning task from local memory...</p> : null}
       </Card>
 
       {activePendingTask ? (
@@ -239,10 +257,11 @@ function PendingTaskCard({
         <span className="ml-auto text-xs text-app-muted">{formatTimestamp(task.created_at)}</span>
       </div>
       <p className="mt-3 text-sm font-medium text-app-text">{task.instruction}</p>
-      <p className="mt-2 text-sm text-app-muted">{previewSummary(task.preview)}</p>
+      <PlannerMeta task={task} />
+      <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} compact />
       <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
         <AlertTriangle size={16} />
-        <span>This action is waiting for your confirmation. No real external action will happen. Mock mode is active.</span>
+        <span>Review the details before confirming. Current execution is mock-only.</span>
       </div>
       <div className="mt-4 flex gap-3">
         <Button variant="primary" onClick={onConfirm} loading={confirmLoading} disabled={!task.confirmation_token}>
@@ -275,8 +294,8 @@ function TaskPreviewCard({ task, onConfirm, onCancel, loading }: { task: TaskRes
             <AlertTriangle size={16} />
             <span>No real external action will happen. This is a mock execution.</span>
           </div>
-          <JsonBlock title="Preview" value={task.preview} />
-          {task.sources_used?.length ? <JsonBlock title="Sources Used" value={task.sources_used} /> : null}
+          <PlannerMeta task={task} />
+          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} />
           <div className="mt-4 flex gap-3">
             <Button variant="primary" onClick={onConfirm} loading={loading} disabled={!task.confirmation_token}>
               Confirm Mock Execution
@@ -309,10 +328,24 @@ function TaskResultCard({ task }: { task: TaskResponse }) {
             </p>
           ) : null}
           {isMock ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">Mock result only. No real external action happened.</p> : null}
-          <JsonBlock title="Result" value={task.result ?? task.preview} />
+          <PlannerMeta task={task} />
+          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} result={task.result} sourcesUsed={task.sources_used} />
         </div>
       </div>
     </Card>
+  );
+}
+
+function PlannerMeta({ task }: { task: Pick<TaskResponse, "planner_model" | "planner_provider" | "planner_warning"> }) {
+  if (!task.planner_model && !task.planner_warning) {
+    return null;
+  }
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      {task.planner_model ? <Badge variant="info">Planned by {task.planner_model}</Badge> : null}
+      {task.planner_provider ? <Badge>{task.planner_provider}</Badge> : null}
+      {task.planner_warning ? <span className="text-xs text-amber-200">{task.planner_warning}</span> : null}
+    </div>
   );
 }
 
@@ -329,6 +362,7 @@ function HistoryRow({
   onCancel: () => void;
   hasPendingCard: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const isPending = task.status === "confirmation_required";
   return (
     <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
@@ -341,8 +375,15 @@ function HistoryRow({
       {isPending ? (
         <div className="mt-3 flex gap-2">
           {hasPendingCard ? (
-            <Button className="h-8 px-3" variant="secondary" onClick={onReview}>
-              Review
+            <Button
+              className="h-8 px-3"
+              variant="secondary"
+              onClick={() => {
+                setExpanded((value) => !value);
+                onReview();
+              }}
+            >
+              Review & Confirm
             </Button>
           ) : (
             <>
@@ -356,31 +397,44 @@ function HistoryRow({
           )}
         </div>
       ) : null}
+      {isPending && expanded ? (
+        <div className="mt-4 rounded-md border border-app-border bg-zinc-900/60 p-3">
+          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} compact />
+          <div className="mt-4 flex gap-2">
+            <Button className="h-8 px-3" variant="primary" onClick={onConfirm} disabled={!task.confirmation_token}>
+              Confirm
+            </Button>
+            <Button className="h-8 px-3" variant="secondary" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function previewSummary(preview: Record<string, unknown> | null) {
-  if (!preview) {
-    return "No preview details available.";
+function taskApiErrorDetails(error: unknown): Record<string, unknown> {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const response = (error as { response?: { status?: number; data?: unknown } }).response;
+    return {
+      endpoint: "/tasks/execute",
+      status: response?.status ?? null,
+      detail: response?.data ?? null,
+    };
   }
-  const title = preview.title || preview.subject || preview.pr_title || preview.branch_name || preview.commit_message;
-  if (typeof title === "string" && title.trim()) {
-    return title;
+  if (typeof error === "object" && error !== null && "request" in error) {
+    return {
+      endpoint: "/tasks/execute",
+      status: null,
+      detail: "No response received from backend.",
+    };
   }
-  const summary = preview.context_summary;
-  return typeof summary === "string" ? summary : "Preview details are available.";
-}
-
-function JsonBlock({ title, value }: { title: string; value: unknown }) {
-  return (
-    <div className="mt-4">
-      <p className="text-xs uppercase text-app-muted">{title}</p>
-      <pre className="mt-2 max-h-72 overflow-auto rounded-md border border-app-border bg-zinc-950 p-3 text-xs leading-5 text-app-text">
-        {JSON.stringify(value ?? {}, null, 2)}
-      </pre>
-    </div>
-  );
+  return {
+    endpoint: "/tasks/execute",
+    status: null,
+    detail: error instanceof Error ? error.message : "Unknown error",
+  };
 }
 
 function formatTimestamp(value: string) {

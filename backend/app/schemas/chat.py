@@ -15,6 +15,7 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list)
     use_context: bool = True
     session_id: str | None = None
+    model_id: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -52,6 +53,8 @@ class ChatResponse(BaseModel):
     reply: str
     sources_used: list[ChatSource]
     model: str
+    provider: str = "fake"
+    model_display_name: str = "FakeLLM"
     search_mode: str
     task_hint: str | None = None
     warning: str | None = None
@@ -79,6 +82,8 @@ class ChatStoredMessageResponse(BaseModel):
     content: str
     sources_used: list[dict[str, Any]] = Field(default_factory=list)
     model: str | None = None
+    provider: str | None = None
+    model_display_name: str | None = None
     search_mode: str | None = None
     task_hint: str | None = None
     context_summary: str | None = None
