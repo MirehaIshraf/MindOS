@@ -18,6 +18,7 @@ def build_context(request: ContextBuildRequest) -> ContextPackage:
         query=request.query,
         limit=request.limit,
         related_per_event=request.related_per_event,
+        profile=request.profile,
     )
 
 

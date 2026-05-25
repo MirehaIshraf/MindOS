@@ -11,6 +11,31 @@ export type BackendHealth = {
   search_mode?: string;
 };
 
+export type ModelRuntimeStatus = {
+  local_llm_enabled: boolean;
+  ollama_available: boolean;
+  chat_model: string;
+  active_llm: string;
+  ollama_models: string[];
+  ollama_num_ctx?: number;
+  chat_context_direct_limit?: number;
+  chat_context_related_per_event?: number;
+  chat_context_max_total_chars?: number;
+  chat_history_limit?: number;
+};
+
+export type BackendStatus = ModelRuntimeStatus & {
+  backend: boolean;
+  storage: string;
+  database_path?: string;
+  event_count: number;
+  task_count: number;
+  chat_session_count: number;
+  chat_message_count: number;
+  relationship_count: number;
+  search_mode: string;
+};
+
 export type PageRoute = {
   path: string;
   title: string;
@@ -76,6 +101,16 @@ export type DevState = {
   relationships_by_type?: Record<string, number>;
   events_by_source: Record<string, number>;
   events_by_category: Record<string, number>;
+  local_llm_enabled?: boolean;
+  ollama_available?: boolean;
+  chat_model?: string;
+  active_llm?: string;
+  ollama_models?: string[];
+  ollama_num_ctx?: number;
+  chat_context_direct_limit?: number;
+  chat_context_related_per_event?: number;
+  chat_context_max_total_chars?: number;
+  chat_history_limit?: number;
 };
 
 export type SeedSampleEventsResponse = {
@@ -129,6 +164,8 @@ export type ChatSource = {
   match_reason: string;
   timestamp: string;
   source_kind?: "direct" | "related" | string;
+  relationship_type?: string | null;
+  relationship_reason?: string | null;
 };
 
 export type ChatContextStats = {
@@ -137,6 +174,7 @@ export type ChatContextStats = {
   relationship_count: number;
   sources: string[];
   token_estimate: number;
+  warnings?: string[];
 };
 
 export type ChatMessage = {
@@ -151,6 +189,8 @@ export type ChatMessage = {
   taskInstruction?: string;
   contextSummary?: string;
   contextStats?: ChatContextStats | null;
+  warning?: string | null;
+  answerStyle?: string;
 };
 
 export type ChatRequestPayload = {
@@ -170,6 +210,7 @@ export type ChatResponse = {
   warning?: string | null;
   context_summary: string;
   context_stats?: ChatContextStats | null;
+  answer_style: string;
 };
 
 export type ChatSession = {
@@ -195,7 +236,15 @@ export type StoredChatMessage = {
   task_hint?: string | null;
   context_summary?: string | null;
   context_stats?: ChatContextStats | null;
+  warning?: string | null;
+  answer_style?: string | null;
   created_at: string;
+};
+
+export type TestLLMResponse = {
+  model: string;
+  reply: string;
+  warning: string | null;
 };
 
 export type ChatMessagesResponse = {

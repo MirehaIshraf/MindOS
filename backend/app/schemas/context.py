@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 class ContextBuildRequest(BaseModel):
     query: str
     mode: str = "chat"
+    profile: str = "fast_chat"
     limit: int = 5
     related_per_event: int = 2
 

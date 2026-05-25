@@ -11,11 +11,13 @@ import {
   getDevState,
   getHealth,
   getRecentEvents,
+  getStatus,
   ingestEvent,
   rebuildRelationships,
   seedSampleEvents,
+  testLLM,
 } from "../services/api";
-import type { BackendHealth, ContextPackage, DevState, EventSource, MemoryEvent } from "../types";
+import type { BackendHealth, BackendStatus, ContextPackage, DevState, EventSource, MemoryEvent, TestLLMResponse } from "../types";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
@@ -36,11 +38,14 @@ type IngestForm = typeof emptyForm;
 
 export function DevPage() {
   const [health, setHealth] = useState<BackendHealth | null>(null);
+  const [status, setStatus] = useState<BackendStatus | null>(null);
   const [devState, setDevState] = useState<DevState | null>(null);
   const [events, setEvents] = useState<MemoryEvent[]>([]);
   const [form, setForm] = useState<IngestForm>(emptyForm);
   const [contextQuery, setContextQuery] = useState("jwt login failure");
   const [contextResult, setContextResult] = useState<ContextPackage | null>(null);
+  const [llmTestMessage, setLlmTestMessage] = useState("Say hello from MindOS");
+  const [llmTestResult, setLlmTestResult] = useState<TestLLMResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -60,11 +65,14 @@ export function DevPage() {
         getDevState(),
         getRecentEvents(undefined, 20, undefined, true),
       ]);
+      const statusResponse = await getStatus();
       setHealth(healthResponse);
+      setStatus(statusResponse);
       setDevState(stateResponse);
       setEvents(eventsResponse.events);
     } catch {
       setHealth(null);
+      setStatus(null);
       setDevState(null);
       setEvents([]);
       setError("Backend is offline or unavailable.");
@@ -202,6 +210,26 @@ export function DevPage() {
     }
   }
 
+  async function handleTestLLM() {
+    if (!llmTestMessage.trim()) {
+      setError("LLM test message is required.");
+      return;
+    }
+    setLoadingAction("testLLM");
+    setError(null);
+    setMessage(null);
+    setLlmTestResult(null);
+    try {
+      setLlmTestResult(await testLLM(llmTestMessage));
+      const statusResponse = await getStatus();
+      setStatus(statusResponse);
+    } catch {
+      setError("Could not test the active LLM.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   async function handleManualIngest() {
     const title = form.title.trim();
     const type = form.type.trim();
@@ -278,6 +306,47 @@ export function DevPage() {
               ))}
             </div>
           ) : null}
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<HeartPulse size={18} />} title="Model Runtime" />
+          <div className="mt-4 space-y-3 text-sm">
+            <Row label="local LLM" value={String(status?.local_llm_enabled ?? devState?.local_llm_enabled ?? false)} />
+            <Row
+              label="Ollama"
+              value={(status?.ollama_available ?? devState?.ollama_available) ? "available" : "unavailable"}
+              tone={(status?.ollama_available ?? devState?.ollama_available) ? "success" : "danger"}
+            />
+            <Row label="chat model" value={status?.chat_model ?? devState?.chat_model ?? "qwen3:8b"} />
+            <Row label="active LLM" value={status?.active_llm ?? devState?.active_llm ?? "fake-llm"} />
+            <Row label="num ctx" value={String(status?.ollama_num_ctx ?? devState?.ollama_num_ctx ?? "-")} />
+            <Row label="direct limit" value={String(status?.chat_context_direct_limit ?? devState?.chat_context_direct_limit ?? "-")} />
+            <Row label="related each" value={String(status?.chat_context_related_per_event ?? devState?.chat_context_related_per_event ?? "-")} />
+            <Row label="max context chars" value={String(status?.chat_context_max_total_chars ?? devState?.chat_context_max_total_chars ?? "-")} />
+            <Row label="history limit" value={String(status?.chat_history_limit ?? devState?.chat_history_limit ?? "-")} />
+          </div>
+          {!(status?.ollama_available ?? devState?.ollama_available) ? (
+            <p className="mt-4 text-xs leading-5 text-amber-200">Start Ollama and pull qwen3:8b to enable local chat.</p>
+          ) : null}
+          <div className="mt-4 space-y-3">
+            <Button variant="secondary" onClick={refreshAll} loading={loadingAction === "refresh"}>
+              Refresh Status
+            </Button>
+            <LabeledInput label="Test message" value={llmTestMessage} onChange={setLlmTestMessage} />
+            <Button variant="primary" onClick={handleTestLLM} loading={loadingAction === "testLLM"}>
+              Test LLM
+            </Button>
+            {llmTestResult ? (
+              <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <Badge variant="info">{llmTestResult.model}</Badge>
+                  {llmTestResult.warning ? <Badge variant="warning">fallback</Badge> : null}
+                </div>
+                {llmTestResult.warning ? <p className="mb-2 text-xs text-amber-200">{llmTestResult.warning}</p> : null}
+                <p className="whitespace-pre-wrap text-app-muted">{llmTestResult.reply}</p>
+              </div>
+            ) : null}
+          </div>
         </Card>
 
         <Card>

@@ -10,6 +10,7 @@ class FakeLLMClient(LLMClient):
         context,
         system_prompt: str | None = None,
     ) -> str:
+        self._last_system_prompt = system_prompt or ""
         if isinstance(context, ContextPackage):
             return self._generate_from_package(context)
 
@@ -53,6 +54,8 @@ class FakeLLMClient(LLMClient):
         return "\n".join(response_lines)
 
     def _generate_from_package(self, context: ContextPackage) -> str:
+        if "root-cause analysis" in (getattr(self, "_last_system_prompt", "") or "").lower():
+            return self._generate_root_cause(context)
         if not context.direct_events and not context.related_events:
             return (
                 "I don't have enough local information to answer that yet. Try seeding sample events from Developer "
@@ -91,11 +94,65 @@ class FakeLLMClient(LLMClient):
         response_lines.append("I only used the structured local context and relationship reasons available in MindOS.")
         return "\n".join(response_lines)
 
+    def _generate_root_cause(self, context: ContextPackage) -> str:
+        if not context.direct_events and not context.related_events:
+            return "I don't have enough local memory to determine the root cause yet."
+
+        direct = context.direct_events[:3]
+        related = context.related_events[:2]
+        top = direct[0]
+        lines = [
+            "## Root Cause",
+            self._root_cause_sentence(context),
+            "",
+            "## Evidence from Memory",
+        ]
+        for event in direct:
+            lines.append(f"- **{event.title}** ({event.source} / {event.type}): {event.content_preview}")
+        for event in related:
+            reason = event.match_reason or "Related memory"
+            lines.append(f"- **{event.title}** ({event.source} / {event.type}, related): {reason}")
+
+        lines.extend(
+            [
+                "",
+                "## Timeline",
+                f"1. {top.title}",
+            ]
+        )
+        if len(direct) > 1:
+            lines.append(f"2. {direct[1].title}")
+        if related:
+            lines.append(f"3. Related memory connects this to {related[0].title}")
+        else:
+            lines.append("3. No additional related memory was strong enough to include.")
+
+        lines.extend(
+            [
+                "",
+                "## Suggested Next Step",
+                "Review the highest-signal log, commit, or task evidence above and prepare a safe follow-up task if action is needed.",
+                "",
+                "## Sources Used",
+            ]
+        )
+        for event in [*direct, *related]:
+            lines.append(f"- {event.title} ({event.source} / {event.type})")
+        return "\n".join(lines)
+
     def _relationship_for_event(self, event_id: str, context: ContextPackage):
         for relationship in context.relationships:
             if relationship.from_event_id == event_id or relationship.to_event_id == event_id:
                 return relationship
         return None
+
+    def _root_cause_sentence(self, context: ContextPackage) -> str:
+        combined_text = " ".join(f"{event.title} {event.content_preview}" for event in context.direct_events).lower()
+        if "jwt" in combined_text or "token" in combined_text or "auth" in combined_text:
+            return "The most likely cause is an authentication/token handling issue, based on the strongest matching local memory."
+        if "deployment" in combined_text and ("failed" in combined_text or "error" in combined_text):
+            return "The most likely cause is a deployment-related failure surfaced by the matching local memory."
+        return "The most likely cause is reflected in the strongest direct memory matches, but more specific evidence may be needed."
 
     def _infer_pattern(self, events: list[dict]) -> str | None:
         combined_text = " ".join(

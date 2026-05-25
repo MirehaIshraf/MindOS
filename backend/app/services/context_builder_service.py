@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 
+from app.core.config import get_settings
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.domain.models import Event, Relationship
 from app.repositories.base import EventRepository, RelationshipRepository
@@ -7,8 +8,35 @@ from app.schemas.context import ContextEvent, ContextPackage, ContextRelationshi
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
 from app.services.search_service import SearchService
 
-MAX_EVENT_CONTENT_CHARS = 1200
-MAX_CONTEXT_TOKENS = 4000
+HIGH_PRIORITY_RELATIONSHIPS = {"FIXED_BY", "CAUSED_BY", "SAME_TASK", "SAME_FILE", "MENTIONS"}
+MEDIUM_PRIORITY_RELATIONSHIPS = {"SAME_REPO"}
+LOW_PRIORITY_RELATIONSHIPS = {"SAME_TOPIC", "TEMPORAL_NEARBY"}
+PROFILE_DEFAULTS = {
+    "fast_chat": {
+        "direct_limit": 4,
+        "related_per_event": 1,
+        "direct_chars": 700,
+        "related_chars": 400,
+        "max_total_chars": 6000,
+        "allow_low_priority": False,
+    },
+    "deep_analysis": {
+        "direct_limit": 8,
+        "related_per_event": 2,
+        "direct_chars": 1200,
+        "related_chars": 700,
+        "max_total_chars": 12000,
+        "allow_low_priority": True,
+    },
+    "task": {
+        "direct_limit": 5,
+        "related_per_event": 1,
+        "direct_chars": 800,
+        "related_chars": 450,
+        "max_total_chars": 7000,
+        "allow_low_priority": False,
+    },
+}
 
 
 class ContextBuilderService:
@@ -25,23 +53,29 @@ class ContextBuilderService:
     def build_chat_context(
         self,
         query: str,
-        limit: int = 5,
-        related_per_event: int = 2,
+        limit: int | None = None,
+        related_per_event: int | None = None,
         include_hidden: bool = True,
+        profile: str = "fast_chat",
     ) -> ContextPackage:
+        settings = get_settings()
+        limit = limit or settings.chat_context_direct_limit
+        related_per_event = related_per_event if related_per_event is not None else settings.chat_context_related_per_event
         return self._build_from_query(
             query=query,
             limit=limit,
             related_per_event=related_per_event,
             include_hidden=include_hidden,
+            profile=profile,
         )
 
-    def build_task_context(self, instruction: str, limit: int = 5, related_per_event: int = 2) -> ContextPackage:
+    def build_task_context(self, instruction: str, limit: int = 5, related_per_event: int = 1) -> ContextPackage:
         return self._build_from_query(
             query=instruction,
             limit=limit,
             related_per_event=related_per_event,
             include_hidden=True,
+            profile="task",
         )
 
     def get_context_for_event(self, event_id: str, related_limit: int = 10) -> ContextPackage:
@@ -49,7 +83,8 @@ class ContextBuilderService:
         if event is None:
             raise KeyError("Event not found.")
 
-        direct = [self._to_context_event(event, score=None, match_reason="Selected memory event")]
+        profile_config = self._profile_config("deep_analysis")
+        direct = [self._to_context_event(event, score=None, match_reason="Selected memory event", max_chars=profile_config["direct_chars"])]
         related_events: list[ContextEvent] = []
         relationships: list[ContextRelationship] = []
         seen = {event.id}
@@ -65,6 +100,7 @@ class ContextBuilderService:
                     related_event,
                     score=relationship.strength,
                     match_reason=f"{relationship.relationship_type}: {relationship.reason}",
+                    max_chars=profile_config["related_chars"],
                 )
             )
             relationships.append(self._to_context_relationship(relationship))
@@ -119,11 +155,19 @@ class ContextBuilderService:
             lines.extend(["# Warnings", *context_package.warnings])
         return "\n".join(lines).strip()
 
-    def _build_from_query(self, query: str, limit: int, related_per_event: int, include_hidden: bool) -> ContextPackage:
+    def _build_from_query(
+        self,
+        query: str,
+        limit: int,
+        related_per_event: int,
+        include_hidden: bool,
+        profile: str,
+    ) -> ContextPackage:
+        profile_config = self._profile_config(profile)
         search_response = self._search_service.search_events(
             query=query,
             sources=None,
-            limit=limit,
+            limit=min(limit, profile_config["direct_limit"]),
             include_hidden=include_hidden,
         )
         direct_events: list[ContextEvent] = []
@@ -142,11 +186,17 @@ class ContextBuilderService:
                     event,
                     score=result.score,
                     match_reason=result.match_reason,
+                    max_chars=profile_config["direct_chars"],
                 )
             )
 
         for direct in direct_events:
-            for item in self._relationship_repository.get_related_events(direct.event_id, limit=related_per_event):
+            related_items = self._prioritized_related_items(
+                self._relationship_repository.get_related_events(direct.event_id, limit=20),
+                allow_low_priority=profile_config["allow_low_priority"],
+                needed=related_per_event,
+            )
+            for item in related_items:
                 event = item["event"]
                 relationship = item["relationship"]
                 if event.id in direct_ids or event.id in seen_related:
@@ -157,6 +207,7 @@ class ContextBuilderService:
                         event,
                         score=relationship.strength,
                         match_reason=f"{relationship.relationship_type}: {relationship.reason}",
+                        max_chars=profile_config["related_chars"],
                     )
                 )
                 relationships.append(self._to_context_relationship(relationship))
@@ -168,7 +219,7 @@ class ContextBuilderService:
             relationships=relationships,
             warnings=[search_response.warning] if search_response.warning else [],
         )
-        return self._trim_package(package)
+        return self._trim_package(package, profile_config=profile_config)
 
     def _package(
         self,
@@ -193,12 +244,12 @@ class ContextBuilderService:
             warnings=warnings or [],
         )
 
-    def _trim_package(self, package: ContextPackage) -> ContextPackage:
-        if package.token_estimate <= MAX_CONTEXT_TOKENS:
+    def _trim_package(self, package: ContextPackage, profile_config: dict[str, int | bool]) -> ContextPackage:
+        if self._total_chars(package) <= profile_config["max_total_chars"]:
             return package
 
         trimmed_related = [
-            event.model_copy(update={"content": event.content[:600], "content_preview": event.content[:180]})
+            event.model_copy(update={"content": event.content[:200], "content_preview": event.content[:120]})
             for event in package.related_events
         ]
         rebuilt = self._package(
@@ -206,12 +257,25 @@ class ContextBuilderService:
             direct_events=package.direct_events,
             related_events=trimmed_related,
             relationships=package.relationships,
-            warnings=[*package.warnings, "Context was trimmed to fit size limits."],
+            warnings=[*package.warnings, "Context trimmed for speed."],
         )
-        return rebuilt
+        if self._total_chars(rebuilt) <= profile_config["max_total_chars"]:
+            return rebuilt
 
-    def _to_context_event(self, event: Event, score: float | None, match_reason: str | None) -> ContextEvent:
-        content = event.content[:MAX_EVENT_CONTENT_CHARS]
+        trimmed_direct = [
+            event.model_copy(update={"content": event.content[:400], "content_preview": event.content[:160]})
+            for event in rebuilt.direct_events
+        ]
+        return self._package(
+            query=rebuilt.query,
+            direct_events=trimmed_direct,
+            related_events=rebuilt.related_events,
+            relationships=rebuilt.relationships,
+            warnings=rebuilt.warnings,
+        )
+
+    def _to_context_event(self, event: Event, score: float | None, match_reason: str | None, max_chars: int) -> ContextEvent:
+        content = event.content[:max_chars]
         return ContextEvent(
             event_id=event.id,
             source=event.source.value,
@@ -273,6 +337,37 @@ class ContextBuilderService:
             if relationship.from_event_id == event_id or relationship.to_event_id == event_id:
                 return relationship
         return None
+
+    def _prioritized_related_items(self, items: list[dict], allow_low_priority: bool, needed: int) -> list[dict]:
+        if needed <= 0:
+            return []
+
+        high = self._sort_related([item for item in items if item["relationship"].relationship_type in HIGH_PRIORITY_RELATIONSHIPS])
+        medium = self._sort_related([item for item in items if item["relationship"].relationship_type in MEDIUM_PRIORITY_RELATIONSHIPS])
+        low = self._sort_related([item for item in items if item["relationship"].relationship_type in LOW_PRIORITY_RELATIONSHIPS])
+
+        selected = high[:needed]
+        if len(selected) < needed:
+            selected.extend(medium[: needed - len(selected)])
+        if len(selected) < needed and (allow_low_priority or not selected):
+            selected.extend(low[: needed - len(selected)])
+        return selected[:needed]
+
+    def _sort_related(self, items: list[dict]) -> list[dict]:
+        return sorted(items, key=lambda item: item["relationship"].strength, reverse=True)
+
+    def _profile_config(self, profile: str) -> dict[str, int | bool]:
+        config = dict(PROFILE_DEFAULTS.get(profile, PROFILE_DEFAULTS["fast_chat"]))
+        settings = get_settings()
+        if profile == "fast_chat":
+            config["direct_limit"] = settings.chat_context_direct_limit
+            config["related_per_event"] = settings.chat_context_related_per_event
+            config["direct_chars"] = settings.chat_context_max_chars_per_event
+            config["max_total_chars"] = settings.chat_context_max_total_chars
+        return config
+
+    def _total_chars(self, package: ContextPackage) -> int:
+        return len(self.format_context_for_llm(package))
 
 
 context_builder_service = ContextBuilderService()

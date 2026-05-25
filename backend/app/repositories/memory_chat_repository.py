@@ -35,6 +35,8 @@ class MemoryChatRepository(ChatRepository):
             task_hint=metadata.get("task_hint"),
             context_summary=metadata.get("context_summary"),
             context_stats=metadata.get("context_stats"),
+            warning=metadata.get("warning"),
+            answer_style=metadata.get("answer_style"),
         )
         self._messages.setdefault(session_id, []).append(message)
         title = session.title

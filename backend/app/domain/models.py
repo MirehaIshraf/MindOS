@@ -59,6 +59,8 @@ class ChatStoredMessage(BaseModel):
     task_hint: str | None = None
     context_summary: str | None = None
     context_stats: dict[str, Any] | None = None
+    warning: str | None = None
+    answer_style: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

@@ -1,5 +1,5 @@
 import { History, MessageSquare, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ChatInput } from "../components/chat/ChatInput";
@@ -23,6 +23,8 @@ export function ChatPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isReplying, setIsReplying] = useState(false);
+  const [pendingStyle, setPendingStyle] = useState("normal");
+  const [statusIndex, setStatusIndex] = useState(0);
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -36,6 +38,19 @@ export function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, isReplying]);
+
+  useEffect(() => {
+    if (!isReplying) {
+      setStatusIndex(0);
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setStatusIndex((current) => current + 1);
+    }, 1500);
+    return () => window.clearInterval(intervalId);
+  }, [isReplying]);
+
+  const loadingMessages = useMemo(() => loadingStatusMessages(pendingStyle), [pendingStyle]);
 
   async function refreshSessions() {
     setSessionError(null);
@@ -54,6 +69,7 @@ export function ChatPage() {
     }
 
     const userMessage = createMessage("user", content);
+    const style = detectPendingStyle(content);
     const history = messages.map((message) => ({
       role: message.role,
       content: message.content,
@@ -62,6 +78,7 @@ export function ChatPage() {
 
     setMessages((current) => [...current, userMessage]);
     setInput("");
+    setPendingStyle(style);
     setIsReplying(true);
 
     try {
@@ -82,6 +99,8 @@ export function ChatPage() {
           taskInstruction: content,
           contextSummary: response.context_summary,
           contextStats: response.context_stats,
+          warning: response.warning,
+          answerStyle: response.answer_style,
         }),
       ]);
       await refreshSessions();
@@ -232,9 +251,7 @@ export function ChatPage() {
 
         {isReplying ? (
           <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-md border border-app-border bg-app-panel px-4 py-3 text-sm text-app-muted">
-              Thinking over local memory...
-            </div>
+            <div className="px-2 py-1 text-sm text-app-muted">{loadingMessages[statusIndex % loadingMessages.length]}</div>
           </div>
         ) : null}
 
@@ -274,6 +291,8 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       taskInstruction: message.role === "assistant" ? lastUserInstruction : undefined,
       contextSummary: message.context_summary ?? undefined,
       contextStats: message.context_stats ?? undefined,
+      warning: message.warning ?? undefined,
+      answerStyle: message.answer_style ?? undefined,
     };
   });
 }
@@ -299,4 +318,35 @@ function formatTimestamp(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function loadingStatusMessages(style: string) {
+  if (style === "task") {
+    return ["Understanding task request...", "Checking relevant memory...", "Preparing safe task preview..."];
+  }
+  if (style === "root_cause") {
+    return [
+      "Searching local memory...",
+      "Checking logs, tasks, files, and related events...",
+      "Preparing root-cause analysis...",
+    ];
+  }
+  return ["Searching local memory...", "Checking related events...", "Preparing answer..."];
+}
+
+function detectPendingStyle(message: string) {
+  const text = message.toLowerCase();
+  if (
+    (text.includes("jira") || text.includes("ticket") || text.includes("email") || text.includes("pull request") || text.includes(" pr ")) &&
+    ["create", "make", "draft", "prepare", "send", "write", "open", "raise"].some((word) => text.includes(word))
+  ) {
+    return "task";
+  }
+  if (["why", "root cause", "cause", "failed", "failure", "error", "exception", "bug", "issue", "problem", "incident", "broke", "not working"].some((term) => text.includes(term))) {
+    return "root_cause";
+  }
+  if (["summarize", "summary", "overview", "what did i work on", "report"].some((term) => text.includes(term))) {
+    return "summary";
+  }
+  return "normal";
 }

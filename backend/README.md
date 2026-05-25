@@ -23,9 +23,8 @@ This backend does not include:
 - Frontend UI
 - PostgreSQL
 - ChromaDB
-- Ollama or real LLM providers
 - Real GitHub, Jira, email, browser, VSCode, file watcher, or log integrations
-- Real semantic search, LLM chat, external task execution, or playbook workflows
+- Real semantic search, external task execution, or playbook workflows
 
 The current implementation is designed to make those additions safer later without mixing business logic into route files.
 
@@ -79,6 +78,28 @@ Supported log file types are `.log`, `.txt`, `.out`, and `.err`. The importer re
 Log import detects common levels such as `ERROR`, `WARN`, `INFO`, `DEBUG`, `FATAL`, `CRITICAL`, `EXCEPTION`, and `Traceback`. It extracts simple timestamps when present, creates searchable Memory events with `source=logs`, and can group similar repeated messages into one event to avoid flooding Memory.
 
 Duplicate avoidance uses stable hashes from the file path and line/group content. Re-importing the same unchanged log entries skips them as already imported. Live log tailing is not implemented yet.
+
+## Local LLM with Ollama
+
+MindOS can use a local Ollama model for Chat while keeping FakeLLM as the default and fallback.
+
+Install and start Ollama manually, then pull the chat model:
+
+```powershell
+ollama pull qwen3:8b
+```
+
+Enable local chat in `.env`:
+
+```env
+ENABLE_LOCAL_LLM=true
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_CHAT_MODEL=qwen3:8b
+OLLAMA_NUM_CTX=32768
+OLLAMA_THINKING_MODE=false
+```
+
+When enabled, MindOS sends structured local context from the backend to Ollama through the local `/api/chat` endpoint. No data is sent to cloud services by this integration. If Ollama is stopped, unavailable, or returns an invalid response, MindOS falls back to FakeLLM and returns a warning in the chat response.
 
 ## Local Git Manual Import
 

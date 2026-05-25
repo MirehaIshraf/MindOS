@@ -34,6 +34,8 @@ class ChatSource(BaseModel):
     match_reason: str
     timestamp: datetime
     source_kind: str = "direct"
+    relationship_type: str | None = None
+    relationship_reason: str | None = None
 
 
 class ChatContextStats(BaseModel):
@@ -42,6 +44,7 @@ class ChatContextStats(BaseModel):
     relationship_count: int
     sources: list[str]
     token_estimate: int
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -54,6 +57,7 @@ class ChatResponse(BaseModel):
     warning: str | None = None
     context_summary: str = ""
     context_stats: ChatContextStats | None = None
+    answer_style: str = "normal"
 
 
 class ChatSessionResponse(BaseModel):
@@ -79,6 +83,8 @@ class ChatStoredMessageResponse(BaseModel):
     task_hint: str | None = None
     context_summary: str | None = None
     context_stats: dict[str, Any] | None = None
+    warning: str | None = None
+    answer_style: str | None = None
     created_at: datetime
 
 

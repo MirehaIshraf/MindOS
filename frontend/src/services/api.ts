@@ -2,6 +2,7 @@ import axios from "axios";
 
 import type {
   BackendHealth,
+  BackendStatus,
   ChatMessagesResponse,
   ChatRequestPayload,
   ChatResponse,
@@ -29,6 +30,7 @@ import type {
   SeedSampleEventsResponse,
   TaskHistoryResponse,
   TaskResponse,
+  TestLLMResponse,
 } from "../types";
 
 export const api = axios.create({
@@ -38,6 +40,11 @@ export const api = axios.create({
 
 export async function getHealth(): Promise<BackendHealth> {
   const response = await api.get<BackendHealth>("/health");
+  return response.data;
+}
+
+export async function getStatus(): Promise<BackendStatus> {
+  const response = await api.get<BackendStatus>("/status");
   return response.data;
 }
 
@@ -155,7 +162,14 @@ export async function sendChatMessage(payload: ChatRequestPayload): Promise<Chat
   const response = await api.post<ChatResponse>("/chat", {
     ...payload,
     use_context: payload.use_context ?? true,
+  }, {
+    timeout: 130000,
   });
+  return response.data;
+}
+
+export async function testLLM(message: string): Promise<TestLLMResponse> {
+  const response = await api.post<TestLLMResponse>("/dev/test-llm", { message }, { timeout: 130000 });
   return response.data;
 }
 

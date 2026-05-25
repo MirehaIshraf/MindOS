@@ -2,7 +2,10 @@ from datetime import datetime, timezone
 
 from app.core.dependencies import get_chat_repository, get_event_repository
 from app.domain.enums import EmbeddingStatus, EventSource
+from app.core.config import get_settings
+from app.integrations.llm.base import LLMClient
 from app.integrations.llm.fake_llm import FakeLLMClient
+from app.integrations.llm.ollama_llm import OllamaLLMClient, OllamaLLMError
 from app.repositories.base import ChatRepository, EventRepository
 from app.schemas.chat import (
     ChatContextStats,
@@ -16,25 +19,67 @@ from app.schemas.chat import (
 )
 from app.schemas.context import ContextEvent, ContextPackage
 from app.services.context_builder_service import ContextBuilderService
+from app.services.model_runtime_service import OLLAMA_FALLBACK_WARNING, model_runtime_service
+from app.services.response_cleaner import clean_llm_response
 from app.services.relationship_service import relationship_service
 
-SYSTEM_PROMPT = (
-    "You are MindOS, a local-first AI assistant. You answer using the user's local memory when context is provided. "
-    "Do not invent user data. If the context is insufficient, say so. For task requests, do not execute actions; "
-    "only identify that it looks like a task."
-)
+SYSTEM_PROMPT = """/no_think
+
+Answer directly. Do not output hidden reasoning, thinking traces, scratchpad text, or chain-of-thought.
+
+You are MindOS, a local-first AI assistant for a developer.
+
+You answer using the user's local memory context provided by the backend.
+The context may include files, logs, Git activity, tasks, chat history, and related memory.
+
+Rules:
+1. Use only the provided context when answering questions about the user's work.
+2. If the context is insufficient, say what is missing.
+3. Do not invent files, tickets, commits, logs, emails, or tasks.
+4. Mention the most relevant sources naturally.
+5. When related memory is provided, use it to connect events.
+6. Keep answers clear, structured, and useful.
+7. For task requests, do not claim that you executed anything. Only say that the task can be prepared safely and requires confirmation.
+8. Do not reveal hidden reasoning or internal chain-of-thought.
+9. Answer directly.
+
+When the user asks about a failure, bug, error, incident, root cause, or why something happened, use this format:
+
+## Root Cause
+A concise explanation of the most likely cause.
+
+## Evidence from Memory
+- Source/type/title based evidence.
+- Mention logs, commits, files, tasks, or chats only if present in context.
+
+## Timeline
+1. What happened first
+2. What happened next
+3. What fixed or relates to it
+
+## Suggested Next Step
+A practical next action.
+
+## Sources Used
+A short list of the most relevant memory items.
+
+If context is insufficient, say:
+"I don't have enough local memory to determine the root cause yet."
+Then mention what data would help.
+"""
 
 
 class ChatService:
     def __init__(
         self,
         context_builder: ContextBuilderService | None = None,
-        llm: FakeLLMClient | None = None,
+        llm: LLMClient | None = None,
         chat_repository: ChatRepository | None = None,
         event_repository: EventRepository | None = None,
     ) -> None:
         self._context_builder = context_builder or ContextBuilderService()
-        self._llm = llm or FakeLLMClient()
+        self._llm = llm
+        self._fake_llm = FakeLLMClient()
         self._chat_repository = chat_repository or get_chat_repository()
         self._event_repository = event_repository or get_event_repository()
 
@@ -52,8 +97,7 @@ class ChatService:
         if request.use_context:
             context_package = self._context_builder.build_chat_context(
                 query=request.message,
-                limit=5,
-                related_per_event=2,
+                profile="fast_chat",
                 include_hidden=True,
             )
 
@@ -68,16 +112,23 @@ class ChatService:
         )
 
         history = [message.model_dump(mode="json") for message in request.history]
-        reply = self._llm.generate_response(
+        task_hint = detect_task_hint(request.message)
+        answer_style = detect_answer_style(request.message, task_hint)
+        reply, model_name, llm_warning = self._generate_reply(
             message=request.message,
             history=history,
-            context=context_package,
-            system_prompt=SYSTEM_PROMPT,
+            context_package=context_package,
+            task_hint=task_hint,
+            answer_style=answer_style,
         )
-        task_hint = detect_task_hint(request.message)
+        reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
         context_stats = context_stats_payload(context_package)
         sources_payload = [source.model_dump(mode="json") for source in sources_used]
+        warning = combined_warning(
+            "; ".join(context_package.warnings) if context_package and context_package.warnings else None,
+            llm_warning,
+        )
 
         self._chat_repository.add_message(
             session.id,
@@ -85,11 +136,13 @@ class ChatService:
             reply,
             {
                 "sources_used": sources_payload,
-                "model": "fake-llm",
+                "model": model_name,
                 "search_mode": "keyword",
                 "task_hint": task_hint,
                 "context_summary": context_package.summary if context_package else "",
                 "context_stats": context_stats.model_dump() if context_stats else None,
+                "warning": warning,
+                "answer_style": answer_style,
             },
         )
         self._record_chat_memory_event(
@@ -99,10 +152,12 @@ class ChatService:
             session_id=session.id,
             role="assistant",
             metadata={
-                "model": "fake-llm",
+                "model": model_name,
                 "search_mode": "keyword",
                 "sources_used_count": len(sources_used),
                 "task_hint": task_hint,
+                "warning": warning,
+                "answer_style": answer_style,
             },
         )
 
@@ -110,12 +165,13 @@ class ChatService:
             session_id=session.id,
             reply=reply,
             sources_used=sources_used,
-            model="fake-llm",
+            model=model_name,
             search_mode="keyword",
             task_hint=task_hint,
-            warning="; ".join(context_package.warnings) if context_package and context_package.warnings else None,
+            warning=warning,
             context_summary=context_package.summary if context_package else "",
             context_stats=context_stats,
+            answer_style=answer_style,
         )
 
     def list_sessions(self, limit: int = 20) -> ChatSessionsResponse:
@@ -175,6 +231,55 @@ class ChatService:
         )
         relationship_service.detect_relationships_for_event(event)
 
+    def _generate_reply(
+        self,
+        *,
+        message: str,
+        history: list[dict],
+        context_package: ContextPackage | None,
+        task_hint: str | None,
+        answer_style: str,
+    ) -> tuple[str, str, str | None]:
+        system_prompt = prompt_for_answer_style(task_hint, answer_style)
+        if self._llm is not None:
+            return (
+                self._llm.generate_response(message=message, history=history, context=context_package, system_prompt=system_prompt),
+                getattr(self._llm, "model", "custom-llm"),
+                None,
+            )
+
+        settings = get_settings()
+        if settings.enable_local_llm:
+            try:
+                if not model_runtime_service.is_model_available(settings.ollama_chat_model):
+                    raise OllamaLLMError("Ollama model is unavailable.")
+                formatted_context = self._context_builder.format_context_for_llm(context_package) if context_package else ""
+                client = OllamaLLMClient()
+                return (
+                    client.generate_response(
+                        message=message,
+                        history=history,
+                        context=formatted_context,
+                        system_prompt=system_prompt,
+                    ),
+                    settings.ollama_chat_model,
+                    None,
+                )
+            except (OllamaLLMError, RuntimeError):
+                pass
+
+        warning = OLLAMA_FALLBACK_WARNING if settings.enable_local_llm else None
+        return (
+            self._fake_llm.generate_response(
+                message=message,
+                history=history,
+                context=context_package,
+                system_prompt=system_prompt,
+            ),
+            "fake-llm",
+            warning,
+        )
+
 def context_sources(context_package: ContextPackage | None) -> list[ChatSource]:
     if context_package is None:
         return []
@@ -185,6 +290,10 @@ def context_sources(context_package: ContextPackage | None) -> list[ChatSource]:
 
 
 def context_event_to_source(event: ContextEvent, source_kind: str) -> ChatSource:
+    relationship_type = None
+    relationship_reason = None
+    if source_kind == "related" and event.match_reason and ": " in event.match_reason:
+        relationship_type, relationship_reason = event.match_reason.split(": ", 1)
     return ChatSource(
         event_id=event.event_id,
         source=event.source,
@@ -195,6 +304,8 @@ def context_event_to_source(event: ContextEvent, source_kind: str) -> ChatSource
         match_reason=event.match_reason or "",
         timestamp=event.timestamp,
         source_kind=source_kind,
+        relationship_type=relationship_type,
+        relationship_reason=relationship_reason,
     )
 
 
@@ -207,7 +318,32 @@ def context_stats_payload(context_package: ContextPackage | None) -> ChatContext
         relationship_count=len(context_package.relationships),
         sources=[group.source for group in context_package.source_groups],
         token_estimate=context_package.token_estimate,
+        warnings=context_package.warnings,
     )
+
+
+def combined_warning(*warnings: str | None) -> str | None:
+    values = [warning for warning in warnings if warning]
+    return "; ".join(values) if values else None
+
+
+def prompt_for_answer_style(task_hint: str | None, answer_style: str) -> str:
+    prompt = SYSTEM_PROMPT
+    if answer_style == "root_cause":
+        prompt += (
+            "\nThe user is asking for root-cause analysis. Use the Root Cause / Evidence from Memory / "
+            "Timeline / Suggested Next Step / Sources Used format. Be concise but structured.\n"
+        )
+    elif answer_style == "summary":
+        prompt += "\nThe user is asking for a summary. Use a clean markdown summary with sections and bullets.\n"
+    if task_hint:
+        prompt += (
+            "\nThe user's message looks like a task request of type: "
+            + task_hint
+            + ". Do not claim the task has been executed. Briefly explain that MindOS can prepare this safely "
+            "and the user can confirm it in Tasks.\n"
+        )
+    return prompt
 
 
 def short_title(value: str) -> str:
@@ -219,20 +355,48 @@ def detect_task_hint(message: str) -> str | None:
     lower_message = message.lower()
 
     if ("jira" in lower_message or "ticket" in lower_message) and any(
-        word in lower_message for word in ["create", "draft", "make"]
+        word in lower_message for word in ["create", "draft", "make", "prepare", "open"]
     ):
         return "create_jira_ticket"
-    if "email" in lower_message and any(word in lower_message for word in ["send", "draft", "write"]):
+    if "email" in lower_message and any(word in lower_message for word in ["send", "draft", "write", "prepare"]):
         return "draft_email"
-    if "pr" in lower_message or "pull request" in lower_message:
+    padded = f" {lower_message} "
+    if "pull request" in lower_message or " create pr" in padded or " raise pr" in padded or " pr " in padded:
         return "create_pull_request"
-    if "commit message" in lower_message or "commit" in lower_message:
+    if "commit message" in lower_message or "generate commit" in lower_message:
         return "generate_commit_message"
-    if "branch name" in lower_message or "branch" in lower_message:
+    if "branch name" in lower_message or "suggest branch" in lower_message:
         return "suggest_branch_name"
     if "weekly report" in lower_message or "report" in lower_message:
         return "weekly_report"
     return None
+
+
+def detect_answer_style(message: str, task_hint: str | None = None) -> str:
+    if task_hint:
+        return "task"
+    text = message.lower()
+    root_cause_terms = [
+        "why",
+        "root cause",
+        "cause",
+        "failed",
+        "failure",
+        "error",
+        "exception",
+        "bug",
+        "issue",
+        "problem",
+        "incident",
+        "broke",
+        "not working",
+    ]
+    if any(term in text for term in root_cause_terms):
+        return "root_cause"
+    summary_terms = ["summarize", "summary", "overview", "what did i work on", "report"]
+    if any(term in text for term in summary_terms):
+        return "summary"
+    return "normal"
 
 
 chat_service = ChatService()
