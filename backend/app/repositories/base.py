@@ -39,6 +39,18 @@ class EventRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def count_by_embedding_status(self) -> dict[str, int]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_embedding_status(self, event_id: str, status: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_events_for_embedding(self, limit: int | None = None) -> list[Event]:
+        raise NotImplementedError
+
+    @abstractmethod
     def clear_events(self) -> None:
         raise NotImplementedError
 

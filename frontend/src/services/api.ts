@@ -13,6 +13,8 @@ import type {
   ClearLogEventsResponse,
   ConnectorListResponse,
   DevState,
+  EmbeddingReindexResponse,
+  EmbeddingStatusResponse,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
@@ -140,6 +142,7 @@ export async function searchEvents(
   limit = 10,
   category?: string,
   includeHidden = true,
+  searchMode = "auto",
 ): Promise<SearchResponse> {
   const response = await api.post<SearchResponse>("/search", {
     query,
@@ -147,6 +150,7 @@ export async function searchEvents(
     limit,
     category,
     include_hidden: includeHidden,
+    search_mode: searchMode,
   });
   return response.data;
 }
@@ -258,6 +262,21 @@ export async function setModelEnabled(modelId: string, enabled: boolean): Promis
 
 export async function getProviderHealth(): Promise<Record<string, unknown>> {
   const response = await api.get<Record<string, unknown>>("/models/providers/health");
+  return response.data;
+}
+
+export async function getEmbeddingStatus(): Promise<EmbeddingStatusResponse> {
+  const response = await api.get<EmbeddingStatusResponse>("/embeddings/status", { timeout: 30000 });
+  return response.data;
+}
+
+export async function reindexEmbeddings(): Promise<EmbeddingReindexResponse> {
+  const response = await api.post<EmbeddingReindexResponse>("/embeddings/reindex", {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function clearEmbeddingIndex(): Promise<{ status: string; updated_events: number }> {
+  const response = await api.post<{ status: string; updated_events: number }>("/embeddings/clear", {}, { timeout: 30000 });
   return response.data;
 }
 

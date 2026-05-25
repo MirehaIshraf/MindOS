@@ -28,6 +28,11 @@ export type ModelRuntimeStatus = {
   providers?: Record<string, { configured: boolean; enabled?: boolean; has_api_key?: boolean; available: boolean | null }>;
   active_provider?: string;
   model_warning?: string | null;
+  embeddings_enabled?: boolean;
+  embedding_model?: string;
+  chroma_available?: boolean;
+  chroma_indexed_count?: number;
+  semantic_search_default?: boolean;
 };
 
 export type BackendStatus = ModelRuntimeStatus & {
@@ -120,6 +125,7 @@ export type DevState = {
   chat_context_related_per_event?: number;
   chat_context_max_total_chars?: number;
   chat_history_limit?: number;
+  embeddings?: EmbeddingStatusResponse;
 };
 
 export type SeedSampleEventsResponse = {
@@ -151,6 +157,7 @@ export type SearchResponse = {
   results: SearchResult[];
   total: number;
   search_mode: string;
+  requested_search_mode?: string | null;
   warning?: string | null;
 };
 
@@ -551,4 +558,22 @@ export type ContextPackage = {
   summary: string;
   token_estimate: number;
   warnings: string[];
+};
+
+export type EmbeddingStatusResponse = {
+  enabled: boolean;
+  embedding_model: string;
+  ollama_available: boolean;
+  chroma_available: boolean;
+  chroma_path: string;
+  indexed_count: number;
+  event_status: Record<string, number>;
+};
+
+export type EmbeddingReindexResponse = {
+  indexed: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  errors: Array<Record<string, unknown>>;
 };

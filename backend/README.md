@@ -22,9 +22,8 @@ This backend does not include:
 
 - Frontend UI
 - PostgreSQL
-- ChromaDB
 - Real GitHub, Jira, email, browser, VSCode, file watcher, or log integrations
-- Real semantic search, external task execution, or playbook workflows
+- External task execution or playbook workflows
 
 The current implementation is designed to make those additions safer later without mixing business logic into route files.
 
@@ -119,6 +118,27 @@ Imported Git memory can include:
 - Uncommitted changed files grouped by modified, added, deleted, and untracked
 
 MindOS never runs Git write commands for import. It will not run `git add`, `git commit`, `git push`, `git pull`, `git checkout`, `git reset`, `git clean`, or modify the repository. Duplicate commit events are skipped by commit hash.
+
+## Semantic Search
+
+MindOS can optionally use local semantic search with Ollama embeddings and ChromaDB. SQLite remains the source of truth; ChromaDB stores vectors and lightweight metadata only.
+
+Install and start Ollama, then pull the local embedding model:
+
+```powershell
+ollama pull nomic-embed-text
+```
+
+Enable embeddings in `.env`:
+
+```env
+ENABLE_EMBEDDINGS=true
+OLLAMA_EMBED_MODEL=nomic-embed-text
+CHROMA_PATH=data/chroma
+SEMANTIC_SEARCH_DEFAULT=false
+```
+
+Restart the backend, then use Developer Mode to reindex all memory. If Ollama or ChromaDB is unavailable, MindOS falls back to keyword search. No cloud embeddings are used.
 
 ## Setup
 

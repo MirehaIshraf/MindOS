@@ -114,6 +114,12 @@ class IngestionService:
 
     def clear_events(self) -> None:
         self._event_repository.clear_events()
+        try:
+            from app.services.embedding_index_service import embedding_index_service
+
+            embedding_index_service.clear_index()
+        except Exception:
+            pass
 
     def _to_event_data(self, request: IngestEventRequest) -> dict[str, Any]:
         return {

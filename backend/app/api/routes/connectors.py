@@ -75,6 +75,13 @@ def clear_log_events() -> dict[str, object]:
         if event.source.value == "logs"
     ]
     deleted_relationships = relationship_repository.delete_relationships_for_event_ids(log_event_ids)
+    try:
+        from app.integrations.vector_store.chroma_vector_store import chroma_vector_store
+
+        for event_id in log_event_ids:
+            chroma_vector_store.delete_event(event_id)
+    except Exception:
+        pass
     deleted_events = event_repository.delete_events_by_source("logs")
     return {
         "status": "cleared",

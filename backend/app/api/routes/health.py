@@ -6,6 +6,7 @@ from app.services.event_service import EventService
 from app.services.chat_service import chat_service
 from app.services.model_runtime_service import model_runtime_service
 from app.services.model_registry_service import model_registry_service
+from app.services.embedding_index_service import embedding_index_service
 from app.services.relationship_service import relationship_service
 from app.services.task_service import task_service
 
@@ -25,7 +26,7 @@ def health_check() -> dict[str, str | int]:
         "task_count": task_service.count_tasks(),
         "chat_session_count": chat_service.count_sessions(),
         "chat_message_count": chat_service.count_messages(),
-        "search_mode": "keyword",
+        "search_mode": "hybrid" if settings.enable_embeddings else "keyword",
     }
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())
@@ -53,6 +54,17 @@ def status() -> dict[str, object]:
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())
     payload.update(model_runtime_service.get_status())
+    embedding_status = embedding_index_service.status()
+    payload.update(
+        {
+            "embeddings_enabled": settings.enable_embeddings,
+            "embedding_model": settings.ollama_embed_model,
+            "chroma_available": embedding_status["chroma_available"],
+            "chroma_indexed_count": embedding_status["indexed_count"],
+            "semantic_search_default": settings.semantic_search_default,
+            "search_mode": "hybrid" if settings.enable_embeddings else "keyword",
+        }
+    )
     chat_models_response = model_registry_service.get_chat_models_response()
     selected_model = next(
         (model for model in chat_models_response.models if model.id == chat_models_response.selected_chat_model),

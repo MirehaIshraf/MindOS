@@ -1,4 +1,4 @@
-import { Cloud, Cpu, KeyRound, RefreshCw, Settings } from "lucide-react";
+import { Cloud, Cpu, DatabaseZap, KeyRound, RefreshCw, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -6,8 +6,8 @@ import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
-import { getErrorMessage, getModelSettings, selectChatModel, setModelEnabled, updateProviderConfig } from "../services/api";
-import type { ModelConfig, ModelProvider, ModelSettingsResponse } from "../types";
+import { getEmbeddingStatus, getErrorMessage, getModelSettings, selectChatModel, setModelEnabled, updateProviderConfig } from "../services/api";
+import type { EmbeddingStatusResponse, ModelConfig, ModelProvider, ModelSettingsResponse } from "../types";
 
 const installCommands: Record<string, string> = {
   "ollama-llama3.2": "ollama pull llama3.2",
@@ -17,6 +17,7 @@ const installCommands: Record<string, string> = {
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettingsResponse | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -38,7 +39,9 @@ export function SettingsPage() {
     setLoadingAction("refresh");
     setError(null);
     try {
-      setSettings(await getModelSettings());
+      const [modelSettings, embeddings] = await Promise.all([getModelSettings(), getEmbeddingStatus()]);
+      setSettings(modelSettings);
+      setEmbeddingStatus(embeddings);
     } catch (caughtError) {
       console.error("SettingsPage failed to load model settings", caughtError);
       setError(getErrorMessage(caughtError));
@@ -194,6 +197,25 @@ export function SettingsPage() {
           ))}
         </div>
       </section>
+
+      <Card>
+        <SectionHeader icon={<DatabaseZap size={18} />} title="Memory Search" />
+        <div className="mt-4 space-y-3 text-sm">
+          <Row label="semantic search" value={embeddingStatus?.enabled ? "enabled" : "disabled"} tone={embeddingStatus?.enabled ? "success" : "warning"} />
+          <Row label="embedding model" value={embeddingStatus?.embedding_model ?? "nomic-embed-text"} />
+          <Row label="Chroma" value={embeddingStatus?.chroma_available ? "available" : "unavailable"} tone={embeddingStatus?.chroma_available ? "success" : "warning"} />
+          <Row label="indexed memories" value={String(embeddingStatus?.indexed_count ?? 0)} />
+        </div>
+        <p className="mt-4 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm leading-6 text-violet-100">
+          Semantic search uses local Ollama embeddings. Memory content stays on this machine.
+        </p>
+        <p className="mt-3 rounded-md border border-app-border bg-zinc-950 px-3 py-2 font-mono text-xs text-app-muted">
+          ollama pull nomic-embed-text
+        </p>
+        <p className="mt-3 text-xs leading-5 text-app-muted">
+          To enable semantic search, set ENABLE_EMBEDDINGS=true in backend/.env and restart the backend.
+        </p>
+      </Card>
     </div>
   );
 }

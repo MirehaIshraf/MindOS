@@ -123,6 +123,7 @@ class ChatService:
         sources_used = context_sources(context_package)
         context_stats = context_stats_payload(context_package)
         sources_payload = [source.model_dump(mode="json") for source in sources_used]
+        search_mode = "hybrid" if get_settings().enable_embeddings else "keyword"
         warning = combined_warning(
             "; ".join(context_package.warnings) if context_package and context_package.warnings else None,
             llm_warning,
@@ -137,7 +138,7 @@ class ChatService:
                 "model": model_name,
                 "provider": provider,
                 "model_display_name": model_display_name,
-                "search_mode": "keyword",
+                "search_mode": search_mode,
                 "task_hint": task_hint,
                 "context_summary": context_package.summary if context_package else "",
                 "context_stats": context_stats.model_dump() if context_stats else None,
@@ -155,7 +156,7 @@ class ChatService:
                 "model": model_name,
                 "provider": provider,
                 "model_display_name": model_display_name,
-                "search_mode": "keyword",
+                "search_mode": search_mode,
                 "sources_used_count": len(sources_used),
                 "task_hint": task_hint,
                 "warning": warning,
@@ -170,7 +171,7 @@ class ChatService:
             model=model_name,
             provider=provider,
             model_display_name=model_display_name,
-            search_mode="keyword",
+            search_mode=search_mode,
             task_hint=task_hint,
             warning=warning,
             context_summary=context_package.summary if context_package else "",

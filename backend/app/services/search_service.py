@@ -7,6 +7,7 @@ from app.domain.models import Event
 from app.repositories.base import EventRepository
 from app.schemas.search import SearchResponse, SearchResult, SearchStatsResponse
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
+from app.services.embedding_index_service import embedding_index_service
 from app.services.relationship_service import relationship_service
 
 STOP_WORDS = {"a", "the", "to", "of", "in", "and", "or", "for", "with"}
@@ -23,6 +24,38 @@ class SearchService:
         category: str | None = None,
         limit: int = 10,
         include_hidden: bool = True,
+        search_mode: str | None = "auto",
+    ) -> SearchResponse:
+        requested_mode = (search_mode or "auto").lower()
+        if requested_mode not in {"keyword", "semantic", "hybrid", "auto"}:
+            requested_mode = "auto"
+
+        if requested_mode == "keyword":
+            return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+
+        semantic_available = embedding_index_service.embeddings_available()
+        if requested_mode in {"semantic", "hybrid"} and not semantic_available:
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+            response.warning = merge_warning(response.warning, "Semantic search unavailable. Falling back to keyword search.")
+            response.requested_search_mode = requested_mode
+            return response
+
+        if requested_mode == "semantic":
+            return self._semantic_search(query, sources, category, limit, include_hidden, requested_mode)
+
+        if requested_mode == "hybrid" or semantic_available:
+            return self._hybrid_search(query, sources, category, limit, include_hidden, requested_mode)
+
+        return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+
+    def _keyword_search(
+        self,
+        query: str,
+        sources: list[str] | None,
+        category: str | None,
+        limit: int,
+        include_hidden: bool,
+        requested_mode: str | None = "keyword",
     ) -> SearchResponse:
         normalized_query = query.strip().lower()
         tokens = self._tokenize(normalized_query)
@@ -59,7 +92,90 @@ class SearchService:
             results=results,
             total=len(results),
             search_mode="keyword",
+            requested_search_mode=requested_mode,
             warning=warning,
+        )
+
+    def _semantic_search(
+        self,
+        query: str,
+        sources: list[str] | None,
+        category: str | None,
+        limit: int,
+        include_hidden: bool,
+        requested_mode: str | None = "semantic",
+    ) -> SearchResponse:
+        try:
+            vector_rows = embedding_index_service.semantic_search(
+                query=query,
+                limit=limit,
+                sources=sources,
+                category=category,
+                include_hidden=include_hidden,
+            )
+        except Exception as exc:
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+            response.warning = merge_warning(response.warning, f"Semantic search failed. Falling back to keyword search: {exc}")
+            return response
+
+        results: list[SearchResult] = []
+        for row in vector_rows:
+            event = self._event_repository.get_event_by_id(row["event_id"])
+            if event is None:
+                continue
+            results.append(self._to_search_result(event, raw_score=row["score"], max_score=1, match_reason="Semantic match"))
+        return SearchResponse(
+            query=query,
+            results=results,
+            total=len(results),
+            search_mode="semantic",
+            requested_search_mode=requested_mode,
+            warning=None,
+        )
+
+    def _hybrid_search(
+        self,
+        query: str,
+        sources: list[str] | None,
+        category: str | None,
+        limit: int,
+        include_hidden: bool,
+        requested_mode: str | None = "hybrid",
+    ) -> SearchResponse:
+        keyword_response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+        semantic_response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode)
+        if semantic_response.search_mode != "semantic":
+            semantic_response.requested_search_mode = requested_mode
+            return semantic_response
+
+        merged: dict[str, dict] = {}
+        for result in keyword_response.results:
+            merged[result.event_id] = {"event_id": result.event_id, "keyword": result.score, "semantic": 0.0}
+        for result in semantic_response.results:
+            row = merged.setdefault(result.event_id, {"event_id": result.event_id, "keyword": 0.0, "semantic": 0.0})
+            row["semantic"] = result.score
+
+        scored = sorted(
+            (
+                (row["semantic"] * 0.65 + row["keyword"] * 0.35, row["event_id"])
+                for row in merged.values()
+            ),
+            reverse=True,
+        )[:limit]
+        results: list[SearchResult] = []
+        for score, event_id in scored:
+            event = self._event_repository.get_event_by_id(event_id)
+            if event is None:
+                continue
+            reason = "Semantic + keyword match" if merged[event_id]["keyword"] and merged[event_id]["semantic"] else "Semantic match" if merged[event_id]["semantic"] else "Keyword match"
+            results.append(self._to_search_result(event, raw_score=score, max_score=1, match_reason=reason))
+        return SearchResponse(
+            query=query,
+            results=results,
+            total=len(results),
+            search_mode="hybrid",
+            requested_search_mode=requested_mode,
+            warning=keyword_response.warning,
         )
 
     def get_search_stats(self) -> SearchStatsResponse:
@@ -167,7 +283,7 @@ class SearchService:
         return "No match"
 
     def _to_search_result(self, event: Event, raw_score: float, max_score: float, match_reason: str) -> SearchResult:
-        normalized_score = round(min(raw_score / max_score, 1.0), 4)
+        normalized_score = round(min(raw_score / max_score, 1.0), 4) if max_score else 0.0
         return SearchResult(
             event_id=event.id,
             source=event.source.value,
@@ -197,3 +313,7 @@ class SearchService:
                 for item in relationship_service.get_related_context(event.id, limit=3)
             ],
         )
+
+
+def merge_warning(existing: str | None, addition: str) -> str:
+    return f"{existing} {addition}" if existing else addition

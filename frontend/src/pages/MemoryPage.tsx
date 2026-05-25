@@ -31,8 +31,16 @@ const sources = [
   { label: "Email", value: "email" },
 ] as const;
 
+const searchModes = [
+  { label: "Auto", value: "auto" },
+  { label: "Keyword", value: "keyword" },
+  { label: "Semantic", value: "semantic" },
+  { label: "Hybrid", value: "hybrid" },
+] as const;
+
 type CategoryFilter = (typeof categories)[number];
 type SourceFilter = (typeof sources)[number];
+type SearchModeFilter = (typeof searchModes)[number];
 
 type DisplayItem =
   | {
@@ -51,6 +59,9 @@ export function MemoryPage() {
   const [recentEvents, setRecentEvents] = useState<MemoryEvent[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [stats, setStats] = useState<SearchStatsResponse | null>(null);
+  const [selectedSearchMode, setSelectedSearchMode] = useState<SearchModeFilter>(searchModes[0]);
+  const [searchModeUsed, setSearchModeUsed] = useState("keyword");
+  const [searchWarning, setSearchWarning] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<MemoryEvent | null>(null);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -72,6 +83,8 @@ export function MemoryPage() {
       setRecentEvents(recentResponse.events);
       setStats(statsResponse);
       setSearchResults([]);
+      setSearchModeUsed("keyword");
+      setSearchWarning(null);
       setIsSearchMode(false);
     } catch {
       setError("Could not load memory. Backend may be offline.");
@@ -82,7 +95,7 @@ export function MemoryPage() {
     }
   }
 
-  async function runSearch(category = selectedCategory, source = selectedSource) {
+  async function runSearch(category = selectedCategory, source = selectedSource, mode = selectedSearchMode) {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) {
       await loadRecent(category, source);
@@ -93,10 +106,12 @@ export function MemoryPage() {
     setError(null);
     try {
       const [searchResponse, statsResponse] = await Promise.all([
-        searchEvents(trimmedQuery, source.value ? [source.value] : undefined, 30, category.value, true),
+        searchEvents(trimmedQuery, source.value ? [source.value] : undefined, 30, category.value, true, mode.value),
         getSearchStats(),
       ]);
       setSearchResults(searchResponse.results);
+      setSearchModeUsed(searchResponse.search_mode);
+      setSearchWarning(searchResponse.warning ?? null);
       setStats(statsResponse);
       setIsSearchMode(true);
     } catch {
@@ -187,6 +202,16 @@ export function MemoryPage() {
 
         <FilterRow items={categories} selectedLabel={selectedCategory.label} onSelect={(item) => void handleCategoryClick(item)} />
         <FilterRow items={sources} selectedLabel={selectedSource.label} onSelect={(item) => void handleSourceClick(item)} />
+        <FilterRow
+          items={searchModes}
+          selectedLabel={selectedSearchMode.label}
+          onSelect={(item) => {
+            setSelectedSearchMode(item);
+            if (query.trim()) {
+              void runSearch(selectedCategory, selectedSource, item);
+            }
+          }}
+        />
       </Card>
 
       <StatsRow stats={stats} />
@@ -196,6 +221,7 @@ export function MemoryPage() {
           Some results are from chat history.
         </p>
       ) : null}
+      {searchWarning ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{searchWarning}</p> : null}
 
       {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
 
@@ -205,7 +231,7 @@ export function MemoryPage() {
             <h2 className="text-base font-semibold text-app-text">
               {isSearchMode ? `Search Results (${searchResults.length})` : "Unified Timeline"}
             </h2>
-            <Badge variant="info">keyword</Badge>
+            <Badge variant="info">Search mode: {isSearchMode ? searchModeUsed : "timeline"}</Badge>
           </div>
           <div className="mt-4 space-y-3">
             {loading ? (

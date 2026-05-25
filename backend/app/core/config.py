@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     kimi_api_key: str = ""
     kimi_base_url: str = ""
     selected_chat_model: str = "ollama-qwen3"
+    enable_embeddings: bool = False
+    ollama_embed_model: str = "nomic-embed-text"
+    chroma_path: str = "data/chroma"
+    semantic_search_default: bool = False
+    embedding_text_max_chars: int = 4000
     chat_context_direct_limit: int = 4
     chat_context_related_per_event: int = 1
     chat_context_max_chars_per_event: int = 700

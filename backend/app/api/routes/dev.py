@@ -11,6 +11,7 @@ from app.services.model_runtime_service import model_runtime_service
 from app.services.search_service import SearchService
 from app.services.task_service import task_service
 from app.services.relationship_service import relationship_service
+from app.services.embedding_index_service import embedding_index_service
 
 router = APIRouter(prefix="/dev", tags=["dev"])
 ingestion_service = IngestionService()
@@ -95,6 +96,7 @@ def test_llm(payload: dict[str, str]) -> dict[str, object]:
 def dev_state() -> dict[str, object]:
     settings = get_settings()
     search_stats = search_service.get_search_stats()
+    embedding_status = embedding_index_service.status()
     payload: dict[str, object] = {
         "storage": settings.storage_backend,
         "event_count": event_service.count_events(),
@@ -112,6 +114,7 @@ def dev_state() -> dict[str, object]:
         "selected_chat_model": model_registry_service.get_chat_models_response().selected_chat_model,
         "available_chat_models_count": len(model_registry_service.list_chat_models()),
         "providers": model_registry_service.provider_status(),
+        "embeddings": embedding_status,
     }
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())

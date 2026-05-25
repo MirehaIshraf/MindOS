@@ -10,6 +10,7 @@ class SearchRequest(BaseModel):
     category: str | None = None
     limit: int = Field(default=10, ge=1, le=50)
     include_hidden: bool = True
+    search_mode: str | None = "auto"
 
     @field_validator("query")
     @classmethod
@@ -42,6 +43,7 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
     total: int
     search_mode: str
+    requested_search_mode: str | None = None
     warning: str | None = None
 
 

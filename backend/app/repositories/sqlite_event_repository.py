@@ -20,6 +20,7 @@ class SQLiteEventRepository(EventRepository):
         with self._session_factory() as session:
             session.add(self._to_record(event))
             session.commit()
+        self._try_index_event(event)
         return event
 
     def create_events(self, list_of_event_data: list[dict[str, Any]]) -> list[Event]:
@@ -27,6 +28,8 @@ class SQLiteEventRepository(EventRepository):
         with self._session_factory() as session:
             session.add_all([self._to_record(event) for event in events])
             session.commit()
+        for event in events:
+            self._try_index_event(event)
         return events
 
     def get_event_by_id(self, event_id: str) -> Event | None:
@@ -67,6 +70,27 @@ class SQLiteEventRepository(EventRepository):
             rows = session.execute(select(EventRecord.source, func.count()).group_by(EventRecord.source)).all()
         return {str(source): int(count) for source, count in rows}
 
+    def count_by_embedding_status(self) -> dict[str, int]:
+        with self._session_factory() as session:
+            rows = session.execute(select(EventRecord.embedding_status, func.count()).group_by(EventRecord.embedding_status)).all()
+        return {str(status): int(count) for status, count in rows}
+
+    def update_embedding_status(self, event_id: str, status: str) -> None:
+        with self._session_factory() as session:
+            record = session.get(EventRecord, event_id)
+            if record is None:
+                return
+            record.embedding_status = status
+            session.commit()
+
+    def list_events_for_embedding(self, limit: int | None = None) -> list[Event]:
+        with self._session_factory() as session:
+            statement = select(EventRecord).order_by(EventRecord.created_at.asc())
+            if limit is not None:
+                statement = statement.limit(limit)
+            records = session.scalars(statement).all()
+            return [self._to_event(record) for record in records]
+
     def clear_events(self) -> None:
         with self._session_factory() as session:
             session.execute(delete(EventRecord))
@@ -77,6 +101,14 @@ class SQLiteEventRepository(EventRepository):
             result = session.execute(delete(EventRecord).where(EventRecord.source == source))
             session.commit()
             return int(result.rowcount or 0)
+
+    def _try_index_event(self, event: Event) -> None:
+        try:
+            from app.services.embedding_index_service import embedding_index_service
+
+            embedding_index_service.index_event(event)
+        except Exception:
+            pass
 
     def _to_record(self, event: Event) -> EventRecord:
         category = get_memory_category(event)

@@ -5,21 +5,35 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buildContext,
   clearChats,
+  clearEmbeddingIndex,
   clearEvents,
   clearRelationships,
   clearTasks,
   getErrorMessage,
   getDevState,
+  getEmbeddingStatus,
   getHealth,
   getRecentEvents,
   getStatus,
   ingestEvent,
   planTask,
   rebuildRelationships,
+  reindexEmbeddings,
   seedSampleEvents,
   testLLM,
 } from "../services/api";
-import type { BackendHealth, BackendStatus, ContextPackage, DevState, EventSource, MemoryEvent, TaskPlanningResponse, TestLLMResponse } from "../types";
+import type {
+  BackendHealth,
+  BackendStatus,
+  ContextPackage,
+  DevState,
+  EmbeddingReindexResponse,
+  EmbeddingStatusResponse,
+  EventSource,
+  MemoryEvent,
+  TaskPlanningResponse,
+  TestLLMResponse,
+} from "../types";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
@@ -50,6 +64,8 @@ export function DevPage() {
   const [llmTestResult, setLlmTestResult] = useState<TestLLMResponse | null>(null);
   const [plannerInstruction, setPlannerInstruction] = useState("Create a Jira ticket for the login bug");
   const [plannerResult, setPlannerResult] = useState<TaskPlanningResponse | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
+  const [embeddingResult, setEmbeddingResult] = useState<EmbeddingReindexResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -67,14 +83,16 @@ export function DevPage() {
       const statusResponse = await getStatus();
       setStatus(statusResponse);
       try {
-        const [healthResponse, stateResponse, eventsResponse] = await Promise.all([
+        const [healthResponse, stateResponse, eventsResponse, embeddingResponse] = await Promise.all([
           getHealth(),
           getDevState(),
           getRecentEvents(undefined, 20, undefined, true),
+          getEmbeddingStatus(),
         ]);
         setHealth(healthResponse);
         setDevState(stateResponse);
         setEvents(eventsResponse.events);
+        setEmbeddingStatus(embeddingResponse);
       } catch (secondaryError) {
         console.error("DevPage secondary state refresh failed", secondaryError);
         setHealth(null);
@@ -255,6 +273,41 @@ export function DevPage() {
       setPlannerResult(await planTask({ instruction: plannerInstruction, use_context: true }));
     } catch {
       setError("Could not plan task.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleReindexEmbeddings() {
+    setLoadingAction("reindexEmbeddings");
+    setError(null);
+    setMessage(null);
+    setEmbeddingResult(null);
+    try {
+      const response = await reindexEmbeddings();
+      setEmbeddingResult(response);
+      setMessage(`Reindexed ${response.indexed} events. Failed: ${response.failed}.`);
+      setEmbeddingStatus(await getEmbeddingStatus());
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleClearEmbeddingIndex() {
+    if (!window.confirm("Clear the local vector index? SQLite memory events will remain.")) {
+      return;
+    }
+    setLoadingAction("clearEmbeddings");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await clearEmbeddingIndex();
+      setMessage(`Cleared vector index. Updated ${response.updated_events} event statuses.`);
+      setEmbeddingStatus(await getEmbeddingStatus());
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
     } finally {
       setLoadingAction(null);
     }
@@ -450,6 +503,50 @@ export function DevPage() {
               Clear Relationships
             </Button>
           </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<DatabaseZap size={18} />} title="Embeddings / Semantic Search" />
+          <div className="mt-4 space-y-3 text-sm">
+            <Row label="enabled" value={String(embeddingStatus?.enabled ?? status?.embeddings_enabled ?? false)} />
+            <Row label="model" value={embeddingStatus?.embedding_model ?? status?.embedding_model ?? "nomic-embed-text"} />
+            <Row
+              label="Ollama"
+              value={embeddingStatus?.ollama_available ? "available" : "unavailable"}
+              tone={embeddingStatus?.ollama_available ? "success" : "danger"}
+            />
+            <Row
+              label="Chroma"
+              value={(embeddingStatus?.chroma_available ?? status?.chroma_available) ? "available" : "unavailable"}
+              tone={(embeddingStatus?.chroma_available ?? status?.chroma_available) ? "success" : "danger"}
+            />
+            <Row label="indexed" value={String(embeddingStatus?.indexed_count ?? status?.chroma_indexed_count ?? 0)} />
+            {Object.entries(embeddingStatus?.event_status ?? {}).map(([statusKey, count]) => (
+              <Row key={statusKey} label={statusKey} value={String(count)} />
+            ))}
+          </div>
+          <p className="mt-4 text-xs leading-5 text-app-muted">
+            Semantic search uses local Ollama embeddings. Memory content stays on this machine.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary" onClick={refreshAll} loading={loadingAction === "refresh"}>
+              Refresh
+            </Button>
+            <Button variant="primary" onClick={handleReindexEmbeddings} loading={loadingAction === "reindexEmbeddings"}>
+              Reindex All
+            </Button>
+            <Button variant="secondary" onClick={handleClearEmbeddingIndex} loading={loadingAction === "clearEmbeddings"}>
+              Clear Vector Index
+            </Button>
+          </div>
+          {embeddingResult ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge variant="success">indexed: {embeddingResult.indexed}</Badge>
+              <Badge variant={embeddingResult.failed ? "warning" : "default"}>failed: {embeddingResult.failed}</Badge>
+              <Badge>skipped: {embeddingResult.skipped}</Badge>
+              <Badge>total: {embeddingResult.total}</Badge>
+            </div>
+          ) : null}
         </Card>
 
         <Card>

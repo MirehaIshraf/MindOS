@@ -18,6 +18,7 @@ def search_events(request: SearchRequest) -> SearchResponse:
         category=request.category,
         limit=request.limit,
         include_hidden=request.include_hidden,
+        search_mode=request.search_mode,
     )
 
 
