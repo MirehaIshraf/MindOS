@@ -6,14 +6,23 @@ import type {
   ChatRequestPayload,
   ChatResponse,
   ChatSessionsResponse,
+  ContextPackage,
+  ClearLogEventsResponse,
   ConnectorListResponse,
   DevState,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
+  GitImportPayload,
+  GitImportResult,
+  GitPreviewResult,
+  LogImportPayload,
+  LogImportResult,
+  LogPreviewResult,
   IngestEventRequest,
   IngestEventResponse,
   MemoryEvent,
+  RelatedEventsResponse,
   RecentEventsResponse,
   SearchResponse,
   SearchStatsResponse,
@@ -108,6 +117,40 @@ export async function getEventDetail(eventId: string): Promise<MemoryEvent> {
   return response.data;
 }
 
+export async function getRelatedEvents(eventId: string, limit = 10): Promise<RelatedEventsResponse> {
+  const response = await api.get<RelatedEventsResponse>(`/events/${eventId}/related`, {
+    params: { limit },
+  });
+  return response.data;
+}
+
+export async function rebuildRelationships(): Promise<{ status: string; created: number; by_type: Record<string, number> }> {
+  const response = await api.post<{ status: string; created: number; by_type: Record<string, number> }>("/dev/rebuild-relationships");
+  return response.data;
+}
+
+export async function clearRelationships(): Promise<{ status: "cleared" }> {
+  const response = await api.delete<{ status: "cleared" }>("/dev/clear-relationships");
+  return response.data;
+}
+
+export async function buildContext(payload: {
+  query: string;
+  mode?: "chat" | "task";
+  limit?: number;
+  related_per_event?: number;
+}): Promise<ContextPackage> {
+  const response = await api.post<ContextPackage>("/context/build", payload);
+  return response.data;
+}
+
+export async function getEventContext(eventId: string, relatedLimit = 10): Promise<ContextPackage> {
+  const response = await api.get<ContextPackage>(`/context/event/${eventId}`, {
+    params: { related_limit: relatedLimit },
+  });
+  return response.data;
+}
+
 export async function sendChatMessage(payload: ChatRequestPayload): Promise<ChatResponse> {
   const response = await api.post<ChatResponse>("/chat", {
     ...payload,
@@ -183,5 +226,30 @@ export async function previewFileImport(payload: FileImportPayload): Promise<Fil
 
 export async function importFiles(payload: FileImportPayload): Promise<FileImportResult> {
   const response = await api.post<FileImportResult>("/connectors/file-system/import", payload);
+  return response.data;
+}
+
+export async function previewLogImport(payload: Omit<LogImportPayload, "group_similar">): Promise<LogPreviewResult> {
+  const response = await api.post<LogPreviewResult>("/connectors/logs/preview", payload);
+  return response.data;
+}
+
+export async function importLogs(payload: LogImportPayload): Promise<LogImportResult> {
+  const response = await api.post<LogImportResult>("/connectors/logs/import", payload);
+  return response.data;
+}
+
+export async function clearLogEvents(): Promise<ClearLogEventsResponse> {
+  const response = await api.delete<ClearLogEventsResponse>("/connectors/logs/events");
+  return response.data;
+}
+
+export async function previewGitImport(payload: Pick<GitImportPayload, "repo_path" | "max_commits">): Promise<GitPreviewResult> {
+  const response = await api.post<GitPreviewResult>("/connectors/git/preview", payload);
+  return response.data;
+}
+
+export async function importGitRepo(payload: GitImportPayload): Promise<GitImportResult> {
+  const response = await api.post<GitImportResult>("/connectors/git/import", payload);
   return response.data;
 }

@@ -47,6 +47,12 @@ class MemoryEventRepository(EventRepository):
     def clear_events(self) -> None:
         self._events.clear()
 
+    def delete_events_by_source(self, source: str) -> int:
+        event_ids = [event_id for event_id, event in self._events.items() if event.source.value == source]
+        for event_id in event_ids:
+            del self._events[event_id]
+        return len(event_ids)
+
 
 memory_event_repository = MemoryEventRepository()
 

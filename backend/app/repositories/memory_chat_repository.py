@@ -33,6 +33,8 @@ class MemoryChatRepository(ChatRepository):
             model=metadata.get("model"),
             search_mode=metadata.get("search_mode"),
             task_hint=metadata.get("task_hint"),
+            context_summary=metadata.get("context_summary"),
+            context_stats=metadata.get("context_stats"),
         )
         self._messages.setdefault(session_id, []).append(message)
         title = session.title

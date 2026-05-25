@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class LLMClient(ABC):
@@ -7,7 +8,7 @@ class LLMClient(ABC):
         self,
         message: str,
         history: list[dict],
-        context: list[dict],
+        context: Any,
         system_prompt: str | None = None,
     ) -> str:
         raise NotImplementedError

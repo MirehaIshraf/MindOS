@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import get_settings
@@ -77,6 +77,18 @@ class PlaybookRecord(Base):
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class RelationshipRecord(Base):
+    __tablename__ = "relationships"
+
+    id = Column(String, primary_key=True)
+    from_event_id = Column(String, nullable=False, index=True)
+    to_event_id = Column(String, nullable=False, index=True)
+    relationship_type = Column(String, nullable=False, index=True)
+    strength = Column(Float, default=0.5, nullable=False)
+    reason = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
 
 def get_database_path() -> Path:

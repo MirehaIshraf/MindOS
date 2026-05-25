@@ -8,6 +8,7 @@ from app.core.dependencies import get_event_repository
 from app.domain.enums import EmbeddingStatus
 from app.repositories.base import EventRepository
 from app.schemas.connectors import FileImportRequest, FileImportResult, FilePreviewRequest, FilePreviewResult
+from app.services.relationship_service import relationship_service
 
 DEFAULT_ALLOWED_EXTENSIONS = {
     ".txt",
@@ -150,6 +151,7 @@ class FileImportService:
                 )
                 imported_ids.append(event.id)
                 existing.setdefault(full_path, set()).add(content_hash)
+                relationship_service.detect_relationships_for_event(event)
             except Exception as error:
                 failed.append({"path": str(path), "reason": str(error)})
 

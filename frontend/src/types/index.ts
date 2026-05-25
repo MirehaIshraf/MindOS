@@ -22,6 +22,7 @@ export type EventSource =
   | "file_system"
   | "vscode"
   | "browser"
+  | "git"
   | "github"
   | "jira"
   | "logs"
@@ -39,6 +40,7 @@ export type MemoryEvent = {
   embedding_status: "not_required" | "pending" | "indexed" | "failed";
   memory_category: string;
   hidden_from_default: boolean;
+  related_count?: number;
 };
 
 export type RecentEventsResponse = {
@@ -65,9 +67,13 @@ export type DevState = {
   database_path?: string;
   event_count: number;
   file_system_event_count?: number;
+  logs_event_count?: number;
+  git_event_count?: number;
   task_count: number;
   chat_session_count: number;
   chat_message_count: number;
+  relationship_count?: number;
+  relationships_by_type?: Record<string, number>;
   events_by_source: Record<string, number>;
   events_by_category: Record<string, number>;
 };
@@ -92,6 +98,8 @@ export type SearchResult = {
   hidden_from_default: boolean;
   score: number;
   match_reason: string;
+  related_count: number;
+  related_preview: Array<Record<string, unknown>>;
 };
 
 export type SearchResponse = {
@@ -120,6 +128,15 @@ export type ChatSource = {
   score: number;
   match_reason: string;
   timestamp: string;
+  source_kind?: "direct" | "related" | string;
+};
+
+export type ChatContextStats = {
+  direct_count: number;
+  related_count: number;
+  relationship_count: number;
+  sources: string[];
+  token_estimate: number;
 };
 
 export type ChatMessage = {
@@ -132,6 +149,8 @@ export type ChatMessage = {
   searchMode?: string;
   taskHint?: string | null;
   taskInstruction?: string;
+  contextSummary?: string;
+  contextStats?: ChatContextStats | null;
 };
 
 export type ChatRequestPayload = {
@@ -149,6 +168,8 @@ export type ChatResponse = {
   search_mode: string;
   task_hint?: string | null;
   warning?: string | null;
+  context_summary: string;
+  context_stats?: ChatContextStats | null;
 };
 
 export type ChatSession = {
@@ -172,6 +193,8 @@ export type StoredChatMessage = {
   model?: string | null;
   search_mode?: string | null;
   task_hint?: string | null;
+  context_summary?: string | null;
+  context_stats?: ChatContextStats | null;
   created_at: string;
 };
 
@@ -249,4 +272,137 @@ export type FileImportResult = {
   skipped: Array<Record<string, string | number>>;
   failed: Array<Record<string, string | number>>;
   message: string;
+};
+
+export type LogImportPayload = {
+  file_path: string;
+  max_lines: number;
+  only_errors: boolean;
+  group_similar?: boolean;
+};
+
+export type LogLinePreview = {
+  line_number: number;
+  level: string;
+  message: string;
+  timestamp: string | null;
+  raw: string;
+};
+
+export type LogPreviewResult = {
+  file_path: string;
+  total_lines_scanned: number;
+  matched_lines: number;
+  preview: LogLinePreview[];
+  skipped: Array<Record<string, string | number>>;
+  message: string;
+};
+
+export type LogImportResult = {
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  events_created: string[];
+  groups_created: number;
+  message: string;
+};
+
+export type ClearLogEventsResponse = {
+  status: "cleared";
+  deleted_events: number;
+  deleted_relationships: number;
+};
+
+export type GitImportPayload = {
+  repo_path: string;
+  max_commits: number;
+  include_diff_summary?: boolean;
+  include_status?: boolean;
+};
+
+export type GitCommitPreview = {
+  hash: string;
+  short_hash: string;
+  author: string;
+  date: string;
+  message: string;
+};
+
+export type GitPreviewResult = {
+  repo_path: string;
+  repo_name: string;
+  current_branch: string | null;
+  is_git_repo: boolean;
+  recent_commits: GitCommitPreview[];
+  status_summary: Record<string, number>;
+  message: string;
+};
+
+export type GitImportResult = {
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  events_created: string[];
+  message: string;
+};
+
+export type Relationship = {
+  id: string;
+  from_event_id: string;
+  to_event_id: string;
+  relationship_type: string;
+  strength: number;
+  reason: string;
+  created_at: string;
+};
+
+export type RelatedEvent = {
+  event: MemoryEvent;
+  relationship: Relationship;
+};
+
+export type RelatedEventsResponse = {
+  event_id: string;
+  related: RelatedEvent[];
+  total: number;
+};
+
+export type ContextEvent = {
+  event_id: string;
+  source: string;
+  type: string;
+  title: string;
+  content_preview: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  timestamp: string;
+  score: number | null;
+  match_reason: string | null;
+  memory_category: string;
+  hidden_from_default: boolean;
+};
+
+export type ContextRelationship = {
+  from_event_id: string;
+  to_event_id: string;
+  relationship_type: string;
+  strength: number;
+  reason: string;
+};
+
+export type ContextSourceGroup = {
+  source: string;
+  count: number;
+  event_ids: string[];
+};
+
+export type ContextPackage = {
+  query: string;
+  direct_events: ContextEvent[];
+  related_events: ContextEvent[];
+  relationships: ContextRelationship[];
+  source_groups: ContextSourceGroup[];
+  summary: string;
+  token_estimate: number;
+  warnings: string[];
 };

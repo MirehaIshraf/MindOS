@@ -67,6 +67,38 @@ The importer skips noisy or unsafe folders such as `.git`, `node_modules`, `.ven
 
 It also skips binary files, files above the configured size limit, `.env`, and files containing obvious private key or secret markers. Live file watching is not implemented yet.
 
+## Logs Manual Import
+
+MindOS can manually import local log files through the Connectors page or API:
+
+- `POST /connectors/logs/preview`
+- `POST /connectors/logs/import`
+
+Supported log file types are `.log`, `.txt`, `.out`, and `.err`. The importer reads only the file path you provide, never scans folders, and keeps everything local.
+
+Log import detects common levels such as `ERROR`, `WARN`, `INFO`, `DEBUG`, `FATAL`, `CRITICAL`, `EXCEPTION`, and `Traceback`. It extracts simple timestamps when present, creates searchable Memory events with `source=logs`, and can group similar repeated messages into one event to avoid flooding Memory.
+
+Duplicate avoidance uses stable hashes from the file path and line/group content. Re-importing the same unchanged log entries skips them as already imported. Live log tailing is not implemented yet.
+
+## Local Git Manual Import
+
+MindOS can manually import read-only context from a local Git repository path through the Connectors page or API:
+
+- `POST /connectors/git/preview`
+- `POST /connectors/git/import`
+
+The Git importer does not require a GitHub token and does not call the GitHub API. It runs only read-only local Git commands such as `rev-parse`, `branch --show-current`, `status --short`, `log`, and `show --stat`.
+
+Imported Git memory can include:
+
+- Repository snapshot and current branch
+- Working tree status summary
+- Recent commit metadata
+- Optional per-commit stat summaries
+- Uncommitted changed files grouped by modified, added, deleted, and untracked
+
+MindOS never runs Git write commands for import. It will not run `git add`, `git commit`, `git push`, `git pull`, `git checkout`, `git reset`, `git clean`, or modify the repository. Duplicate commit events are skipped by commit hash.
+
 ## Setup
 
 ```powershell

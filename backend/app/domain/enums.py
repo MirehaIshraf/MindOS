@@ -7,6 +7,7 @@ class EventSource(str, Enum):
     file_system = "file_system"
     vscode = "vscode"
     browser = "browser"
+    git = "git"
     github = "github"
     jira = "jira"
     logs = "logs"

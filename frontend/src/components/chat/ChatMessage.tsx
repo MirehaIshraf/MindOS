@@ -11,8 +11,10 @@ type ChatMessageProps = {
 
 export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const isUser = message.role === "user";
   const sources = message.sourcesUsed ?? [];
+  const contextStats = message.contextStats;
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -62,6 +64,32 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
           </div>
         ) : null}
 
+        {!isUser && contextStats ? (
+          <div className="mt-3 border-t border-app-border pt-3">
+            <button
+              type="button"
+              onClick={() => setContextOpen((open) => !open)}
+              className="text-xs font-medium text-violet-300 hover:text-violet-200"
+            >
+              Context used
+            </button>
+            {contextOpen ? (
+              <div className="mt-3 space-y-2 rounded-md border border-app-border bg-zinc-950 p-3">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="info">direct {contextStats.direct_count}</Badge>
+                  <Badge variant="info">related {contextStats.related_count}</Badge>
+                  <Badge>relationships {contextStats.relationship_count}</Badge>
+                  <Badge>tokens ~{contextStats.token_estimate}</Badge>
+                </div>
+                {contextStats.sources.length > 0 ? (
+                  <p className="text-xs leading-5 text-app-muted">Sources: {contextStats.sources.join(", ")}</p>
+                ) : null}
+                {message.contextSummary ? <p className="text-xs leading-5 text-app-muted">{message.contextSummary}</p> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <time className={`mt-2 block text-xs ${isUser ? "text-violet-100/80" : "text-app-muted"}`}>
           {new Date(message.timestamp).toLocaleTimeString([], {
             hour: "2-digit",
@@ -77,6 +105,7 @@ function SourceCard({ source }: { source: ChatSource }) {
   return (
     <div className="rounded-md border border-app-border bg-zinc-950 p-3">
       <div className="flex items-center gap-2">
+        <Badge variant={source.source_kind === "related" ? "default" : "info"}>{source.source_kind ?? "direct"}</Badge>
         <Badge variant="info">{source.source}</Badge>
         <Badge>{source.type}</Badge>
         <Badge variant="success">score {source.score.toFixed(2)}</Badge>

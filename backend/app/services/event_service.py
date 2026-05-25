@@ -3,6 +3,7 @@ from app.domain.models import Event
 from app.repositories.base import EventRepository
 from app.schemas.events import EventResponse
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
+from app.services.relationship_service import relationship_service
 
 
 class EventService:
@@ -33,6 +34,7 @@ class EventService:
         payload = event.model_dump()
         payload["memory_category"] = get_memory_category(event)
         payload["hidden_from_default"] = is_hidden_from_default_memory(event)
+        payload["related_count"] = relationship_service.related_count(event.id)
         return EventResponse(**payload)
 
     def count_events(self) -> int:

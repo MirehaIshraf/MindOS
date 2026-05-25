@@ -1,18 +1,21 @@
 from app.core.config import get_settings
-from app.repositories.base import ChatRepository, EventRepository, PlaybookRepository, TaskRepository
+from app.repositories.base import ChatRepository, EventRepository, PlaybookRepository, RelationshipRepository, TaskRepository
 from app.repositories.memory_chat_repository import get_memory_chat_repository
 from app.repositories.memory_event_repository import get_memory_event_repository
 from app.repositories.memory_playbook_repository import get_memory_playbook_repository
+from app.repositories.memory_relationship_repository import get_memory_relationship_repository
 from app.repositories.memory_task_repository import get_memory_task_repository
 from app.repositories.sqlite_chat_repository import SQLiteChatRepository
 from app.repositories.sqlite_event_repository import SQLiteEventRepository
 from app.repositories.sqlite_playbook_repository import SQLitePlaybookRepository
+from app.repositories.sqlite_relationship_repository import SQLiteRelationshipRepository
 from app.repositories.sqlite_task_repository import SQLiteTaskRepository
 
 _event_repository: EventRepository | None = None
 _task_repository: TaskRepository | None = None
 _chat_repository: ChatRepository | None = None
 _playbook_repository: PlaybookRepository | None = None
+_relationship_repository: RelationshipRepository | None = None
 
 
 def use_sqlite() -> bool:
@@ -45,3 +48,10 @@ def get_playbook_repository() -> PlaybookRepository:
     if _playbook_repository is None:
         _playbook_repository = SQLitePlaybookRepository() if use_sqlite() else get_memory_playbook_repository()
     return _playbook_repository
+
+
+def get_relationship_repository() -> RelationshipRepository:
+    global _relationship_repository
+    if _relationship_repository is None:
+        _relationship_repository = SQLiteRelationshipRepository(get_event_repository()) if use_sqlite() else get_memory_relationship_repository()
+    return _relationship_repository

@@ -80,6 +80,8 @@ export function ChatPage() {
           searchMode: response.search_mode,
           taskHint: response.task_hint,
           taskInstruction: content,
+          contextSummary: response.context_summary,
+          contextStats: response.context_stats,
         }),
       ]);
       await refreshSessions();
@@ -270,6 +272,8 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       searchMode: message.search_mode ?? undefined,
       taskHint: message.task_hint ?? undefined,
       taskInstruction: message.role === "assistant" ? lastUserInstruction : undefined,
+      contextSummary: message.context_summary ?? undefined,
+      contextStats: message.context_stats ?? undefined,
     };
   });
 }

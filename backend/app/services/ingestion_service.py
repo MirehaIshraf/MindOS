@@ -6,6 +6,7 @@ from app.domain.enums import EmbeddingStatus
 from app.domain.models import Event
 from app.repositories.base import EventRepository
 from app.schemas.ingest import IngestEventRequest
+from app.services.relationship_service import relationship_service
 
 
 class IngestionService:
@@ -13,11 +14,16 @@ class IngestionService:
         self._event_repository = event_repository or get_event_repository()
 
     def ingest_event(self, request: IngestEventRequest) -> Event:
-        return self._event_repository.create_event(self._to_event_data(request))
+        event = self._event_repository.create_event(self._to_event_data(request))
+        relationship_service.detect_relationships_for_event(event)
+        return event
 
     def ingest_bulk(self, requests: list[IngestEventRequest]) -> list[Event]:
         event_data = [self._to_event_data(request) for request in requests]
-        return self._event_repository.create_events(event_data)
+        events = self._event_repository.create_events(event_data)
+        for event in events:
+            relationship_service.detect_relationships_for_event(event)
+        return events
 
     def seed_sample_events(self) -> list[Event]:
         now = datetime.now(timezone.utc)
@@ -101,7 +107,10 @@ class IngestionService:
             event["timestamp"] = now - timedelta(minutes=index * 9)
             event["embedding_status"] = EmbeddingStatus.not_required
 
-        return self._event_repository.create_events(sample_events)
+        events = self._event_repository.create_events(sample_events)
+        for event in events:
+            relationship_service.detect_relationships_for_event(event)
+        return events
 
     def clear_events(self) -> None:
         self._event_repository.clear_events()

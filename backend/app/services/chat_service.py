@@ -5,6 +5,7 @@ from app.domain.enums import EmbeddingStatus, EventSource
 from app.integrations.llm.fake_llm import FakeLLMClient
 from app.repositories.base import ChatRepository, EventRepository
 from app.schemas.chat import (
+    ChatContextStats,
     ChatMessagesResponse,
     ChatRequest,
     ChatResponse,
@@ -13,7 +14,9 @@ from app.schemas.chat import (
     ChatSource,
     ChatStoredMessageResponse,
 )
-from app.services.search_service import SearchService
+from app.schemas.context import ContextEvent, ContextPackage
+from app.services.context_builder_service import ContextBuilderService
+from app.services.relationship_service import relationship_service
 
 SYSTEM_PROMPT = (
     "You are MindOS, a local-first AI assistant. You answer using the user's local memory when context is provided. "
@@ -25,12 +28,12 @@ SYSTEM_PROMPT = (
 class ChatService:
     def __init__(
         self,
-        search_service: SearchService | None = None,
+        context_builder: ContextBuilderService | None = None,
         llm: FakeLLMClient | None = None,
         chat_repository: ChatRepository | None = None,
         event_repository: EventRepository | None = None,
     ) -> None:
-        self._search_service = search_service or SearchService()
+        self._context_builder = context_builder or ContextBuilderService()
         self._llm = llm or FakeLLMClient()
         self._chat_repository = chat_repository or get_chat_repository()
         self._event_repository = event_repository or get_event_repository()
@@ -45,11 +48,14 @@ class ChatService:
         if session is None:
             session = self._chat_repository.create_session(short_title(request.message))
 
-        search_response = None
-        context: list[dict] = []
+        context_package: ContextPackage | None = None
         if request.use_context:
-            search_response = self._search_service.search_events(query=request.message, sources=None, limit=5)
-            context = [search_result_to_context(result) for result in search_response.results]
+            context_package = self._context_builder.build_chat_context(
+                query=request.message,
+                limit=5,
+                related_per_event=2,
+                include_hidden=True,
+            )
 
         # Search happens before storage so the current user message cannot retrieve itself.
         self._chat_repository.add_message(session.id, "user", request.message)
@@ -65,23 +71,12 @@ class ChatService:
         reply = self._llm.generate_response(
             message=request.message,
             history=history,
-            context=context,
+            context=context_package,
             system_prompt=SYSTEM_PROMPT,
         )
         task_hint = detect_task_hint(request.message)
-        sources_used = [
-            ChatSource(
-                event_id=item["event_id"],
-                source=item["source"],
-                type=item["type"],
-                title=item["title"],
-                content_preview=item["content_preview"],
-                score=item["score"],
-                match_reason=item["match_reason"],
-                timestamp=item["timestamp"],
-            )
-            for item in context
-        ]
+        sources_used = context_sources(context_package)
+        context_stats = context_stats_payload(context_package)
         sources_payload = [source.model_dump(mode="json") for source in sources_used]
 
         self._chat_repository.add_message(
@@ -93,6 +88,8 @@ class ChatService:
                 "model": "fake-llm",
                 "search_mode": "keyword",
                 "task_hint": task_hint,
+                "context_summary": context_package.summary if context_package else "",
+                "context_stats": context_stats.model_dump() if context_stats else None,
             },
         )
         self._record_chat_memory_event(
@@ -116,7 +113,9 @@ class ChatService:
             model="fake-llm",
             search_mode="keyword",
             task_hint=task_hint,
-            warning=search_response.warning if search_response else None,
+            warning="; ".join(context_package.warnings) if context_package and context_package.warnings else None,
+            context_summary=context_package.summary if context_package else "",
+            context_stats=context_stats,
         )
 
     def list_sessions(self, limit: int = 20) -> ChatSessionsResponse:
@@ -163,7 +162,7 @@ class ChatService:
         }
         if metadata:
             event_metadata.update(metadata)
-        self._event_repository.create_event(
+        event = self._event_repository.create_event(
             {
                 "source": EventSource.mindos,
                 "type": event_type,
@@ -174,19 +173,41 @@ class ChatService:
                 "embedding_status": EmbeddingStatus.not_required,
             }
         )
+        relationship_service.detect_relationships_for_event(event)
+
+def context_sources(context_package: ContextPackage | None) -> list[ChatSource]:
+    if context_package is None:
+        return []
+    return [
+        *[context_event_to_source(event, "direct") for event in context_package.direct_events],
+        *[context_event_to_source(event, "related") for event in context_package.related_events],
+    ]
 
 
-def search_result_to_context(result) -> dict:
-    return {
-        "event_id": result.event_id,
-        "source": result.source,
-        "type": result.type,
-        "title": result.title,
-        "content_preview": result.content_preview,
-        "score": result.score,
-        "match_reason": result.match_reason,
-        "timestamp": result.timestamp.isoformat(),
-    }
+def context_event_to_source(event: ContextEvent, source_kind: str) -> ChatSource:
+    return ChatSource(
+        event_id=event.event_id,
+        source=event.source,
+        type=event.type,
+        title=event.title,
+        content_preview=event.content_preview,
+        score=event.score or 0,
+        match_reason=event.match_reason or "",
+        timestamp=event.timestamp,
+        source_kind=source_kind,
+    )
+
+
+def context_stats_payload(context_package: ContextPackage | None) -> ChatContextStats | None:
+    if context_package is None:
+        return None
+    return ChatContextStats(
+        direct_count=len(context_package.direct_events),
+        related_count=len(context_package.related_events),
+        relationship_count=len(context_package.relationships),
+        sources=[group.source for group in context_package.source_groups],
+        token_estimate=context_package.token_estimate,
+    )
 
 
 def short_title(value: str) -> str:

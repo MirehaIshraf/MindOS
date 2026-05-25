@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     chat,
     connectors,
+    context,
     dev,
     events,
     health,
@@ -43,6 +44,7 @@ app.include_router(chat.router)
 app.include_router(tasks.router)
 app.include_router(playbooks.router)
 app.include_router(connectors.router)
+app.include_router(context.router)
 app.include_router(dev.router)
 
 

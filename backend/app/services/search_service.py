@@ -7,6 +7,7 @@ from app.domain.models import Event
 from app.repositories.base import EventRepository
 from app.schemas.search import SearchResponse, SearchResult, SearchStatsResponse
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
+from app.services.relationship_service import relationship_service
 
 STOP_WORDS = {"a", "the", "to", "of", "in", "and", "or", "for", "with"}
 
@@ -181,4 +182,18 @@ class SearchService:
             hidden_from_default=is_hidden_from_default_memory(event),
             score=normalized_score,
             match_reason=match_reason,
+            related_count=relationship_service.related_count(event.id),
+            related_preview=[
+                {
+                    "event_id": item["event"].id,
+                    "source": item["event"].source.value,
+                    "type": item["event"].type,
+                    "title": item["event"].title,
+                    "content_preview": item["event"].content[:180],
+                    "relationship_type": item["relationship"].relationship_type,
+                    "strength": item["relationship"].strength,
+                    "reason": item["relationship"].reason,
+                }
+                for item in relationship_service.get_related_context(event.id, limit=3)
+            ],
         )

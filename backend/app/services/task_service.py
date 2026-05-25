@@ -16,7 +16,9 @@ from app.schemas.tasks import (
     TaskPreview,
     TaskResponse,
 )
-from app.services.search_service import SearchService
+from app.schemas.context import ContextEvent, ContextPackage
+from app.services.context_builder_service import ContextBuilderService
+from app.services.relationship_service import relationship_service
 
 
 class TaskService:
@@ -24,11 +26,11 @@ class TaskService:
         self,
         task_repository: TaskRepository | None = None,
         event_repository: EventRepository | None = None,
-        search_service: SearchService | None = None,
+        context_builder: ContextBuilderService | None = None,
     ) -> None:
         self._task_repository = task_repository or get_task_repository()
         self._event_repository = event_repository or get_event_repository()
-        self._search_service = search_service or SearchService()
+        self._context_builder = context_builder or ContextBuilderService()
         self._pending_confirmations: dict[str, dict] = {}
         self._email_tool = MockEmailTool()
         self._jira_tool = MockJiraTool()
@@ -41,9 +43,9 @@ class TaskService:
 
     def execute_task(self, request: TaskExecuteRequest) -> TaskResponse:
         task_type = classify_task(request.instruction)
-        search_response = self._search_service.search_events(query=request.instruction, limit=5)
-        sources = [result.model_dump(mode="json") for result in search_response.results]
-        preview = self._build_preview(task_type, request.instruction, sources)
+        context_package = self._context_builder.build_task_context(request.instruction, limit=5, related_per_event=2)
+        sources = context_sources(context_package)
+        preview = self._build_preview(task_type, request.instruction, context_package)
 
         if task_type == TaskType.unknown:
             task = self._task_repository.create_task_log(
@@ -136,7 +138,7 @@ class TaskService:
             }
 
         if pending is None or task is None:
-            self._event_repository.create_event(
+            event = self._event_repository.create_event(
                 {
                     "source": EventSource.mindos,
                     "type": "task_failed",
@@ -152,6 +154,7 @@ class TaskService:
                     "embedding_status": EmbeddingStatus.not_required,
                 }
             )
+            relationship_service.detect_relationships_for_event(event)
             return TaskResponse(
                 task_id=None,
                 status=TaskStatus.failed.value,
@@ -278,18 +281,18 @@ class TaskService:
     def count_tasks(self) -> int:
         return self._task_repository.count_tasks()
 
-    def _build_preview(self, task_type: TaskType, instruction: str, sources: list[dict]) -> TaskPreview:
-        summary = summarize_sources(sources)
-        title = infer_title(instruction, sources)
-        branch_name = infer_branch_name(instruction, sources)
-        commit_message = infer_commit_message(instruction, sources)
+    def _build_preview(self, task_type: TaskType, instruction: str, context_package: ContextPackage) -> TaskPreview:
+        summary = context_package.summary
+        title = infer_title(instruction, context_package)
+        branch_name = infer_branch_name(instruction, context_package)
+        commit_message = infer_commit_message(instruction, context_package)
 
         if task_type == TaskType.suggest_branch_name:
             return TaskPreview(branch_name=branch_name, context_summary=summary)
         if task_type == TaskType.generate_commit_message:
             return TaskPreview(commit_message=commit_message, context_summary=summary)
         if task_type == TaskType.weekly_report:
-            return TaskPreview(report_markdown=build_report(summary, sources), context_summary=summary)
+            return TaskPreview(report_markdown=build_report(context_package), context_summary=summary)
         if task_type == TaskType.create_jira_ticket:
             return TaskPreview(title=title, description=build_description(instruction, summary), priority="medium", context_summary=summary)
         if task_type == TaskType.draft_email:
@@ -379,7 +382,7 @@ class TaskService:
         if extra_metadata:
             metadata.update(extra_metadata)
 
-        self._event_repository.create_event(
+        event = self._event_repository.create_event(
             {
                 "source": EventSource.mindos,
                 "type": event_type,
@@ -390,6 +393,7 @@ class TaskService:
                 "embedding_status": EmbeddingStatus.not_required,
             }
         )
+        relationship_service.detect_relationships_for_event(event)
 
     def _response(
         self,
@@ -433,29 +437,48 @@ def classify_task(instruction: str) -> TaskType:
     return TaskType.unknown
 
 
-def summarize_sources(sources: list[dict]) -> str:
-    if not sources:
-        return "No matching local memory was found."
-    titles = [source["title"] for source in sources[:3]]
-    return "Relevant local memory: " + "; ".join(titles)
+def context_sources(context_package: ContextPackage) -> list[dict]:
+    sources = []
+    for source_kind, events in [("direct", context_package.direct_events), ("related", context_package.related_events)]:
+        for event in events:
+            sources.append(
+                {
+                    "event_id": event.event_id,
+                    "source": event.source,
+                    "type": event.type,
+                    "title": event.title,
+                    "content_preview": event.content_preview,
+                    "score": event.score,
+                    "match_reason": event.match_reason,
+                    "source_kind": source_kind,
+                }
+            )
+    return sources
 
 
-def infer_title(instruction: str, sources: list[dict]) -> str:
-    if sources:
-        return sources[0]["title"]
+def context_events(context_package: ContextPackage) -> list[ContextEvent]:
+    return [*context_package.direct_events, *context_package.related_events]
+
+
+def infer_title(instruction: str, context_package: ContextPackage) -> str:
+    events = context_events(context_package)
+    if events:
+        return events[0].title
     return instruction.strip().rstrip(".")[:80]
 
 
-def infer_branch_name(instruction: str, sources: list[dict]) -> str:
-    text = f"{instruction} {' '.join(source['title'] for source in sources[:2])}".lower()
+def infer_branch_name(instruction: str, context_package: ContextPackage) -> str:
+    events = context_events(context_package)
+    text = f"{instruction} {' '.join(event.title for event in events[:3])}".lower()
     if "jwt" in text or "login" in text or "auth" in text:
         return "fix/jwt-login-expiry"
     words = [word for word in text.replace("_", "-").split() if word.isalnum()][:4]
     return "work/" + "-".join(words or ["mindos-task"])
 
 
-def infer_commit_message(instruction: str, sources: list[dict]) -> str:
-    text = f"{instruction} {' '.join(source['title'] for source in sources[:2])}".lower()
+def infer_commit_message(instruction: str, context_package: ContextPackage) -> str:
+    events = context_events(context_package)
+    text = f"{instruction} {' '.join(event.title for event in events[:3])}".lower()
     if "jwt" in text or "auth" in text or "login" in text:
         return "fix(auth): handle expired JWT refresh flow"
     return "chore: update local work context"
@@ -465,9 +488,18 @@ def build_description(instruction: str, summary: str) -> str:
     return f"{instruction.strip()}\n\nContext:\n{summary}"
 
 
-def build_report(summary: str, sources: list[dict]) -> str:
-    activity = "\n".join(f"- {source['title']} ({source['source']})" for source in sources[:5]) or "- No matching activity found."
-    return f"# Weekly Work Report\n\n## Summary\n{summary}\n\n## Key Activity\n{activity}\n\n## Issues Found\n- Review related failures or warnings in local memory.\n\n## Suggested Next Actions\n- Confirm priorities and prepare follow-up tasks if needed."
+def build_report(context_package: ContextPackage) -> str:
+    events = context_events(context_package)
+    activity = "\n".join(f"- {event.title} ({event.source})" for event in events[:8]) or "- No matching activity found."
+    sources = ", ".join(group.source for group in context_package.source_groups) or "none"
+    return (
+        "# Weekly Work Report\n\n"
+        f"## Summary\n{context_package.summary}\n\n"
+        f"## Sources\n{sources}\n\n"
+        f"## Key Activity\n{activity}\n\n"
+        "## Issues Found\n- Review related failures or warnings in local memory.\n\n"
+        "## Suggested Next Actions\n- Confirm priorities and prepare follow-up tasks if needed."
+    )
 
 
 task_service = TaskService()

@@ -47,6 +47,8 @@ class SQLiteChatRepository(ChatRepository):
             model=metadata.get("model"),
             search_mode=metadata.get("search_mode"),
             task_hint=metadata.get("task_hint"),
+            context_summary=metadata.get("context_summary"),
+            context_stats=metadata.get("context_stats"),
         )
         with self._session_factory() as session:
             session_record = session.get(ChatSessionRecord, session_id)
@@ -112,6 +114,7 @@ class SQLiteChatRepository(ChatRepository):
         )
 
     def _to_message(self, record: ChatMessageRecord) -> ChatStoredMessage:
+        metadata = loads_json(record.metadata_json, {})
         return ChatStoredMessage(
             id=record.id,
             session_id=record.session_id,
@@ -121,5 +124,7 @@ class SQLiteChatRepository(ChatRepository):
             model=record.model,
             search_mode=record.search_mode,
             task_hint=record.task_hint,
+            context_summary=metadata.get("context_summary"),
+            context_stats=metadata.get("context_stats"),
             created_at=record.created_at,
         )

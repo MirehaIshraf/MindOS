@@ -7,6 +7,7 @@ from app.services.ingestion_service import IngestionService
 from app.services.chat_service import chat_service
 from app.services.search_service import SearchService
 from app.services.task_service import task_service
+from app.services.relationship_service import relationship_service
 
 router = APIRouter(prefix="/dev", tags=["dev"])
 ingestion_service = IngestionService()
@@ -27,6 +28,7 @@ def seed_sample_events() -> dict[str, object]:
 @router.delete("/clear-events")
 def clear_events() -> dict[str, str]:
     ingestion_service.clear_events()
+    relationship_service.clear_relationships()
     return {
         "status": "cleared",
     }
@@ -48,6 +50,24 @@ def clear_chats() -> dict[str, str]:
     }
 
 
+@router.post("/rebuild-relationships")
+def rebuild_relationships() -> dict[str, object]:
+    result = relationship_service.rebuild_relationships()
+    return {
+        "status": "rebuilt",
+        "created": result["created"],
+        "by_type": result["by_type"],
+    }
+
+
+@router.delete("/clear-relationships")
+def clear_relationships() -> dict[str, str]:
+    relationship_service.clear_relationships()
+    return {
+        "status": "cleared",
+    }
+
+
 @router.get("/state")
 def dev_state() -> dict[str, object]:
     settings = get_settings()
@@ -56,9 +76,13 @@ def dev_state() -> dict[str, object]:
         "storage": settings.storage_backend,
         "event_count": event_service.count_events(),
         "file_system_event_count": event_service.count_by_source().get("file_system", 0),
+        "logs_event_count": event_service.count_by_source().get("logs", 0),
+        "git_event_count": event_service.count_by_source().get("git", 0),
         "task_count": task_service.count_tasks(),
         "chat_session_count": chat_service.count_sessions(),
         "chat_message_count": chat_service.count_messages(),
+        "relationship_count": relationship_service.count_relationships(),
+        "relationships_by_type": relationship_service.count_by_type(),
         "events_by_source": event_service.count_by_source(),
         "events_by_category": search_stats.by_category,
     }

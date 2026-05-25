@@ -33,6 +33,8 @@ class SearchResult(BaseModel):
     hidden_from_default: bool
     score: float
     match_reason: str
+    related_count: int = 0
+    related_preview: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

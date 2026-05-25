@@ -13,8 +13,22 @@ class ConnectorService:
             for event in self._event_repository.list_all_events(include_hidden=True)
             if event.source.value == "file_system"
         ]
+        log_events = [
+            event
+            for event in self._event_repository.list_all_events(include_hidden=True)
+            if event.source.value == "logs"
+        ]
+        git_events = [
+            event
+            for event in self._event_repository.list_all_events(include_hidden=True)
+            if event.source.value == "git"
+        ]
         file_events.sort(key=lambda event: event.timestamp, reverse=True)
+        log_events.sort(key=lambda event: event.timestamp, reverse=True)
+        git_events.sort(key=lambda event: event.timestamp, reverse=True)
         last_event_at = file_events[0].timestamp.isoformat() if file_events else None
+        last_log_event_at = log_events[0].timestamp.isoformat() if log_events else None
+        last_git_event_at = git_events[0].timestamp.isoformat() if git_events else None
         return ConnectorListResponse(
             connectors=[
                 ConnectorStatus(
@@ -25,6 +39,28 @@ class ConnectorService:
                     enabled=False,
                     events_count=len(file_events),
                     last_event_at=last_event_at,
+                    supports_manual_import=True,
+                    supports_live_watch=False,
+                ),
+                ConnectorStatus(
+                    name="logs",
+                    display_name="Logs",
+                    description="Import local log files into MindOS memory.",
+                    status="available",
+                    enabled=False,
+                    events_count=len(log_events),
+                    last_event_at=last_log_event_at,
+                    supports_manual_import=True,
+                    supports_live_watch=False,
+                ),
+                ConnectorStatus(
+                    name="git",
+                    display_name="Local Git",
+                    description="Import commits, branches, and working tree status from a local Git repository.",
+                    status="available",
+                    enabled=False,
+                    events_count=len(git_events),
+                    last_event_at=last_git_event_at,
                     supports_manual_import=True,
                     supports_live_watch=False,
                 ),
@@ -41,7 +77,6 @@ class ConnectorService:
                         ("browser", "Browser", "Browser extension connector. Coming later."),
                         ("github", "GitHub", "GitHub commits, PRs, and issues connector. Coming later."),
                         ("jira", "Jira", "Jira ticket connector. Coming later."),
-                        ("logs", "Logs", "Local log import/watcher. Coming later."),
                         ("email", "Email", "Email connector. Coming later."),
                     ]
                 ],

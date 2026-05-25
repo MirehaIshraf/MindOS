@@ -6,8 +6,8 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
 import { Input } from "../components/shared/Input";
-import { getEventDetail, getRecentEvents, getSearchStats, searchEvents } from "../services/api";
-import type { MemoryEvent, SearchResult, SearchStatsResponse } from "../types";
+import { getEventDetail, getRecentEvents, getRelatedEvents, getSearchStats, searchEvents } from "../services/api";
+import type { MemoryEvent, RelatedEvent, SearchResult, SearchStatsResponse } from "../types";
 
 const categories = [
   { label: "All", value: undefined },
@@ -24,6 +24,7 @@ const sources = [
   { label: "Manual", value: "manual" },
   { label: "VSCode", value: "vscode" },
   { label: "Browser", value: "browser" },
+  { label: "Git", value: "git" },
   { label: "GitHub", value: "github" },
   { label: "Jira", value: "jira" },
   { label: "Logs", value: "logs" },
@@ -276,6 +277,7 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   const metadata = isSearch ? item.result.metadata : item.event.metadata;
   const category = isSearch ? item.result.memory_category : item.event.memory_category;
   const hiddenFromDefault = isSearch ? item.result.hidden_from_default : item.event.hidden_from_default;
+  const relatedCount = isSearch ? item.result.related_count : item.event.related_count;
   const taskType = typeof metadata.task_type === "string" ? metadata.task_type : null;
 
   return (
@@ -292,6 +294,7 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
         <Badge>{formatTypeLabel(type)}</Badge>
         {taskType ? <Badge variant="info">{taskType}</Badge> : null}
         {hiddenFromDefault ? <Badge variant="default">hidden by default</Badge> : null}
+        {relatedCount ? <Badge variant="info">{relatedCount} related</Badge> : null}
         <Badge>{embeddingStatus}</Badge>
         <span className="ml-auto text-xs text-app-muted">{formatTimestamp(timestamp)}</span>
       </div>
@@ -308,6 +311,17 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
 }
 
 function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () => void }) {
+  const [related, setRelated] = useState<RelatedEvent[]>([]);
+  const [loadingRelated, setLoadingRelated] = useState(true);
+
+  useEffect(() => {
+    setLoadingRelated(true);
+    getRelatedEvents(event.id)
+      .then((response) => setRelated(response.related))
+      .catch(() => setRelated([]))
+      .finally(() => setLoadingRelated(false));
+  }, [event.id]);
+
   return (
     <Card className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-auto">
       <div className="flex items-start justify-between gap-3">
@@ -340,6 +354,29 @@ function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () 
           <pre className="mt-2 overflow-auto rounded-md border border-app-border bg-zinc-950 p-3 text-xs leading-5 text-app-text">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
+        </div>
+        <div>
+          <p className="text-xs uppercase text-app-muted">related memory</p>
+          <div className="mt-2 space-y-2">
+            {loadingRelated ? (
+              <p className="text-sm text-app-muted">Loading related memory...</p>
+            ) : related.length === 0 ? (
+              <p className="text-sm text-app-muted">No related memory found.</p>
+            ) : (
+              related.map((item) => (
+                <div key={item.relationship.id} className="rounded-md border border-app-border bg-zinc-950 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="info">{item.relationship.relationship_type}</Badge>
+                    <Badge>{item.relationship.strength.toFixed(2)}</Badge>
+                    <Badge>{formatSourceLabel(item.event.source)}</Badge>
+                    <Badge>{formatTypeLabel(item.event.type)}</Badge>
+                  </div>
+                  <h3 className="mt-2 text-sm font-semibold text-app-text">{item.event.title}</h3>
+                  <p className="mt-1 text-xs leading-5 text-app-muted">{item.relationship.reason}</p>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </Card>
@@ -394,6 +431,9 @@ function formatSourceLabel(source: string) {
   }
   if (source === "file_system") {
     return "File System";
+  }
+  if (source === "git") {
+    return "Git";
   }
   return source;
 }

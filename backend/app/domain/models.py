@@ -57,6 +57,18 @@ class ChatStoredMessage(BaseModel):
     model: str | None = None
     search_mode: str | None = None
     task_hint: str | None = None
+    context_summary: str | None = None
+    context_stats: dict[str, Any] | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class Relationship(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    from_event_id: str
+    to_event_id: str
+    relationship_type: str
+    strength: float = 0.5
+    reason: str
     created_at: datetime = Field(default_factory=utc_now)
 
 

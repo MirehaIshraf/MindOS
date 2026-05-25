@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import ChatSession, ChatStoredMessage, Event, Playbook, TaskLog
+from app.domain.models import ChatSession, ChatStoredMessage, Event, Playbook, Relationship, TaskLog
 
 
 class EventRepository(ABC):
@@ -40,6 +40,10 @@ class EventRepository(ABC):
 
     @abstractmethod
     def clear_events(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_events_by_source(self, source: str) -> int:
         raise NotImplementedError
 
 
@@ -165,4 +169,45 @@ class PlaybookRepository(ABC):
 
     @abstractmethod
     def count(self) -> int:
+        raise NotImplementedError
+
+
+class RelationshipRepository(ABC):
+    @abstractmethod
+    def create_relationship(
+        self,
+        from_event_id: str,
+        to_event_id: str,
+        relationship_type: str,
+        strength: float,
+        reason: str,
+    ) -> Relationship:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_relationships_for_event(self, event_id: str, limit: int = 10) -> list[Relationship]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_related_events(self, event_id: str, limit: int = 10) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def relationship_exists(self, from_event_id: str, to_event_id: str, relationship_type: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear_relationships(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_relationships_for_event_ids(self, event_ids: list[str]) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_relationships(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_by_type(self) -> dict[str, int]:
         raise NotImplementedError

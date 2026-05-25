@@ -72,6 +72,12 @@ class SQLiteEventRepository(EventRepository):
             session.execute(delete(EventRecord))
             session.commit()
 
+    def delete_events_by_source(self, source: str) -> int:
+        with self._session_factory() as session:
+            result = session.execute(delete(EventRecord).where(EventRecord.source == source))
+            session.commit()
+            return int(result.rowcount or 0)
+
     def _to_record(self, event: Event) -> EventRecord:
         category = get_memory_category(event)
         hidden = is_hidden_from_default_memory(event)

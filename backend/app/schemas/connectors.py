@@ -63,3 +63,108 @@ class FileImportResult(BaseModel):
     skipped: list[dict[str, Any]]
     failed: list[dict[str, Any]]
     message: str
+
+
+class LogPreviewRequest(BaseModel):
+    file_path: str
+    max_lines: int = Field(default=200, ge=1, le=10000)
+    only_errors: bool = False
+
+    @field_validator("file_path")
+    @classmethod
+    def file_path_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("file_path must not be empty")
+        return value
+
+
+class LogImportRequest(BaseModel):
+    file_path: str
+    max_lines: int = Field(default=1000, ge=1, le=10000)
+    only_errors: bool = False
+    group_similar: bool = True
+
+    @field_validator("file_path")
+    @classmethod
+    def file_path_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("file_path must not be empty")
+        return value
+
+
+class LogLinePreview(BaseModel):
+    line_number: int
+    level: str
+    message: str
+    timestamp: str | None = None
+    raw: str
+
+
+class LogPreviewResult(BaseModel):
+    file_path: str
+    total_lines_scanned: int
+    matched_lines: int
+    preview: list[LogLinePreview]
+    skipped: list[dict[str, Any]]
+    message: str
+
+
+class LogImportResult(BaseModel):
+    imported_count: int
+    skipped_count: int
+    failed_count: int
+    events_created: list[str]
+    groups_created: int
+    message: str
+
+
+class GitPreviewRequest(BaseModel):
+    repo_path: str
+    max_commits: int = Field(default=10, ge=1, le=500)
+
+    @field_validator("repo_path")
+    @classmethod
+    def repo_path_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("repo_path must not be empty")
+        return value
+
+
+class GitImportRequest(BaseModel):
+    repo_path: str
+    max_commits: int = Field(default=50, ge=1, le=500)
+    include_diff_summary: bool = True
+    include_status: bool = True
+
+    @field_validator("repo_path")
+    @classmethod
+    def repo_path_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("repo_path must not be empty")
+        return value
+
+
+class GitCommitPreview(BaseModel):
+    hash: str
+    short_hash: str
+    author: str
+    date: str
+    message: str
+
+
+class GitPreviewResult(BaseModel):
+    repo_path: str
+    repo_name: str
+    current_branch: str | None = None
+    is_git_repo: bool
+    recent_commits: list[GitCommitPreview]
+    status_summary: dict[str, Any]
+    message: str
+
+
+class GitImportResult(BaseModel):
+    imported_count: int
+    skipped_count: int
+    failed_count: int
+    events_created: list[str]
+    message: str

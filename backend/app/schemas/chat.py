@@ -33,6 +33,15 @@ class ChatSource(BaseModel):
     score: float
     match_reason: str
     timestamp: datetime
+    source_kind: str = "direct"
+
+
+class ChatContextStats(BaseModel):
+    direct_count: int
+    related_count: int
+    relationship_count: int
+    sources: list[str]
+    token_estimate: int
 
 
 class ChatResponse(BaseModel):
@@ -43,6 +52,8 @@ class ChatResponse(BaseModel):
     search_mode: str
     task_hint: str | None = None
     warning: str | None = None
+    context_summary: str = ""
+    context_stats: ChatContextStats | None = None
 
 
 class ChatSessionResponse(BaseModel):
@@ -66,6 +77,8 @@ class ChatStoredMessageResponse(BaseModel):
     model: str | None = None
     search_mode: str | None = None
     task_hint: str | None = None
+    context_summary: str | None = None
+    context_stats: dict[str, Any] | None = None
     created_at: datetime
 
 

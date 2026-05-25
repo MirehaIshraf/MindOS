@@ -3,23 +3,26 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  buildContext,
   clearChats,
   clearEvents,
+  clearRelationships,
   clearTasks,
   getDevState,
   getHealth,
   getRecentEvents,
   ingestEvent,
+  rebuildRelationships,
   seedSampleEvents,
 } from "../services/api";
-import type { BackendHealth, DevState, EventSource, MemoryEvent } from "../types";
+import type { BackendHealth, ContextPackage, DevState, EventSource, MemoryEvent } from "../types";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
 import { Input } from "../components/shared/Input";
 
-const eventSources: EventSource[] = ["manual", "file_system", "vscode", "browser", "github", "jira", "logs", "email"];
+const eventSources: EventSource[] = ["manual", "file_system", "vscode", "browser", "git", "github", "jira", "logs", "email"];
 
 const emptyForm = {
   source: "manual" as EventSource,
@@ -36,6 +39,8 @@ export function DevPage() {
   const [devState, setDevState] = useState<DevState | null>(null);
   const [events, setEvents] = useState<MemoryEvent[]>([]);
   const [form, setForm] = useState<IngestForm>(emptyForm);
+  const [contextQuery, setContextQuery] = useState("jwt login failure");
+  const [contextResult, setContextResult] = useState<ContextPackage | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -140,6 +145,63 @@ export function DevPage() {
     }
   }
 
+  async function handleRebuildRelationships() {
+    setLoadingAction("rebuildRelationships");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await rebuildRelationships();
+      setMessage(`Rebuilt ${response.created} relationships.`);
+      await refreshAll();
+    } catch {
+      setError("Could not rebuild relationships.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleClearRelationships() {
+    if (!window.confirm("Clear all detected memory relationships?")) {
+      return;
+    }
+    setLoadingAction("clearRelationships");
+    setError(null);
+    setMessage(null);
+    try {
+      await clearRelationships();
+      setMessage("Cleared memory relationships.");
+      await refreshAll();
+    } catch {
+      setError("Could not clear relationships.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleBuildContext() {
+    if (!contextQuery.trim()) {
+      setError("Context query is required.");
+      return;
+    }
+    setLoadingAction("buildContext");
+    setError(null);
+    setMessage(null);
+    try {
+      setContextResult(
+        await buildContext({
+          query: contextQuery,
+          mode: "chat",
+          limit: 5,
+          related_per_event: 2,
+        }),
+      );
+    } catch {
+      setError("Could not build context.");
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   async function handleManualIngest() {
     const title = form.title.trim();
     const type = form.type.trim();
@@ -197,9 +259,12 @@ export function DevPage() {
             <Row label="database" value={devState?.database_path ?? health?.database_path ?? "-"} />
             <Row label="event count" value={String(devState?.event_count ?? health?.event_count ?? 0)} />
             <Row label="file events" value={String(devState?.file_system_event_count ?? 0)} />
+            <Row label="log events" value={String(devState?.logs_event_count ?? 0)} />
+            <Row label="git events" value={String(devState?.git_event_count ?? 0)} />
             <Row label="task count" value={String(devState?.task_count ?? health?.task_count ?? 0)} />
             <Row label="chat sessions" value={String(devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
             <Row label="chat messages" value={String(devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />
+            <Row label="relationships" value={String(devState?.relationship_count ?? 0)} />
           </div>
           {devState?.storage === "sqlite" || health?.storage === "sqlite" ? (
             <p className="mt-4 text-xs leading-5 text-app-muted">SQLite data persists across backend restarts.</p>
@@ -236,6 +301,58 @@ export function DevPage() {
             <Button variant="secondary" onClick={handleClearChats} loading={loadingAction === "clearChats"}>
               Clear chats
             </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Activity size={18} />} title="Relationship Debug" />
+          <div className="mt-4 flex flex-wrap gap-2">
+            {Object.entries(devState?.relationships_by_type ?? {}).map(([type, count]) => (
+              <Badge key={type} variant="default">
+                {type}: {count}
+              </Badge>
+            ))}
+          </div>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="primary" onClick={handleRebuildRelationships} loading={loadingAction === "rebuildRelationships"}>
+              Rebuild Relationships
+            </Button>
+            <Button variant="secondary" onClick={handleClearRelationships} loading={loadingAction === "clearRelationships"}>
+              Clear Relationships
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Activity size={18} />} title="Context Debug" />
+          <div className="mt-4 space-y-3">
+            <LabeledInput label="Query" value={contextQuery} onChange={setContextQuery} />
+            <Button variant="primary" onClick={handleBuildContext} loading={loadingAction === "buildContext"}>
+              Build Context
+            </Button>
+            {contextResult ? (
+              <div className="space-y-3 rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="info">direct: {contextResult.direct_events.length}</Badge>
+                  <Badge variant="info">related: {contextResult.related_events.length}</Badge>
+                  <Badge>relationships: {contextResult.relationships.length}</Badge>
+                  <Badge>tokens: ~{contextResult.token_estimate}</Badge>
+                </div>
+                <p className="text-app-muted">{contextResult.summary}</p>
+                {contextResult.source_groups.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {contextResult.source_groups.map((group) => (
+                      <Badge key={group.source}>
+                        {group.source}: {group.count}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {contextResult.warnings.length > 0 ? (
+                  <p className="text-amber-200">{contextResult.warnings.join("; ")}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </Card>
       </div>
