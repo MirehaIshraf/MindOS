@@ -140,6 +140,18 @@ SEMANTIC_SEARCH_DEFAULT=false
 
 Restart the backend, then use Developer Mode to reindex all memory. If Ollama or ChromaDB is unavailable, MindOS falls back to keyword search. No cloud embeddings are used.
 
+## Embedding Model Selection
+
+MindOS can choose among local Ollama embedding models from Settings. Supported curated options include:
+
+```powershell
+ollama pull nomic-embed-text
+ollama pull qwen3-embedding:0.6b
+ollama pull harrier-oss:0.6b
+```
+
+Some Harrier and Qwen3 embedding tags may vary by publisher; installed embedding-like Ollama models are discovered and shown separately. Changing the embedding model does not automatically rebuild vectors. Reindex from Settings or Developer Mode after switching models. MindOS does not use cloud embeddings.
+
 ## Setup
 
 ```powershell

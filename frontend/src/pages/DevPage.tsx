@@ -1,9 +1,12 @@
 import { Activity, DatabaseZap, HeartPulse, RefreshCw, Send, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  applyMemoryPolicy,
   buildContext,
+  cleanMemoryIndexes,
+  clearAllDevData,
   clearChats,
   clearEmbeddingIndex,
   clearEvents,
@@ -12,7 +15,7 @@ import {
   getErrorMessage,
   getDevState,
   getEmbeddingStatus,
-  getHealth,
+  getModelSettings,
   getRecentEvents,
   getStatus,
   ingestEvent,
@@ -25,12 +28,14 @@ import {
 import type {
   BackendHealth,
   BackendStatus,
+  ClearAllDevDataResponse,
   ContextPackage,
   DevState,
   EmbeddingReindexResponse,
   EmbeddingStatusResponse,
   EventSource,
   MemoryEvent,
+  ModelSettingsResponse,
   TaskPlanningResponse,
   TestLLMResponse,
 } from "../types";
@@ -56,6 +61,7 @@ export function DevPage() {
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [status, setStatus] = useState<BackendStatus | null>(null);
   const [devState, setDevState] = useState<DevState | null>(null);
+  const [modelSettings, setModelSettings] = useState<ModelSettingsResponse | null>(null);
   const [events, setEvents] = useState<MemoryEvent[]>([]);
   const [form, setForm] = useState<IngestForm>(emptyForm);
   const [contextQuery, setContextQuery] = useState("jwt login failure");
@@ -66,9 +72,14 @@ export function DevPage() {
   const [plannerResult, setPlannerResult] = useState<TaskPlanningResponse | null>(null);
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
   const [embeddingResult, setEmbeddingResult] = useState<EmbeddingReindexResponse | null>(null);
+  const [clearAllResult, setClearAllResult] = useState<ClearAllDevDataResponse | null>(null);
+  const [clearSavedSources, setClearSavedSources] = useState(false);
+  const [clearModelSettings, setClearModelSettings] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [optionalWarnings, setOptionalWarnings] = useState<Record<string, string>>({});
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const refreshSeq = useRef(0);
 
   const backendOnline = status !== null;
 
@@ -77,37 +88,85 @@ export function DevPage() {
   }, []);
 
   async function refreshAll() {
+    const requestId = refreshSeq.current + 1;
+    refreshSeq.current = requestId;
     setLoadingAction("refresh");
     setError(null);
     try {
       const statusResponse = await getStatus();
-      setStatus(statusResponse);
-      try {
-        const [healthResponse, stateResponse, eventsResponse, embeddingResponse] = await Promise.all([
-          getHealth(),
-          getDevState(),
-          getRecentEvents(undefined, 20, undefined, true),
-          getEmbeddingStatus(),
-        ]);
-        setHealth(healthResponse);
-        setDevState(stateResponse);
-        setEvents(eventsResponse.events);
-        setEmbeddingStatus(embeddingResponse);
-      } catch (secondaryError) {
-        console.error("DevPage secondary state refresh failed", secondaryError);
-        setHealth(null);
-        setDevState(null);
-        setEvents([]);
+      console.info("GET /status success", statusResponse.status_request_id ?? "");
+      if (refreshSeq.current !== requestId) {
+        return;
       }
+      setStatus(statusResponse);
+      setOptionalWarnings({});
+      void loadOptionalDevState(requestId);
     } catch (caughtError) {
-      console.error("DevPage status refresh failed", caughtError);
+      console.error("GET /status failed", caughtError);
+      if (refreshSeq.current !== requestId) {
+        return;
+      }
       setHealth(null);
       setStatus(null);
-      setDevState(null);
-      setEvents([]);
       setError(getErrorMessage(caughtError));
     } finally {
-      setLoadingAction(null);
+      if (refreshSeq.current === requestId) {
+        setLoadingAction(null);
+      }
+    }
+  }
+
+  async function loadOptionalDevState(requestId: number) {
+    const warnings: Record<string, string> = {};
+    const applyWarning = (key: string, value: string) => {
+      warnings[key] = value;
+      if (refreshSeq.current === requestId) {
+        setOptionalWarnings((current) => ({ ...current, [key]: value }));
+      }
+    };
+
+    try {
+      const stateResponse = await getDevState();
+      console.info("GET /dev/state success");
+      if (refreshSeq.current === requestId) {
+        setDevState(stateResponse);
+      }
+    } catch (caughtError) {
+      console.warn("GET /dev/state failed", caughtError);
+      applyWarning("devState", "Dev state unavailable.");
+    }
+
+    try {
+      const eventsResponse = await getRecentEvents(undefined, 20, undefined, true);
+      console.info("GET /events/recent success");
+      if (refreshSeq.current === requestId) {
+        setEvents(eventsResponse.events);
+      }
+    } catch (caughtError) {
+      console.warn("GET /events/recent failed", caughtError);
+      applyWarning("events", "Recent events unavailable.");
+    }
+
+    try {
+      const embeddingResponse = await getEmbeddingStatus();
+      console.info("GET /embeddings/status success");
+      if (refreshSeq.current === requestId) {
+        setEmbeddingStatus(embeddingResponse);
+      }
+    } catch (caughtError) {
+      console.warn("GET /embeddings/status failed", caughtError);
+      applyWarning("embeddings", "Embedding status unavailable.");
+    }
+
+    try {
+      const modelSettingsResponse = await getModelSettings();
+      console.info("GET /models/settings success");
+      if (refreshSeq.current === requestId) {
+        setModelSettings(modelSettingsResponse);
+      }
+    } catch (caughtError) {
+      console.warn("GET /models/settings failed", caughtError);
+      applyWarning("models", "Model settings unavailable.");
     }
   }
 
@@ -216,6 +275,39 @@ export function DevPage() {
     }
   }
 
+  async function handleApplyMemoryPolicy() {
+    setLoadingAction("applyMemoryPolicy");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await applyMemoryPolicy();
+      setMessage(`Applied memory policy to ${response.updated} events.`);
+      await refreshAll();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleCleanMemoryIndexes() {
+    if (!window.confirm("Apply memory policy, rebuild eligible relationships, and reindex eligible memories?")) {
+      return;
+    }
+    setLoadingAction("cleanMemoryIndexes");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await cleanMemoryIndexes();
+      setMessage(`Cleaned memory indexes. Policy updated: ${String(response.policy_updated ?? 0)}.`);
+      await refreshAll();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   async function handleBuildContext() {
     if (!contextQuery.trim()) {
       setError("Context query is required.");
@@ -313,6 +405,34 @@ export function DevPage() {
     }
   }
 
+  async function handleClearAll() {
+    const confirmed = window.confirm(
+      "This will clear events, chats, tasks, relationships, vector index, and import history. Saved sources and model settings will be kept unless selected. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setLoadingAction("clearAll");
+    setError(null);
+    setMessage(null);
+    setClearAllResult(null);
+    try {
+      const response = await clearAllDevData({
+        clear_saved_sources: clearSavedSources,
+        clear_model_settings: clearModelSettings,
+      });
+      setClearAllResult(response);
+      setMessage(
+        `Cleared ${response.events_deleted} events, ${response.tasks_deleted} tasks, ${response.chats_deleted} chat sessions, and ${response.relationships_deleted} relationships.`,
+      );
+      await refreshAll();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   async function handleManualIngest() {
     const title = form.title.trim();
     const type = form.type.trim();
@@ -360,6 +480,11 @@ export function DevPage() {
 
       {error ? <StatusMessage variant="danger" message={error} /> : null}
       {message ? <StatusMessage variant="success" message={message} /> : null}
+      {Object.values(optionalWarnings).length > 0 ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          {Object.values(optionalWarnings).join(" ")}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-3 gap-4">
         <Card>
@@ -372,6 +497,8 @@ export function DevPage() {
             <Row label="file events" value={String(devState?.file_system_event_count ?? 0)} />
             <Row label="log events" value={String(devState?.logs_event_count ?? 0)} />
             <Row label="git events" value={String(devState?.git_event_count ?? 0)} />
+            <Row label="saved sources" value={String(devState?.saved_sources_count ?? 0)} />
+            <Row label="import runs" value={String(devState?.import_runs_count ?? 0)} />
             <Row label="task count" value={String(status?.task_count ?? devState?.task_count ?? health?.task_count ?? 0)} />
             <Row label="chat sessions" value={String(status?.chat_session_count ?? devState?.chat_session_count ?? health?.chat_session_count ?? 0)} />
             <Row label="chat messages" value={String(status?.chat_message_count ?? devState?.chat_message_count ?? health?.chat_message_count ?? 0)} />
@@ -405,6 +532,10 @@ export function DevPage() {
             <Row label="active LLM" value={status?.active_llm ?? devState?.active_llm ?? "fake-llm"} />
             <Row label="active provider" value={status?.active_provider ?? "-"} />
             <Row label="enabled models" value={String(status?.available_chat_models_count ?? status?.available_chat_models?.length ?? 0)} />
+            <Row label="settings models" value={String(modelSettings?.models.length ?? "-")} />
+            <Row label="installed Ollama" value={String(status?.discovered_ollama_models?.length ?? devState?.ollama_models?.length ?? 0)} />
+            <Row label="local chat models" value={String(status?.local_chat_models_count ?? 0)} />
+            <Row label="filtered embeddings" value={String(status?.embedding_models_filtered_count ?? 0)} />
             <Row label="num ctx" value={String(status?.ollama_num_ctx ?? devState?.ollama_num_ctx ?? "-")} />
             <Row label="direct limit" value={String(status?.chat_context_direct_limit ?? devState?.chat_context_direct_limit ?? "-")} />
             <Row label="related each" value={String(status?.chat_context_related_per_event ?? devState?.chat_context_related_per_event ?? "-")} />
@@ -412,7 +543,9 @@ export function DevPage() {
             <Row label="history limit" value={String(status?.chat_history_limit ?? devState?.chat_history_limit ?? "-")} />
           </div>
           {!(status?.ollama_available ?? devState?.ollama_available) ? (
-            <p className="mt-4 text-xs leading-5 text-amber-200">Start Ollama and pull qwen3:8b to enable local chat.</p>
+            <p className="mt-4 text-xs leading-5 text-amber-200">
+              Ollama unavailable. Start Ollama manually to use local models.
+            </p>
           ) : null}
           {status?.available_chat_models && status.available_chat_models.length > 0 ? (
             <div className="mt-4 flex flex-wrap gap-2">
@@ -420,6 +553,13 @@ export function DevPage() {
                 <Badge key={model.id} variant={model.type === "cloud" ? "warning" : "success"}>
                   {model.display_name}
                 </Badge>
+              ))}
+            </div>
+          ) : null}
+          {status?.discovered_ollama_models?.length ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {status.discovered_ollama_models.map((model) => (
+                <Badge key={model}>{model}</Badge>
               ))}
             </div>
           ) : null}
@@ -471,8 +611,10 @@ export function DevPage() {
         </Card>
 
         <Card>
-          <SectionHeader icon={<Trash2 size={18} />} title="Clear Local Data" />
-          <p className="mt-3 text-sm text-app-muted">Remove all in-memory events from this backend process.</p>
+          <SectionHeader icon={<Trash2 size={18} />} title="Danger Zone" />
+          <p className="mt-3 text-sm text-app-muted">
+            Clear local development data. Saved sources and model settings are kept unless you explicitly include them.
+          </p>
           <div className="mt-5 flex flex-wrap gap-3">
             <Button variant="danger" onClick={handleClear} loading={loadingAction === "clear"}>
               Clear events
@@ -483,7 +625,48 @@ export function DevPage() {
             <Button variant="secondary" onClick={handleClearChats} loading={loadingAction === "clearChats"}>
               Clear chats
             </Button>
+            <Button variant="secondary" onClick={handleClearRelationships} loading={loadingAction === "clearRelationships"}>
+              Clear relationships
+            </Button>
           </div>
+          <div className="mt-5 space-y-3 rounded-md border border-red-500/30 bg-red-500/5 p-3">
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={clearSavedSources}
+                onChange={(event) => setClearSavedSources(event.target.checked)}
+                className="h-4 w-4 accent-red-600"
+              />
+              Also clear saved connector sources
+            </label>
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={clearModelSettings}
+                onChange={(event) => setClearModelSettings(event.target.checked)}
+                className="h-4 w-4 accent-red-600"
+              />
+              Also clear model settings/API key config
+            </label>
+            <Button variant="danger" onClick={handleClearAll} loading={loadingAction === "clearAll"}>
+              Clear All Local Data
+            </Button>
+          </div>
+          {clearAllResult ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge variant="danger">events: {clearAllResult.events_deleted}</Badge>
+              <Badge>tasks: {clearAllResult.tasks_deleted}</Badge>
+              <Badge>chats: {clearAllResult.chats_deleted}</Badge>
+              <Badge>relationships: {clearAllResult.relationships_deleted}</Badge>
+              <Badge>import runs: {clearAllResult.import_runs_deleted}</Badge>
+              <Badge>vectors: {clearAllResult.vectors_deleted ?? "n/a"}</Badge>
+              {clearAllResult.saved_sources_deleted ? <Badge variant="warning">saved sources: {clearAllResult.saved_sources_deleted}</Badge> : null}
+              {clearAllResult.model_settings_cleared ? <Badge variant="warning">model settings cleared</Badge> : null}
+            </div>
+          ) : null}
+          {clearAllResult?.warnings?.length ? (
+            <p className="mt-3 text-xs leading-5 text-amber-200">{clearAllResult.warnings.join("; ")}</p>
+          ) : null}
         </Card>
 
         <Card>
@@ -506,14 +689,40 @@ export function DevPage() {
         </Card>
 
         <Card>
+          <SectionHeader icon={<DatabaseZap size={18} />} title="Memory Policy Debug" />
+          <p className="mt-3 text-sm text-app-muted">
+            Raw chat messages are stored, but should not be embedded, related, or used as normal chat context.
+          </p>
+          <div className="mt-4 space-y-3 text-sm">
+            {Object.entries(devState?.memory_policy ?? {}).map(([key, value]) => (
+              <Row key={key} label={key.replace(/_/g, " ")} value={String(value)} />
+            ))}
+          </div>
+          <p className="mt-4 text-xs leading-5 text-amber-200">
+            If old chat messages were indexed or related, run Clean Memory Indexes.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary" onClick={handleApplyMemoryPolicy} loading={loadingAction === "applyMemoryPolicy"}>
+              Apply Memory Policy
+            </Button>
+            <Button variant="primary" onClick={handleCleanMemoryIndexes} loading={loadingAction === "cleanMemoryIndexes"}>
+              Clean Memory Indexes
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
           <SectionHeader icon={<DatabaseZap size={18} />} title="Embeddings / Semantic Search" />
           <div className="mt-4 space-y-3 text-sm">
             <Row label="enabled" value={String(embeddingStatus?.enabled ?? status?.embeddings_enabled ?? false)} />
-            <Row label="model" value={embeddingStatus?.embedding_model ?? status?.embedding_model ?? "nomic-embed-text"} />
+            <Row label="selected model" value={embeddingStatus?.selected_embedding_model ?? status?.selected_embedding_model ?? status?.embedding_model ?? "nomic-embed-text"} />
+            <Row label="index model" value={embeddingStatus?.index_model ?? status?.embedding_index_model ?? "none"} />
+            <Row label="index stale" value={String(embeddingStatus?.index_stale ?? status?.embedding_index_stale ?? false)} tone={embeddingStatus?.index_stale ?? status?.embedding_index_stale ? "danger" : "success"} />
+            <Row label="model available" value={String(embeddingStatus?.embedding_model_available ?? status?.embedding_model_available ?? false)} tone={embeddingStatus?.embedding_model_available ?? status?.embedding_model_available ? "success" : "danger"} />
             <Row
               label="Ollama"
-              value={embeddingStatus?.ollama_available ? "available" : "unavailable"}
-              tone={embeddingStatus?.ollama_available ? "success" : "danger"}
+              value={(embeddingStatus?.ollama_available ?? status?.ollama_available) ? "available" : "unavailable"}
+              tone={(embeddingStatus?.ollama_available ?? status?.ollama_available) ? "success" : "danger"}
             />
             <Row
               label="Chroma"
@@ -521,6 +730,8 @@ export function DevPage() {
               tone={(embeddingStatus?.chroma_available ?? status?.chroma_available) ? "success" : "danger"}
             />
             <Row label="indexed" value={String(embeddingStatus?.indexed_count ?? status?.chroma_indexed_count ?? 0)} />
+            <Row label="indexable events" value={String(embeddingStatus?.indexable_events ?? devState?.memory_policy?.indexable_events ?? 0)} />
+            <Row label="non-indexable" value={String(embeddingStatus?.non_indexable_events ?? devState?.memory_policy?.non_indexable_events ?? 0)} />
             {Object.entries(embeddingStatus?.event_status ?? {}).map(([statusKey, count]) => (
               <Row key={statusKey} label={statusKey} value={String(count)} />
             ))}

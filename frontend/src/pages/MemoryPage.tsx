@@ -221,7 +221,12 @@ export function MemoryPage() {
           Some results are from chat history.
         </p>
       ) : null}
-      {searchWarning ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">{searchWarning}</p> : null}
+      {searchWarning ? (
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          {searchWarning.includes("Embedding model changed") ? "Embedding model changed. Reindex is recommended. " : ""}
+          {searchWarning}
+        </p>
+      ) : null}
 
       {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
 
@@ -369,6 +374,9 @@ function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () 
       <div className="mt-5 space-y-4">
         <DetailRow label="timestamp" value={formatTimestamp(event.timestamp)} />
         <DetailRow label="created" value={formatTimestamp(event.created_at)} />
+        <DetailRow label="indexable" value={event.is_indexable ? "yes" : "no"} />
+        <DetailRow label="relationship eligible" value={event.is_relationship_eligible ? "yes" : "no"} />
+        <DetailRow label="context eligible" value={event.is_context_eligible ? "yes" : "no"} />
         <div>
           <p className="text-xs uppercase text-app-muted">content</p>
           <p className="mt-2 whitespace-pre-wrap rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">

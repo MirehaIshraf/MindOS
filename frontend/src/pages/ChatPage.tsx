@@ -207,6 +207,7 @@ export function ChatPage() {
               ))}
             </select>
             {selectedModel ? <Badge variant={selectedModel.type === "cloud" ? "warning" : "success"}>{selectedModel.type === "cloud" ? "Cloud" : "Local"}</Badge> : null}
+            {selectedModel?.model_id.toLowerCase().includes("llama3.2:1b") ? <Badge variant="info">Speed</Badge> : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="secondary" onClick={() => setSessionsOpen((open) => !open)}>

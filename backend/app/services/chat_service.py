@@ -17,6 +17,7 @@ from app.schemas.chat import (
 )
 from app.schemas.context import ContextEvent, ContextPackage
 from app.services.context_builder_service import ContextBuilderService
+from app.services.model_registry_service import model_registry_service
 from app.services.model_router_service import model_router_service
 from app.services.response_cleaner import clean_llm_response
 from app.services.relationship_service import relationship_service
@@ -90,11 +91,13 @@ class ChatService:
         if session is None:
             session = self._chat_repository.create_session(short_title(request.message))
 
+        model_config = self._resolve_requested_model(request.model_id)
+        context_profile = model_config.default_context_profile if model_config else "fast_chat"
         context_package: ContextPackage | None = None
         if request.use_context:
             context_package = self._context_builder.build_chat_context(
                 query=request.message,
-                profile="fast_chat",
+                profile=context_profile,
                 include_hidden=True,
             )
 
@@ -118,6 +121,7 @@ class ChatService:
             task_hint=task_hint,
             answer_style=answer_style,
             model_id=request.model_id,
+            context_profile=context_profile,
         )
         reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
@@ -245,6 +249,7 @@ class ChatService:
         task_hint: str | None,
         answer_style: str,
         model_id: str | None,
+        context_profile: str,
     ) -> tuple[str, str, str, str, str | None]:
         system_prompt = prompt_for_answer_style(task_hint, answer_style)
         if self._llm is not None:
@@ -258,9 +263,10 @@ class ChatService:
 
         settings = get_settings()
         formatted_context = self._context_builder.format_context_for_llm(context_package) if context_package else ""
+        history_limit = 2 if context_profile == "speed_chat" else settings.chat_history_limit
         recent_history = [
             {"role": item.get("role", "user"), "content": item.get("content", "")}
-            for item in history[-settings.chat_history_limit :]
+            for item in history[-history_limit:]
             if item.get("role") in {"user", "assistant"} and item.get("content")
         ]
         messages = [
@@ -281,6 +287,15 @@ class ChatService:
             options={"context_package": context_package},
         )
         return result.reply, result.model_used, result.provider, result.model_display_name, result.warning
+
+    def _resolve_requested_model(self, model_id: str | None):
+        models = model_registry_service.list_chat_models()
+        if model_id:
+            model = next((item for item in models if item.id == model_id), None)
+            if model:
+                return model
+        model, _ = model_registry_service.resolve_selected_chat_model(models)
+        return model
 
 def context_sources(context_package: ContextPackage | None) -> list[ChatSource]:
     if context_package is None:

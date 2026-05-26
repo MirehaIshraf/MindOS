@@ -44,12 +44,16 @@ class RelationshipService:
         self._relationship_repository = relationship_repository or get_relationship_repository()
 
     def detect_relationships_for_event(self, event: Event) -> list[Relationship]:
+        if not event.is_relationship_eligible:
+            return []
         created: list[Relationship] = []
         topic_candidates: list[tuple[float, Event, str]] = []
         temporal_candidates: list[Event] = []
 
         for other in self._event_repository.list_all_events(include_hidden=True):
             if other.id == event.id:
+                continue
+            if not other.is_relationship_eligible:
                 continue
 
             created.extend(self._structured_relationships(event, other))
@@ -82,6 +86,8 @@ class RelationshipService:
     def rebuild_relationships(self) -> dict:
         self._relationship_repository.clear_relationships()
         for event in self._event_repository.list_all_events(include_hidden=True):
+            if not event.is_relationship_eligible:
+                continue
             self.detect_relationships_for_event(event)
         return {"created": self._relationship_repository.count_relationships(), "by_type": self._relationship_repository.count_by_type()}
 

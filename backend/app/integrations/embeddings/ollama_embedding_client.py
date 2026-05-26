@@ -2,13 +2,15 @@ import httpx
 
 from app.core.config import get_settings
 from app.integrations.embeddings.base import EmbeddingClient
+from app.services.embedding_model_registry_service import embedding_model_registry_service
 
 
 class OllamaEmbeddingClient(EmbeddingClient):
     def embed(self, text: str) -> list[float]:
         settings = get_settings()
         base_url = settings.ollama_base_url.rstrip("/")
-        payload = {"model": settings.ollama_embed_model, "prompt": text}
+        model = embedding_model_registry_service.selected_model_name()
+        payload = {"model": model, "prompt": text}
         timeout = httpx.Timeout(settings.ollama_timeout_seconds)
 
         with httpx.Client(timeout=timeout) as client:
@@ -24,7 +26,7 @@ class OllamaEmbeddingClient(EmbeddingClient):
 
             response = client.post(
                 f"{base_url}/api/embed",
-                json={"model": settings.ollama_embed_model, "input": text},
+                json={"model": model, "input": text},
             )
             response.raise_for_status()
             data = response.json()
@@ -37,7 +39,7 @@ class OllamaEmbeddingClient(EmbeddingClient):
     def health_check(self) -> bool:
         try:
             settings = get_settings()
-            with httpx.Client(timeout=httpx.Timeout(5.0)) as client:
+            with httpx.Client(timeout=httpx.Timeout(2.0)) as client:
                 response = client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
                 response.raise_for_status()
             return True

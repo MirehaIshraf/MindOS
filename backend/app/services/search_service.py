@@ -25,28 +25,37 @@ class SearchService:
         limit: int = 10,
         include_hidden: bool = True,
         search_mode: str | None = "auto",
+        context_only: bool = False,
     ) -> SearchResponse:
         requested_mode = (search_mode or "auto").lower()
         if requested_mode not in {"keyword", "semantic", "hybrid", "auto"}:
             requested_mode = "auto"
 
         if requested_mode == "keyword":
-            return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+            return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
 
         semantic_available = embedding_index_service.embeddings_available()
         if requested_mode in {"semantic", "hybrid"} and not semantic_available:
-            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
             response.warning = merge_warning(response.warning, "Semantic search unavailable. Falling back to keyword search.")
             response.requested_search_mode = requested_mode
             return response
 
+        stale_warning = embedding_index_service.index_stale_warning()
+
         if requested_mode == "semantic":
-            return self._semantic_search(query, sources, category, limit, include_hidden, requested_mode)
+            response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            if stale_warning and response.search_mode == "semantic":
+                response.warning = merge_warning(response.warning, stale_warning)
+            return response
 
         if requested_mode == "hybrid" or semantic_available:
-            return self._hybrid_search(query, sources, category, limit, include_hidden, requested_mode)
+            response = self._hybrid_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            if stale_warning and response.search_mode == "hybrid":
+                response.warning = merge_warning(response.warning, stale_warning)
+            return response
 
-        return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+        return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
 
     def _keyword_search(
         self,
@@ -56,6 +65,7 @@ class SearchService:
         limit: int,
         include_hidden: bool,
         requested_mode: str | None = "keyword",
+        context_only: bool = False,
     ) -> SearchResponse:
         normalized_query = query.strip().lower()
         tokens = self._tokenize(normalized_query)
@@ -64,6 +74,8 @@ class SearchService:
 
         for event in self._event_repository.list_all_events():
             if allowed_sources and event.source.value not in allowed_sources:
+                continue
+            if context_only and not event.is_context_eligible:
                 continue
             if category and get_memory_category(event) != category:
                 continue
@@ -104,6 +116,7 @@ class SearchService:
         limit: int,
         include_hidden: bool,
         requested_mode: str | None = "semantic",
+        context_only: bool = False,
     ) -> SearchResponse:
         try:
             vector_rows = embedding_index_service.semantic_search(
@@ -114,14 +127,14 @@ class SearchService:
                 include_hidden=include_hidden,
             )
         except Exception as exc:
-            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
             response.warning = merge_warning(response.warning, f"Semantic search failed. Falling back to keyword search: {exc}")
             return response
 
         results: list[SearchResult] = []
         for row in vector_rows:
             event = self._event_repository.get_event_by_id(row["event_id"])
-            if event is None:
+            if event is None or (context_only and not event.is_context_eligible):
                 continue
             results.append(self._to_search_result(event, raw_score=row["score"], max_score=1, match_reason="Semantic match"))
         return SearchResponse(
@@ -141,9 +154,10 @@ class SearchService:
         limit: int,
         include_hidden: bool,
         requested_mode: str | None = "hybrid",
+        context_only: bool = False,
     ) -> SearchResponse:
-        keyword_response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode)
-        semantic_response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode)
+        keyword_response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+        semantic_response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
         if semantic_response.search_mode != "semantic":
             semantic_response.requested_search_mode = requested_mode
             return semantic_response
@@ -165,7 +179,7 @@ class SearchService:
         results: list[SearchResult] = []
         for score, event_id in scored:
             event = self._event_repository.get_event_by_id(event_id)
-            if event is None:
+            if event is None or (context_only and not event.is_context_eligible):
                 continue
             reason = "Semantic + keyword match" if merged[event_id]["keyword"] and merged[event_id]["semantic"] else "Semantic match" if merged[event_id]["semantic"] else "Keyword match"
             results.append(self._to_search_result(event, raw_score=score, max_score=1, match_reason=reason))
@@ -296,6 +310,9 @@ class SearchService:
             embedding_status=event.embedding_status.value,
             memory_category=get_memory_category(event),
             hidden_from_default=is_hidden_from_default_memory(event),
+            is_indexable=event.is_indexable,
+            is_relationship_eligible=event.is_relationship_eligible,
+            is_context_eligible=event.is_context_eligible,
             score=normalized_score,
             match_reason=match_reason,
             related_count=relationship_service.related_count(event.id),

@@ -3,7 +3,6 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.domain.models import Event
-from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
 
 
 class ChromaVectorStore:
@@ -109,8 +108,8 @@ class ChromaVectorStore:
             "source": event.source.value,
             "type": event.type,
             "title": event.title,
-            "memory_category": get_memory_category(event),
-            "hidden_from_default": is_hidden_from_default_memory(event),
+            "memory_category": event.memory_category or "captured_event",
+            "hidden_from_default": event.hidden_from_default,
             "timestamp": event.timestamp.isoformat(),
         }
 

@@ -56,3 +56,30 @@ class UpdateProviderConfigRequest(BaseModel):
 class UpdateModelEnabledRequest(BaseModel):
     model_id: str | None = None
     enabled: bool
+
+
+class EmbeddingModelConfig(BaseModel):
+    id: str
+    provider: str
+    display_name: str
+    model_id: str
+    type: str = "local"
+    enabled: bool = True
+    configured: bool
+    available: bool
+    dimension: int | None = None
+    description: str
+    install_command: str | None = None
+
+
+class EmbeddingSettingsResponse(BaseModel):
+    embedding_enabled: bool
+    selected_embedding_model: str
+    selected_embedding_model_id: str
+    index_model_id: str | None = None
+    index_stale: bool
+    models: list[EmbeddingModelConfig]
+
+
+class UpdateSelectedEmbeddingModelRequest(BaseModel):
+    model_id: str

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import get_settings
@@ -25,6 +25,9 @@ class EventRecord(Base):
     embedding_status = Column(String, nullable=False)
     memory_category = Column(String, nullable=True, index=True)
     hidden_from_default = Column(Boolean, default=False, nullable=False)
+    is_indexable = Column(Boolean, default=True, nullable=False)
+    is_relationship_eligible = Column(Boolean, default=True, nullable=False)
+    is_context_eligible = Column(Boolean, default=True, nullable=False)
 
 
 class ChatSessionRecord(Base):
@@ -99,6 +102,39 @@ class AppSettingRecord(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class ConnectorSourceRecord(Base):
+    __tablename__ = "connector_sources"
+
+    id = Column(String, primary_key=True)
+    connector_type = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    path = Column(Text, nullable=False, index=True)
+    config_json = Column(Text, default="{}")
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    last_import_at = Column(DateTime(timezone=True), nullable=True)
+    last_import_status = Column(String, nullable=True)
+    last_import_message = Column(Text, nullable=True)
+
+
+class ImportRunRecord(Base):
+    __tablename__ = "import_runs"
+
+    id = Column(String, primary_key=True)
+    source_id = Column(String, nullable=True, index=True)
+    connector_type = Column(String, nullable=False, index=True)
+    path = Column(Text, nullable=False)
+    status = Column(String, nullable=False)
+    imported_count = Column(Integer, default=0, nullable=False)
+    skipped_count = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    message = Column(Text, default="")
+    result_json = Column(Text, default="{}")
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=False)
+
+
 def get_database_path() -> Path:
     settings = get_settings()
     return Path(settings.sqlite_path)
@@ -125,4 +161,51 @@ def get_session_factory():
 
 
 def initialize_database() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _ensure_event_policy_columns(engine)
+
+
+def _ensure_event_policy_columns(engine) -> None:
+    columns = {column["name"] for column in inspect(engine).get_columns("events")}
+    statements = []
+    if "memory_category" not in columns:
+        statements.append("ALTER TABLE events ADD COLUMN memory_category TEXT")
+    if "hidden_from_default" not in columns:
+        statements.append("ALTER TABLE events ADD COLUMN hidden_from_default BOOLEAN NOT NULL DEFAULT 0")
+    if "is_indexable" not in columns:
+        statements.append("ALTER TABLE events ADD COLUMN is_indexable BOOLEAN NOT NULL DEFAULT 1")
+    if "is_relationship_eligible" not in columns:
+        statements.append("ALTER TABLE events ADD COLUMN is_relationship_eligible BOOLEAN NOT NULL DEFAULT 1")
+    if "is_context_eligible" not in columns:
+        statements.append("ALTER TABLE events ADD COLUMN is_context_eligible BOOLEAN NOT NULL DEFAULT 1")
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text(
+                """
+                UPDATE events
+                SET memory_category = 'chat',
+                    hidden_from_default = 1,
+                    is_indexable = 0,
+                    is_relationship_eligible = 0,
+                    is_context_eligible = 0,
+                    embedding_status = 'not_required'
+                WHERE type IN ('chat_message', 'chat_response')
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE events
+                SET memory_category = COALESCE(memory_category, 'captured_event'),
+                    is_indexable = COALESCE(is_indexable, 1),
+                    is_relationship_eligible = COALESCE(is_relationship_eligible, 1),
+                    is_context_eligible = COALESCE(is_context_eligible, 1)
+                WHERE type NOT IN ('chat_message', 'chat_response')
+                """
+            )
+        )

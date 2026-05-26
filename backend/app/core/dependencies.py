@@ -1,11 +1,13 @@
 from app.core.config import get_settings
-from app.repositories.base import ChatRepository, EventRepository, PlaybookRepository, RelationshipRepository, TaskRepository
+from app.repositories.base import ChatRepository, ConnectorSourceRepository, EventRepository, PlaybookRepository, RelationshipRepository, TaskRepository
 from app.repositories.memory_chat_repository import get_memory_chat_repository
+from app.repositories.memory_connector_source_repository import get_memory_connector_source_repository
 from app.repositories.memory_event_repository import get_memory_event_repository
 from app.repositories.memory_playbook_repository import get_memory_playbook_repository
 from app.repositories.memory_relationship_repository import get_memory_relationship_repository
 from app.repositories.memory_task_repository import get_memory_task_repository
 from app.repositories.sqlite_chat_repository import SQLiteChatRepository
+from app.repositories.sqlite_connector_source_repository import SQLiteConnectorSourceRepository
 from app.repositories.sqlite_event_repository import SQLiteEventRepository
 from app.repositories.sqlite_playbook_repository import SQLitePlaybookRepository
 from app.repositories.sqlite_relationship_repository import SQLiteRelationshipRepository
@@ -16,6 +18,7 @@ _task_repository: TaskRepository | None = None
 _chat_repository: ChatRepository | None = None
 _playbook_repository: PlaybookRepository | None = None
 _relationship_repository: RelationshipRepository | None = None
+_connector_source_repository: ConnectorSourceRepository | None = None
 
 
 def use_sqlite() -> bool:
@@ -55,3 +58,10 @@ def get_relationship_repository() -> RelationshipRepository:
     if _relationship_repository is None:
         _relationship_repository = SQLiteRelationshipRepository(get_event_repository()) if use_sqlite() else get_memory_relationship_repository()
     return _relationship_repository
+
+
+def get_connector_source_repository() -> ConnectorSourceRepository:
+    global _connector_source_repository
+    if _connector_source_repository is None:
+        _connector_source_repository = SQLiteConnectorSourceRepository() if use_sqlite() else get_memory_connector_source_repository()
+    return _connector_source_repository

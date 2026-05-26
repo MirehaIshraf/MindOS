@@ -7,26 +7,38 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
 import {
+  clearConnectorSourceEvents,
+  clearFileSystemEvents,
   clearLogEvents,
+  clearGitEvents,
+  createConnectorSource,
+  deleteConnectorSource,
   getConnectors,
+  getConnectorSources,
+  getImportRuns,
   importFiles,
   importGitRepo,
   importLogs,
   previewFileImport,
   previewGitImport,
   previewLogImport,
+  runConnectorSourceImport,
+  updateConnectorSource,
 } from "../services/api";
 import type {
   Connector,
+  ConnectorSource,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
   GitImportPayload,
   GitImportResult,
   GitPreviewResult,
+  ImportRun,
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
+  ConnectorSourceUpdateRequest,
 } from "../types";
 
 const emptyForm = {
@@ -57,9 +69,28 @@ const emptyGitForm = {
 
 type GitImportForm = typeof emptyGitForm;
 
+const emptySavedSourceForm = {
+  name: "",
+  path: "",
+  recursive: true,
+  maxFiles: 100,
+  maxFileSizeKb: 256,
+  allowedExtensions: "",
+  maxLines: 1000,
+  onlyErrors: false,
+  groupSimilar: true,
+  maxCommits: 50,
+  includeDiffSummary: true,
+  includeStatus: true,
+  enabled: true,
+};
+
+type SavedSourceForm = typeof emptySavedSourceForm;
+
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
-  const [panelOpen, setPanelOpen] = useState<"files" | "logs" | "git" | null>(null);
+  const [panelOpen, setPanelOpen] = useState<"files" | "logs" | "git" | "save" | null>(null);
+  const [saveType, setSaveType] = useState<"file_system" | "logs" | "git">("file_system");
   const [form, setForm] = useState<ImportForm>(emptyForm);
   const [logForm, setLogForm] = useState<LogImportForm>(emptyLogForm);
   const [gitForm, setGitForm] = useState<GitImportForm>(emptyGitForm);
@@ -69,6 +100,11 @@ export function ConnectorsPage() {
   const [logResult, setLogResult] = useState<LogImportResult | null>(null);
   const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
   const [gitResult, setGitResult] = useState<GitImportResult | null>(null);
+  const [savedSources, setSavedSources] = useState<ConnectorSource[]>([]);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [editingSource, setEditingSource] = useState<ConnectorSource | null>(null);
+  const [importRuns, setImportRuns] = useState<ImportRun[]>([]);
+  const [saveForm, setSaveForm] = useState<SavedSourceForm>(emptySavedSourceForm);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -81,8 +117,14 @@ export function ConnectorsPage() {
     setLoading("connectors");
     setError(null);
     try {
-      const response = await getConnectors();
+      const [response, sourcesResponse, runsResponse] = await Promise.all([
+        getConnectors(),
+        getConnectorSources(),
+        getImportRuns({ limit: 20 }),
+      ]);
       setConnectors(response.connectors);
+      setSavedSources(sourcesResponse.sources);
+      setImportRuns(runsResponse.runs);
     } catch {
       setError("Could not load connectors. Backend may be offline.");
     } finally {
@@ -190,6 +232,29 @@ export function ConnectorsPage() {
     }
   }
 
+  async function handleClearGitEvents() {
+    const confirmed = window.confirm(
+      "This will remove imported Git events from MindOS memory. Other memory will not be deleted. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setLoading("clearGit");
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await clearGitEvents();
+      setGitPreview(null);
+      setGitResult(null);
+      await refreshConnectors();
+      setNotice(response.deleted_events === 0 ? "No Git events to clear." : `Cleared ${response.deleted_events} Git events.`);
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not clear Git events."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
   async function handleImport() {
     setLoading("import");
     setError(null);
@@ -206,10 +271,113 @@ export function ConnectorsPage() {
     }
   }
 
+  async function handleClearFileSystemEvents() {
+    const confirmed = window.confirm(
+      "This will remove imported file/folder events from MindOS memory. Other memory will not be deleted. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setLoading("clearFiles");
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await clearFileSystemEvents();
+      setPreview(null);
+      setResult(null);
+      await refreshConnectors();
+      setNotice(response.deleted_events === 0 ? "No file events to clear." : `Cleared ${response.deleted_events} file events.`);
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not clear file events."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  function openSavePanel(connectorType: "file_system" | "logs" | "git", source?: ConnectorSource) {
+    setSaveType(connectorType);
+    setEditingSource(source ?? null);
+    setSaveForm(sourceToForm(source, connectorType));
+    setPanelOpen("save");
+  }
+
+  async function handleSaveSource() {
+    setLoading("saveSource");
+    setError(null);
+    setNotice(null);
+    try {
+      const payload = sourcePayload(saveType, saveForm);
+      if (editingSource) {
+        await updateConnectorSource(editingSource.id, updateSourcePayload(payload));
+        setNotice("Saved source updated.");
+      } else {
+        await createConnectorSource(payload);
+        setNotice("Saved source created.");
+      }
+      setEditingSource(null);
+      setPanelOpen(null);
+      await refreshConnectors();
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not save source."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleRunSource(source: ConnectorSource) {
+    setLoading(`run:${source.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await runConnectorSourceImport(source.id);
+      setNotice(response.import_run.message);
+      await refreshConnectors();
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not re-import saved source."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleDeleteSource(source: ConnectorSource) {
+    if (!window.confirm(`Delete saved source "${source.name}"? Imported memory events will remain.`)) {
+      return;
+    }
+    setLoading(`delete:${source.id}`);
+    setError(null);
+    try {
+      await deleteConnectorSource(source.id);
+      setNotice("Saved source deleted.");
+      await refreshConnectors();
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not delete saved source."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleClearSourceEvents(source: ConnectorSource) {
+    if (!window.confirm(`Clear imported events for "${source.name}"? Other memory will not be deleted.`)) {
+      return;
+    }
+    setLoading(`clearSource:${source.id}`);
+    setError(null);
+    try {
+      const response = await clearConnectorSourceEvents(source.id);
+      setNotice(response.deleted_events === 0 ? "No events to clear for this source." : `Cleared ${response.deleted_events} events for this source.`);
+      await refreshConnectors();
+    } catch (caughtError) {
+      setError(errorMessage(caughtError, "Could not clear source events."));
+    } finally {
+      setLoading(null);
+    }
+  }
+
   const fileSystem = connectors.find((connector) => connector.name === "file_system");
   const logs = connectors.find((connector) => connector.name === "logs");
   const git = connectors.find((connector) => connector.name === "git");
   const otherConnectors = connectors.filter((connector) => !["file_system", "logs", "git"].includes(connector.name));
+  const visibleSources = sourceFilter === "all" ? savedSources : savedSources.filter((source) => source.connector_type === sourceFilter);
 
   return (
     <div className="space-y-6">
@@ -230,7 +398,18 @@ export function ConnectorsPage() {
       <div className="grid grid-cols-[1fr_420px] gap-4">
         <div className="space-y-4">
           {fileSystem ? (
-            <ConnectorCard connector={fileSystem} active actionLabel="Import Folder" onImport={() => setPanelOpen("files")} />
+            <ConnectorCard
+              connector={fileSystem}
+              active
+              actionLabel="Import Folder"
+              onImport={() => setPanelOpen("files")}
+              clearLabel="Clear File Events"
+              onClear={() => void handleClearFileSystemEvents()}
+              clearLoading={loading === "clearFiles"}
+              zeroStateLabel="No file events imported yet."
+              saveLabel="Save Folder Source"
+              onSave={() => openSavePanel("file_system")}
+            />
           ) : (
             <Card>
               <p className="text-sm text-app-muted">File System connector is unavailable.</p>
@@ -247,11 +426,24 @@ export function ConnectorsPage() {
               onClear={() => void handleClearLogEvents()}
               clearLoading={loading === "clearLogs"}
               zeroStateLabel="No log events imported yet."
+              saveLabel="Save Log Source"
+              onSave={() => openSavePanel("logs")}
             />
           ) : null}
 
           {git ? (
-            <ConnectorCard connector={git} active actionLabel="Import Repository" onImport={() => setPanelOpen("git")} />
+            <ConnectorCard
+              connector={git}
+              active
+              actionLabel="Import Repository"
+              onImport={() => setPanelOpen("git")}
+              clearLabel="Clear Git Events"
+              onClear={() => void handleClearGitEvents()}
+              clearLoading={loading === "clearGit"}
+              zeroStateLabel="No Git events imported yet."
+              saveLabel="Save Git Source"
+              onSave={() => openSavePanel("git")}
+            />
           ) : null}
 
           <div className="grid grid-cols-2 gap-4">
@@ -294,6 +486,19 @@ export function ConnectorsPage() {
             onPreview={handleGitPreview}
             onImport={handleGitImport}
           />
+        ) : panelOpen === "save" ? (
+          <SaveSourcePanel
+            connectorType={saveType}
+            form={saveForm}
+            setForm={setSaveForm}
+            editing={Boolean(editingSource)}
+            loading={loading === "saveSource"}
+            onClose={() => {
+              setPanelOpen(null);
+              setEditingSource(null);
+            }}
+            onSave={handleSaveSource}
+          />
         ) : (
           <Card className="min-h-72">
             <div className="flex h-full flex-col items-center justify-center text-center">
@@ -306,6 +511,52 @@ export function ConnectorsPage() {
           </Card>
         )}
       </div>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-app-text">Saved Sources</h2>
+            <p className="mt-2 text-sm leading-6 text-app-muted">
+              Saved sources are local paths stored in your local MindOS database. MindOS only imports them when you click Re-import. Live watching is not enabled yet.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {["all", "file_system", "logs", "git"].map((filter) => (
+              <button key={filter} type="button" onClick={() => setSourceFilter(filter)}>
+                <Badge variant={sourceFilter === filter ? "info" : "default"}>{filter === "all" ? "All" : formatConnectorType(filter)}</Badge>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {visibleSources.length === 0 ? (
+            <p className="text-sm text-app-muted">No saved sources yet.</p>
+          ) : (
+            visibleSources.map((source) => (
+              <SavedSourceCard
+                key={source.id}
+                source={source}
+                loading={loading}
+                onRun={() => void handleRunSource(source)}
+                onEdit={() => openSavePanel(source.connector_type as "file_system" | "logs" | "git", source)}
+                onDelete={() => void handleDeleteSource(source)}
+                onClear={() => void handleClearSourceEvents(source)}
+              />
+            ))
+          )}
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="text-base font-semibold text-app-text">Recent Import Runs</h2>
+        <div className="mt-4 space-y-2">
+          {importRuns.length === 0 ? (
+            <p className="text-sm text-app-muted">No import runs yet.</p>
+          ) : (
+            importRuns.map((run) => <ImportRunRow key={run.id} run={run} sources={savedSources} />)
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
@@ -315,6 +566,8 @@ function ConnectorCard({
   active = false,
   actionLabel = "Import",
   onImport,
+  saveLabel,
+  onSave,
   clearLabel,
   onClear,
   clearLoading = false,
@@ -324,12 +577,15 @@ function ConnectorCard({
   active?: boolean;
   actionLabel?: string;
   onImport?: () => void;
+  saveLabel?: string;
+  onSave?: () => void;
   clearLabel?: string;
   onClear?: () => void;
   clearLoading?: boolean;
   zeroStateLabel?: string;
 }) {
   const eventsCount = connector.events_count ?? 0;
+  const savedSourcesCount = connector.saved_sources_count ?? 0;
 
   return (
     <Card>
@@ -349,11 +605,19 @@ function ConnectorCard({
       {active ? (
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <Badge variant="info">events: {eventsCount}</Badge>
+          <Badge>saved sources: {savedSourcesCount}</Badge>
           {connector.last_event_at && eventsCount > 0 ? <Badge>last: {formatTimestamp(connector.last_event_at)}</Badge> : null}
+          {connector.last_import_at ? <Badge>last import: {formatTimestamp(connector.last_import_at)}</Badge> : null}
+          {connector.last_import_status ? <Badge>{connector.last_import_status}</Badge> : null}
           {eventsCount === 0 && zeroStateLabel ? <span className="text-xs text-app-muted">{zeroStateLabel}</span> : null}
           <Button variant="primary" onClick={onImport}>
             {actionLabel}
           </Button>
+          {onSave && saveLabel ? (
+            <Button variant="secondary" onClick={onSave}>
+              {saveLabel}
+            </Button>
+          ) : null}
           {onClear && clearLabel ? (
             <Button variant="danger" onClick={onClear} loading={clearLoading}>
               {clearLabel}
@@ -614,6 +878,237 @@ function GitImportPanel({
   );
 }
 
+function SaveSourcePanel({
+  connectorType,
+  form,
+  setForm,
+  editing,
+  loading,
+  onClose,
+  onSave,
+}: {
+  connectorType: "file_system" | "logs" | "git";
+  form: SavedSourceForm;
+  setForm: (updater: SavedSourceForm | ((current: SavedSourceForm) => SavedSourceForm)) => void;
+  editing: boolean;
+  loading: boolean;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Card className="max-h-[calc(100vh-7rem)] overflow-auto">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-app-text">{editing ? "Edit Saved Source" : `Save ${formatConnectorType(connectorType)} Source`}</h2>
+          <p className="mt-2 text-sm leading-6 text-app-muted">
+            Saved sources are local paths. MindOS only imports them when you click Re-import.
+          </p>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <LabeledInput
+          label="Name"
+          value={form.name}
+          placeholder={connectorType === "git" ? "MindOS Repo" : connectorType === "logs" ? "Auth Service Log" : "SonoSync Backend"}
+          onChange={(value) => setForm((current) => ({ ...current, name: value }))}
+        />
+        <LabeledInput
+          label={connectorType === "logs" ? "Log file path" : connectorType === "git" ? "Repository path" : "Folder path"}
+          value={form.path}
+          placeholder={connectorType === "logs" ? "C:\\Users\\YourName\\logs\\application.log" : "C:\\Users\\YourName\\Projects\\my-project"}
+          onChange={(value) => setForm((current) => ({ ...current, path: value }))}
+        />
+        <label className="flex items-center gap-3 text-sm text-app-text">
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
+            className="h-4 w-4 accent-violet-600"
+          />
+          Enabled
+        </label>
+
+        {connectorType === "file_system" ? (
+          <>
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={form.recursive}
+                onChange={(event) => setForm((current) => ({ ...current, recursive: event.target.checked }))}
+                className="h-4 w-4 accent-violet-600"
+              />
+              Recursive
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <LabeledInput
+                label="Max files"
+                type="number"
+                value={String(form.maxFiles)}
+                onChange={(value) => setForm((current) => ({ ...current, maxFiles: Number(value) }))}
+              />
+              <LabeledInput
+                label="Max file size KB"
+                type="number"
+                value={String(form.maxFileSizeKb)}
+                onChange={(value) => setForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))}
+              />
+            </div>
+            <LabeledInput
+              label="Allowed extensions"
+              value={form.allowedExtensions}
+              placeholder=".py,.ts,.tsx,.md,.json"
+              onChange={(value) => setForm((current) => ({ ...current, allowedExtensions: value }))}
+            />
+          </>
+        ) : null}
+
+        {connectorType === "logs" ? (
+          <>
+            <LabeledInput
+              label="Max lines"
+              type="number"
+              value={String(form.maxLines)}
+              onChange={(value) => setForm((current) => ({ ...current, maxLines: Number(value) }))}
+            />
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={form.onlyErrors}
+                onChange={(event) => setForm((current) => ({ ...current, onlyErrors: event.target.checked }))}
+                className="h-4 w-4 accent-violet-600"
+              />
+              Only errors
+            </label>
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={form.groupSimilar}
+                onChange={(event) => setForm((current) => ({ ...current, groupSimilar: event.target.checked }))}
+                className="h-4 w-4 accent-violet-600"
+              />
+              Group similar logs
+            </label>
+          </>
+        ) : null}
+
+        {connectorType === "git" ? (
+          <>
+            <LabeledInput
+              label="Max commits"
+              type="number"
+              value={String(form.maxCommits)}
+              onChange={(value) => setForm((current) => ({ ...current, maxCommits: Number(value) }))}
+            />
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={form.includeDiffSummary}
+                onChange={(event) => setForm((current) => ({ ...current, includeDiffSummary: event.target.checked }))}
+                className="h-4 w-4 accent-violet-600"
+              />
+              Include diff summary
+            </label>
+            <label className="flex items-center gap-3 text-sm text-app-text">
+              <input
+                type="checkbox"
+                checked={form.includeStatus}
+                onChange={(event) => setForm((current) => ({ ...current, includeStatus: event.target.checked }))}
+                className="h-4 w-4 accent-violet-600"
+              />
+              Include working tree status
+            </label>
+          </>
+        ) : null}
+
+        <div className="flex gap-3">
+          <Button variant="primary" onClick={onSave} loading={loading} disabled={!form.name.trim() || !form.path.trim()}>
+            {editing ? "Save Changes" : "Save Source"}
+          </Button>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SavedSourceCard({
+  source,
+  loading,
+  onRun,
+  onEdit,
+  onDelete,
+  onClear,
+}: {
+  source: ConnectorSource;
+  loading: string | null;
+  onRun: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-sm font-semibold text-app-text">{source.name}</h3>
+            <Badge variant="info">{formatConnectorType(source.connector_type)}</Badge>
+            <Badge variant={source.enabled ? "success" : "default"}>{source.enabled ? "enabled" : "disabled"}</Badge>
+          </div>
+          <p className="mt-2 truncate text-xs text-app-muted">{source.path}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {source.last_import_status ? <Badge>{source.last_import_status}</Badge> : <Badge>not imported yet</Badge>}
+            {source.last_import_at ? <Badge>last: {formatTimestamp(source.last_import_at)}</Badge> : null}
+          </div>
+          {source.last_import_message ? <p className="mt-2 text-xs leading-5 text-app-muted">{source.last_import_message}</p> : null}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button variant="primary" onClick={onRun} loading={loading === `run:${source.id}`}>
+          Re-import
+        </Button>
+        <Button variant="secondary" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button variant="secondary" onClick={onClear} loading={loading === `clearSource:${source.id}`}>
+          Clear Events
+        </Button>
+        <Button variant="danger" onClick={onDelete} loading={loading === `delete:${source.id}`}>
+          Delete
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ImportRunRow({ run, sources }: { run: ImportRun; sources: ConnectorSource[] }) {
+  const source = run.source_id ? sources.find((item) => item.id === run.source_id) : null;
+  return (
+    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={run.status === "success" ? "success" : run.status === "partial" ? "warning" : "danger"}>{run.status}</Badge>
+        <Badge>{formatConnectorType(run.connector_type)}</Badge>
+        <span className="text-sm font-medium text-app-text">{source?.name ?? "Direct import"}</span>
+        <span className="ml-auto text-xs text-app-muted">{formatTimestamp(run.completed_at)}</span>
+      </div>
+      <p className="mt-2 truncate text-xs text-app-muted">{run.path}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge variant="success">imported: {run.imported_count}</Badge>
+        <Badge>skipped: {run.skipped_count}</Badge>
+        <Badge variant={run.failed_count > 0 ? "danger" : "default"}>failed: {run.failed_count}</Badge>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-app-muted">{run.message}</p>
+    </div>
+  );
+}
+
 function PreviewBlock({ preview }: { preview: FilePreviewResult }) {
   return (
     <div className="mt-6 space-y-3">
@@ -688,6 +1183,7 @@ function GitPreviewBlock({ preview }: { preview: GitPreviewResult }) {
     <div className="mt-6 space-y-3">
       <div className="flex flex-wrap gap-2">
         <Badge variant="info">{preview.repo_name}</Badge>
+        {preview.repo_root ? <Badge>root: {preview.repo_root}</Badge> : null}
         <Badge>branch: {preview.current_branch ?? "detached"}</Badge>
         <Badge>commits: {preview.recent_commits.length}</Badge>
       </div>
@@ -798,6 +1294,87 @@ function toGitPayload(form: GitImportForm): GitImportPayload {
   };
 }
 
+function sourceToForm(source: ConnectorSource | undefined, connectorType: "file_system" | "logs" | "git"): SavedSourceForm {
+  if (!source) {
+    return { ...emptySavedSourceForm };
+  }
+  const config = source.config ?? {};
+  return {
+    name: source.name,
+    path: source.path,
+    recursive: booleanConfig(config.recursive, true),
+    maxFiles: numberConfig(config.max_files, 100),
+    maxFileSizeKb: numberConfig(config.max_file_size_kb, 256),
+    allowedExtensions: Array.isArray(config.allowed_extensions) ? config.allowed_extensions.join(",") : "",
+    maxLines: numberConfig(config.max_lines, 1000),
+    onlyErrors: booleanConfig(config.only_errors, false),
+    groupSimilar: booleanConfig(config.group_similar, true),
+    maxCommits: numberConfig(config.max_commits, 50),
+    includeDiffSummary: booleanConfig(config.include_diff_summary, true),
+    includeStatus: booleanConfig(config.include_status, true),
+    enabled: source.enabled,
+    ...(connectorType === "file_system" ? {} : {}),
+  };
+}
+
+function sourcePayload(connectorType: "file_system" | "logs" | "git", form: SavedSourceForm) {
+  const base = {
+    connector_type: connectorType,
+    name: form.name.trim(),
+    path: form.path.trim(),
+    enabled: form.enabled,
+  };
+
+  if (connectorType === "file_system") {
+    return {
+      ...base,
+      config: {
+        recursive: form.recursive,
+        max_files: clampNumber(form.maxFiles, 1, 1000),
+        max_file_size_kb: clampNumber(form.maxFileSizeKb, 1, 2048),
+        allowed_extensions: parseExtensions(form.allowedExtensions),
+      },
+    };
+  }
+
+  if (connectorType === "logs") {
+    return {
+      ...base,
+      config: {
+        max_lines: clampNumber(form.maxLines, 1, 10000),
+        only_errors: form.onlyErrors,
+        group_similar: form.groupSimilar,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    config: {
+      max_commits: clampNumber(form.maxCommits, 1, 500),
+      include_diff_summary: form.includeDiffSummary,
+      include_status: form.includeStatus,
+    },
+  };
+}
+
+function updateSourcePayload(payload: ReturnType<typeof sourcePayload>): ConnectorSourceUpdateRequest {
+  return {
+    name: payload.name,
+    path: payload.path,
+    config: payload.config,
+    enabled: payload.enabled,
+  };
+}
+
+function numberConfig(value: unknown, fallback: number) {
+  return typeof value === "number" ? value : fallback;
+}
+
+function booleanConfig(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function parseExtensions(value: string) {
   const extensions = value
     .split(",")
@@ -819,6 +1396,19 @@ function errorMessage(error: unknown, fallback: string) {
     return typeof detail === "string" ? detail : fallback;
   }
   return fallback;
+}
+
+function formatConnectorType(value: string) {
+  if (value === "file_system") {
+    return "File System";
+  }
+  if (value === "logs") {
+    return "Logs";
+  }
+  if (value === "git") {
+    return "Git";
+  }
+  return value;
 }
 
 function StatusMessage({ message, variant }: { message: string; variant: "success" | "warning" | "danger" }) {

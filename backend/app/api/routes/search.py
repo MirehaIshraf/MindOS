@@ -19,6 +19,7 @@ def search_events(request: SearchRequest) -> SearchResponse:
         limit=request.limit,
         include_hidden=request.include_hidden,
         search_mode=request.search_mode,
+        context_only=request.context_only,
     )
 
 

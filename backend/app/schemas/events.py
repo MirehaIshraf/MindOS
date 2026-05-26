@@ -18,6 +18,9 @@ class EventResponse(BaseModel):
     embedding_status: EmbeddingStatus
     memory_category: str
     hidden_from_default: bool
+    is_indexable: bool
+    is_relationship_eligible: bool
+    is_context_eligible: bool
     related_count: int = 0
 
 

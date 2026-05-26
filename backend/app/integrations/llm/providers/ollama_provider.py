@@ -32,7 +32,7 @@ class OllamaProvider(BaseChatProvider):
 
     def health_check(self) -> bool:
         try:
-            with httpx.Client(timeout=5) as client:
+            with httpx.Client(timeout=2.0) as client:
                 response = client.get(f"{self._base_url}/api/tags")
                 response.raise_for_status()
             return True
@@ -40,14 +40,14 @@ class OllamaProvider(BaseChatProvider):
             return False
 
     def list_models(self) -> list[str]:
-        with httpx.Client(timeout=5) as client:
+        with httpx.Client(timeout=2.0) as client:
             response = client.get(f"{self._base_url}/api/tags")
             response.raise_for_status()
             data = response.json()
         return [model["name"] for model in data.get("models", []) if isinstance(model, dict) and model.get("name")]
 
     def _with_no_think(self, messages: list[dict[str, str]], model_id: str) -> list[dict[str, str]]:
-        if not re.search(r"qwen", model_id, re.IGNORECASE):
+        if not re.search(r"qwen|deepseek-r1", model_id, re.IGNORECASE):
             return messages
         updated = [dict(message) for message in messages]
         if updated:

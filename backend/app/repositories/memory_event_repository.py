@@ -3,6 +3,7 @@ from typing import Any
 from app.domain.enums import EmbeddingStatus
 from app.domain.models import Event
 from app.repositories.base import EventRepository
+from app.services.memory_policy_service import apply_memory_policy
 
 
 class MemoryEventRepository(EventRepository):
@@ -10,7 +11,7 @@ class MemoryEventRepository(EventRepository):
         self._events: dict[str, Event] = {}
 
     def create_event(self, event_data: dict[str, Any]) -> Event:
-        event = Event(**event_data)
+        event = Event(**apply_memory_policy(event_data))
         self._events[event.id] = event
         self._try_index_event(event)
         return event
@@ -31,10 +32,15 @@ class MemoryEventRepository(EventRepository):
         events = list(self._events.values())
         if source:
             events = [event for event in events if event.source.value == source]
+        if category:
+            events = [event for event in events if event.memory_category == category]
+        if not include_hidden:
+            events = [event for event in events if not event.hidden_from_default or category == "chat"]
         return sorted(events, key=lambda event: event.timestamp, reverse=True)[:limit]
 
     def list_all_events(self, include_hidden: bool = True) -> list[Event]:
-        return list(self._events.values())
+        events = list(self._events.values())
+        return events if include_hidden else [event for event in events if not event.hidden_from_default]
 
     def count_events(self) -> int:
         return len(self._events)
@@ -63,6 +69,32 @@ class MemoryEventRepository(EventRepository):
         events = sorted(self._events.values(), key=lambda event: event.created_at)
         return events if limit is None else events[:limit]
 
+    def update_event_policy(self, event_id: str, policy: dict) -> None:
+        event = self._events.get(event_id)
+        if event is None:
+            return
+        updates = {
+            "memory_category": policy["memory_category"],
+            "hidden_from_default": policy["hidden_from_default"],
+            "is_indexable": policy["is_indexable"],
+            "is_relationship_eligible": policy["is_relationship_eligible"],
+            "is_context_eligible": policy["is_context_eligible"],
+        }
+        if not policy["is_indexable"]:
+            updates["embedding_status"] = EmbeddingStatus.not_required
+        self._events[event_id] = event.model_copy(update=updates)
+
+    def count_policy_eligibility(self) -> dict[str, int]:
+        events = list(self._events.values())
+        return {
+            "total_events": len(events),
+            "indexable_events": sum(1 for event in events if event.is_indexable),
+            "non_indexable_events": sum(1 for event in events if not event.is_indexable),
+            "relationship_eligible_events": sum(1 for event in events if event.is_relationship_eligible),
+            "context_eligible_events": sum(1 for event in events if event.is_context_eligible),
+            "hidden_events": sum(1 for event in events if event.hidden_from_default),
+        }
+
     def clear_events(self) -> None:
         self._events.clear()
 
@@ -71,6 +103,14 @@ class MemoryEventRepository(EventRepository):
         for event_id in event_ids:
             del self._events[event_id]
         return len(event_ids)
+
+    def delete_events_by_ids(self, event_ids: list[str]) -> int:
+        deleted = 0
+        for event_id in event_ids:
+            if event_id in self._events:
+                del self._events[event_id]
+                deleted += 1
+        return deleted
 
     def _try_index_event(self, event: Event) -> None:
         try:

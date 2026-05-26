@@ -5,11 +5,14 @@ from fastapi import APIRouter, HTTPException
 from app.schemas.models import (
     ChatModelsResponse,
     ModelConfig,
+    EmbeddingSettingsResponse,
     ModelSettingsResponse,
     UpdateModelEnabledRequest,
+    UpdateSelectedEmbeddingModelRequest,
     UpdateProviderConfigRequest,
     UpdateSelectedModelRequest,
 )
+from app.services.embedding_model_registry_service import embedding_model_registry_service
 from app.services.model_registry_service import model_registry_service
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -93,3 +96,16 @@ def set_model_enabled(model_id: str, request: UpdateModelEnabledRequest) -> dict
 @router.get("/providers/health")
 def get_provider_health() -> dict[str, object]:
     return model_registry_service.provider_health()
+
+
+@router.get("/embeddings", response_model=EmbeddingSettingsResponse)
+def get_embedding_models() -> EmbeddingSettingsResponse:
+    return embedding_model_registry_service.get_settings_response()
+
+
+@router.post("/embeddings/select", response_model=EmbeddingSettingsResponse)
+def select_embedding_model(request: UpdateSelectedEmbeddingModelRequest) -> EmbeddingSettingsResponse:
+    try:
+        return embedding_model_registry_service.select_model(request.model_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error

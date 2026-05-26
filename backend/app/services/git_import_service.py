@@ -14,6 +14,7 @@ from app.services.relationship_service import relationship_service
 
 GIT_TIMEOUT_SECONDS = 10
 COMMIT_SEPARATOR = "\x1f"
+FORBIDDEN_GIT_COMMANDS = {"add", "commit", "push", "pull", "checkout", "reset", "clean", "merge", "rebase"}
 
 
 class GitImportService:
@@ -27,8 +28,9 @@ class GitImportService:
         commits = self._recent_commits(repo, request.max_commits)
         status = self._status_summary(repo)
         return GitPreviewResult(
-            repo_path=str(repo),
+            repo_path=request.repo_path,
             repo_name=repo_name,
+            repo_root=str(repo),
             current_branch=branch,
             is_git_repo=True,
             recent_commits=commits,
@@ -109,6 +111,8 @@ class GitImportService:
         return Path(top_level).resolve()
 
     def _git(self, repo: Path, args: list[str]) -> str:
+        if args and args[0] in FORBIDDEN_GIT_COMMANDS:
+            raise ValueError(f"Refusing to run non-read-only git command: {args[0]}")
         command = ["git", "-C", str(repo), *args]
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS, check=False)
@@ -139,7 +143,7 @@ class GitImportService:
 
     def _status_summary(self, repo: Path) -> dict:
         output = self._git(repo, ["status", "--short"])
-        summary = {"modified": 0, "added": 0, "deleted": 0, "untracked": 0}
+        summary = {"modified": 0, "added": 0, "deleted": 0, "untracked": 0, "renamed": 0, "copied": 0, "conflicted": 0}
         changed_files: list[dict[str, str]] = []
         for line in output.splitlines():
             if not line:
@@ -154,6 +158,12 @@ class GitImportService:
     def _status_category(self, code: str) -> str:
         if code == "??":
             return "untracked"
+        if "U" in code or code in {"AA", "DD"}:
+            return "conflicted"
+        if "R" in code:
+            return "renamed"
+        if "C" in code:
+            return "copied"
         if "D" in code:
             return "deleted"
         if "A" in code:
@@ -173,9 +183,11 @@ class GitImportService:
         content = (
             f"Repository {repo_name} on branch {branch or 'detached HEAD'}. "
             f"Working tree has {status_summary['modified']} modified, {status_summary['added']} added, "
-            f"{status_summary['deleted']} deleted, {status_summary['untracked']} untracked files."
+            f"{status_summary['deleted']} deleted, {status_summary['untracked']} untracked, "
+            f"{status_summary.get('renamed', 0)} renamed, {status_summary.get('copied', 0)} copied, "
+            f"{status_summary.get('conflicted', 0)} conflicted files."
         )
-        content_hash = self._hash({"repo": str(repo), "branch": branch, "status": status_summary, "latest": latest_commit})
+        content_hash = self._hash({"repo_root": str(repo), "branch": branch, "status": status_summary, "latest": latest_commit})
         if content_hash in existing_content_hashes:
             return None
         event = self._event_repository.create_event(
@@ -186,6 +198,7 @@ class GitImportService:
                 "content": content,
                 "metadata": {
                     "repo_path": str(repo),
+                    "repo_root": str(repo),
                     "repo_name": repo_name,
                     "current_branch": branch,
                     "status_summary": status_summary,
@@ -221,6 +234,7 @@ class GitImportService:
                 "content": content,
                 "metadata": {
                     "repo_path": str(repo),
+                    "repo_root": str(repo),
                     "repo_name": repo_name,
                     "commit_hash": commit.hash,
                     "short_hash": commit.short_hash,
@@ -245,10 +259,13 @@ class GitImportService:
         changed_files: list[dict[str, str]],
         existing_content_hashes: set[str],
     ) -> str | None:
-        content_hash = self._hash({"repo": str(repo), "branch": branch, "status": status_summary, "files": changed_files})
+        content_hash = self._hash({"repo_root": str(repo), "branch": branch, "status": status_summary, "files": changed_files})
         if content_hash in existing_content_hashes:
             return None
-        grouped = {key: [item["path"] for item in changed_files if item["status"] == key] for key in ["modified", "added", "deleted", "untracked"]}
+        grouped = {
+            key: [item["path"] for item in changed_files if item["status"] == key]
+            for key in ["modified", "added", "deleted", "untracked", "renamed", "copied", "conflicted"]
+        }
         content = "\n".join(
             [f"{label.title()}:\n" + "\n".join(f"- {path}" for path in paths) for label, paths in grouped.items() if paths]
         )
@@ -260,6 +277,7 @@ class GitImportService:
                 "content": content,
                 "metadata": {
                     "repo_path": str(repo),
+                    "repo_root": str(repo),
                     "repo_name": repo_name,
                     "current_branch": branch,
                     "status_summary": status_summary,

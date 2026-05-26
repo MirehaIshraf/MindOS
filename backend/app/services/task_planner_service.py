@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any
 
@@ -58,6 +59,54 @@ Rules:
 
 PRIORITIES = {"Low", "Medium", "High", "Critical"}
 WRITE_LIKE_TASKS = {TaskType.create_jira_ticket, TaskType.draft_email, TaskType.create_pull_request}
+logger = logging.getLogger(__name__)
+TASK_PLAN_FIELDS = {
+    "task_type",
+    "confidence",
+    "title",
+    "description",
+    "priority",
+    "recipient",
+    "subject",
+    "body",
+    "repo",
+    "branch_name",
+    "commit_message",
+    "pr_title",
+    "pr_body",
+    "report_markdown",
+    "evidence",
+    "missing_fields",
+    "safety_notes",
+    "planner_model",
+    "planner_provider",
+    "planner_warning",
+    "context_stats",
+}
+
+TASK_PLAN_DEFAULTS: dict[str, Any] = {
+    "task_type": TaskType.unknown.value,
+    "confidence": 0.0,
+    "title": None,
+    "description": None,
+    "priority": None,
+    "recipient": None,
+    "subject": None,
+    "body": None,
+    "repo": None,
+    "branch_name": None,
+    "commit_message": None,
+    "pr_title": None,
+    "pr_body": None,
+    "report_markdown": None,
+    "evidence": [],
+    "missing_fields": [],
+    "safety_notes": [],
+    "planner_model": None,
+    "planner_provider": None,
+    "planner_warning": None,
+    "context_stats": None,
+}
 
 
 class TaskPlannerService:
@@ -100,6 +149,7 @@ class TaskPlannerService:
             plan = validate_plan(parse_json_plan(route_result.reply), task_type, context_package)
             warning = route_result.warning
         except Exception:
+            logger.exception("Model task planning failed; using deterministic fallback")
             plan = deterministic_plan(task_type, request.instruction, context_package)
             warning = "Model planning failed. Used deterministic fallback."
 
@@ -150,8 +200,8 @@ def parse_json_plan(text: str) -> dict[str, Any]:
 
 
 def validate_plan(raw: dict[str, Any], task_type: TaskType, context_package: ContextPackage) -> TaskPlan:
+    raw = dict(raw)
     raw["task_type"] = task_type.value
-    raw["confidence"] = max(0.0, min(float(raw.get("confidence") or 0.0), 1.0))
     priority = raw.get("priority")
     if isinstance(priority, str):
         normalized_priority = priority.strip().title()
@@ -165,8 +215,8 @@ def validate_plan(raw: dict[str, Any], task_type: TaskType, context_package: Con
         notes.append("Current execution is mock-only.")
         raw["safety_notes"] = list(dict.fromkeys(notes))
     try:
-        return TaskPlan(**raw)
-    except ValidationError:
+        return build_task_plan_safely(raw)
+    except (TypeError, ValueError, ValidationError):
         return deterministic_plan(task_type, "", context_package)
 
 
@@ -188,18 +238,65 @@ def deterministic_plan(task_type: TaskType, instruction: str, context_package: C
         "safety_notes": notes,
     }
     if task_type == TaskType.suggest_branch_name:
-        return TaskPlan(**base, branch_name=branch_name)
+        return build_task_plan_safely(base, {"branch_name": branch_name})
     if task_type == TaskType.generate_commit_message:
-        return TaskPlan(**base, commit_message=commit_message)
+        return build_task_plan_safely(base, {"commit_message": commit_message})
     if task_type == TaskType.weekly_report:
-        return TaskPlan(**base, report_markdown=build_report(context_package))
+        return build_task_plan_safely(base, {"report_markdown": build_report(context_package)})
     if task_type == TaskType.create_jira_ticket:
-        return TaskPlan(**base, title=title, description=build_description(instruction, summary), priority="Medium")
+        return build_task_plan_safely(
+            base,
+            {"title": title, "description": build_description(instruction, summary), "priority": "Medium"},
+        )
     if task_type == TaskType.draft_email:
-        return TaskPlan(**base, recipient=None, subject=title, body=build_description(instruction, summary), missing_fields=["recipient"])
+        return build_task_plan_safely(
+            base,
+            {"recipient": None, "subject": title, "body": build_description(instruction, summary), "missing_fields": ["recipient"]},
+        )
     if task_type == TaskType.create_pull_request:
-        return TaskPlan(**base, repo=None, pr_title=title, pr_body=build_description(instruction, summary), branch_name=branch_name, missing_fields=["repo"])
-    return TaskPlan(**base, missing_fields=["task_type"], safety_notes=["I could not classify this task yet."])
+        return build_task_plan_safely(
+            base,
+            {
+                "repo": None,
+                "pr_title": title,
+                "pr_body": build_description(instruction, summary),
+                "branch_name": branch_name,
+                "missing_fields": ["repo"],
+            },
+        )
+    return build_task_plan_safely(
+        base,
+        {"missing_fields": ["task_type"], "safety_notes": ["I could not classify this task yet."]},
+    )
+
+
+def build_task_plan_safely(data: dict[str, Any], overrides: dict[str, Any] | None = None) -> TaskPlan:
+    plan_data = dict(TASK_PLAN_DEFAULTS)
+    if isinstance(data, dict):
+        plan_data.update({key: value for key, value in data.items() if key in TASK_PLAN_FIELDS})
+    if overrides:
+        plan_data.update({key: value for key, value in overrides.items() if key in TASK_PLAN_FIELDS})
+
+    task_type = plan_data.get("task_type") or TaskType.unknown.value
+    plan_data["task_type"] = task_type.value if isinstance(task_type, TaskType) else str(task_type)
+    try:
+        plan_data["confidence"] = max(0.0, min(float(plan_data.get("confidence") or 0.0), 1.0))
+    except (TypeError, ValueError):
+        plan_data["confidence"] = 0.0
+
+    for key in ("evidence", "missing_fields", "safety_notes"):
+        value = plan_data.get(key)
+        if not isinstance(value, list):
+            plan_data[key] = []
+
+    plan_data["evidence"] = [
+        item if isinstance(item, dict) else {"source": "memory", "title": str(item), "reason": ""}
+        for item in plan_data["evidence"]
+        if item is not None
+    ]
+    plan_data["missing_fields"] = [str(item) for item in plan_data["missing_fields"] if item]
+    plan_data["safety_notes"] = [str(item) for item in plan_data["safety_notes"] if item]
+    return TaskPlan(**plan_data)
 
 
 def filter_evidence(evidence: list[Any], context_package: ContextPackage) -> list[dict[str, Any]]:

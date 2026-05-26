@@ -12,6 +12,14 @@ HIGH_PRIORITY_RELATIONSHIPS = {"FIXED_BY", "CAUSED_BY", "SAME_TASK", "SAME_FILE"
 MEDIUM_PRIORITY_RELATIONSHIPS = {"SAME_REPO"}
 LOW_PRIORITY_RELATIONSHIPS = {"SAME_TOPIC", "TEMPORAL_NEARBY"}
 PROFILE_DEFAULTS = {
+    "speed_chat": {
+        "direct_limit": 3,
+        "related_per_event": 0,
+        "direct_chars": 400,
+        "related_chars": 200,
+        "max_total_chars": 3000,
+        "allow_low_priority": False,
+    },
     "fast_chat": {
         "direct_limit": 4,
         "related_per_event": 1,
@@ -26,6 +34,14 @@ PROFILE_DEFAULTS = {
         "direct_chars": 1200,
         "related_chars": 700,
         "max_total_chars": 12000,
+        "allow_low_priority": True,
+    },
+    "deep_chat": {
+        "direct_limit": 8,
+        "related_per_event": 2,
+        "direct_chars": 1000,
+        "related_chars": 600,
+        "max_total_chars": 10000,
         "allow_low_priority": True,
     },
     "task": {
@@ -169,6 +185,7 @@ class ContextBuilderService:
             sources=None,
             limit=min(limit, profile_config["direct_limit"]),
             include_hidden=include_hidden,
+            context_only=True,
         )
         direct_events: list[ContextEvent] = []
         related_events: list[ContextEvent] = []
@@ -178,7 +195,7 @@ class ContextBuilderService:
 
         for result in search_response.results:
             event = self._event_repository.get_event_by_id(result.event_id)
-            if event is None:
+            if event is None or not event.is_context_eligible:
                 continue
             direct_ids.add(event.id)
             direct_events.append(
@@ -199,7 +216,7 @@ class ContextBuilderService:
             for item in related_items:
                 event = item["event"]
                 relationship = item["relationship"]
-                if event.id in direct_ids or event.id in seen_related:
+                if event.id in direct_ids or event.id in seen_related or not event.is_context_eligible:
                     continue
                 seen_related.add(event.id)
                 related_events.append(

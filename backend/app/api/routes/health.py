@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from uuid import uuid4
+
 from fastapi import APIRouter
 
 from app.core.config import get_settings
@@ -36,8 +39,11 @@ def health_check() -> dict[str, str | int]:
 @router.get("/status")
 def status() -> dict[str, object]:
     settings = get_settings()
+    warnings: list[str] = []
     payload: dict[str, object] = {
         "backend": True,
+        "status_generated_at": datetime.now(timezone.utc).isoformat(),
+        "status_request_id": uuid4().hex[:12],
         "storage": settings.storage_backend,
         "event_count": event_service.count_events(),
         "task_count": task_service.count_tasks(),
@@ -53,19 +59,79 @@ def status() -> dict[str, object]:
     }
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())
-    payload.update(model_runtime_service.get_status())
-    embedding_status = embedding_index_service.status()
+    runtime_status: dict[str, object]
+    try:
+        runtime_status = model_runtime_service.get_status()
+        payload.update(runtime_status)
+    except Exception as error:
+        warnings.append(f"Model runtime status unavailable: {error}")
+        runtime_status = {
+            "local_llm_enabled": settings.enable_local_llm,
+            "ollama_available": False,
+            "chat_model": settings.ollama_chat_model,
+            "active_llm": "fake-llm",
+            "ollama_models": [],
+        }
+        payload.update(runtime_status)
+    ollama_models = set(runtime_status.get("ollama_models", []) or [])
+    ollama_available = bool(runtime_status.get("ollama_available", False))
+    try:
+        embedding_status = embedding_index_service.status(ollama_available=ollama_available, ollama_models=ollama_models)
+    except Exception as error:
+        warnings.append(f"Embedding status unavailable: {error}")
+        embedding_status = {
+            "selected_embedding_model": settings.ollama_embed_model,
+            "selected_embedding_model_id": "",
+            "index_model": None,
+            "index_stale": False,
+            "embedding_model_available": False,
+            "chroma_available": False,
+            "indexed_count": 0,
+        }
     payload.update(
         {
             "embeddings_enabled": settings.enable_embeddings,
-            "embedding_model": settings.ollama_embed_model,
+            "embedding_model": embedding_status["selected_embedding_model"],
+            "selected_embedding_model": embedding_status["selected_embedding_model"],
+            "selected_embedding_model_id": embedding_status["selected_embedding_model_id"],
+            "embedding_index_model": embedding_status["index_model"],
+            "embedding_index_stale": embedding_status["index_stale"],
+            "embedding_model_available": embedding_status["embedding_model_available"],
             "chroma_available": embedding_status["chroma_available"],
             "chroma_indexed_count": embedding_status["indexed_count"],
             "semantic_search_default": settings.semantic_search_default,
             "search_mode": "hybrid" if settings.enable_embeddings else "keyword",
         }
     )
-    chat_models_response = model_registry_service.get_chat_models_response()
+    try:
+        chat_models_response = model_registry_service.get_chat_models_response(ollama_models=ollama_models)
+        discovered_ollama_models = sorted(ollama_models)
+        providers = model_registry_service.provider_status(ollama_available=ollama_available)
+        embedding_models_filtered_count = len(
+            [
+                model
+                for model in discovered_ollama_models
+                if any(marker in model.lower() for marker in ("embed", "embedding", "nomic-embed", "qwen3-embedding", "harrier"))
+            ]
+        )
+        local_chat_models_count = max(len(discovered_ollama_models) - embedding_models_filtered_count, 0)
+    except Exception as error:
+        warnings.append(f"Model registry status unavailable: {error}")
+        fake = model_registry_service.fake_model()
+        chat_models_response = type(
+            "ChatModelsStatusFallback",
+            (),
+            {"models": [fake], "selected_chat_model": fake.id, "warning": "Model registry unavailable. Using fallback."},
+        )()
+        discovered_ollama_models = []
+        providers = {
+            "ollama": {"configured": False, "enabled": True, "has_api_key": False, "available": False},
+            "openai": {"configured": False, "enabled": False, "has_api_key": False, "available": None},
+            "anthropic": {"configured": False, "enabled": False, "has_api_key": False, "available": None},
+            "kimi": {"configured": False, "enabled": False, "has_api_key": False, "available": None},
+        }
+        local_chat_models_count = 0
+        embedding_models_filtered_count = 0
     selected_model = next(
         (model for model in chat_models_response.models if model.id == chat_models_response.selected_chat_model),
         model_registry_service.fake_model(),
@@ -84,10 +150,14 @@ def status() -> dict[str, object]:
                 }
                 for model in chat_models_response.models
             ],
-            "providers": model_registry_service.provider_status(),
+            "providers": providers,
             "active_provider": selected_model.provider if selected_model else "fake",
             "active_llm": selected_model.model_id if selected_model else "fake-llm",
             "model_warning": chat_models_response.warning,
+            "discovered_ollama_models": discovered_ollama_models,
+            "local_chat_models_count": local_chat_models_count,
+            "embedding_models_filtered_count": embedding_models_filtered_count,
+            "status_warnings": warnings,
         }
     )
     return payload

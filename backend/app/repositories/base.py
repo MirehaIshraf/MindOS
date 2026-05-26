@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import ChatSession, ChatStoredMessage, Event, Playbook, Relationship, TaskLog
+from app.domain.models import ChatSession, ChatStoredMessage, ConnectorSource, Event, ImportRun, Playbook, Relationship, TaskLog
 
 
 class EventRepository(ABC):
@@ -51,11 +51,23 @@ class EventRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_event_policy(self, event_id: str, policy: dict) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_policy_eligibility(self) -> dict[str, int]:
+        raise NotImplementedError
+
+    @abstractmethod
     def clear_events(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
     def delete_events_by_source(self, source: str) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_events_by_ids(self, event_ids: list[str]) -> int:
         raise NotImplementedError
 
 
@@ -222,4 +234,59 @@ class RelationshipRepository(ABC):
 
     @abstractmethod
     def count_by_type(self) -> dict[str, int]:
+        raise NotImplementedError
+
+
+class ConnectorSourceRepository(ABC):
+    @abstractmethod
+    def create_source(self, data: dict) -> ConnectorSource:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_source(self, source_id: str, data: dict) -> ConnectorSource:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_source(self, source_id: str) -> ConnectorSource | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_sources(self, connector_type: str | None = None) -> list[ConnectorSource]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_source(self, source_id: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_last_import(self, source_id: str, status: str, message: str, completed_at) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def create_import_run(self, data: dict) -> ImportRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_import_runs(
+        self,
+        source_id: str | None = None,
+        connector_type: str | None = None,
+        limit: int = 20,
+    ) -> list[ImportRun]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_sources(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_import_runs(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear_import_runs(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear_sources(self) -> int:
         raise NotImplementedError

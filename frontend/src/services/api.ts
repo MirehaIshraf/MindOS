@@ -10,10 +10,18 @@ import type {
   ChatResponse,
   ChatSessionsResponse,
   ContextPackage,
+  ClearAllDevDataResponse,
+  ClearFileSystemEventsResponse,
   ClearLogEventsResponse,
+  ClearGitEventsResponse,
   ConnectorListResponse,
+  ConnectorSource,
+  ConnectorSourceCreateRequest,
+  ConnectorSourcesResponse,
+  ConnectorSourceUpdateRequest,
   DevState,
   EmbeddingReindexResponse,
+  EmbeddingSettingsResponse,
   EmbeddingStatusResponse,
   FileImportPayload,
   FileImportResult,
@@ -24,6 +32,7 @@ import type {
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
+  ImportRunsResponse,
   ModelConfig,
   ModelSettingsResponse,
   IngestEventRequest,
@@ -31,6 +40,7 @@ import type {
   MemoryEvent,
   RelatedEventsResponse,
   RecentEventsResponse,
+  RunConnectorSourceImportResponse,
   SearchResponse,
   SearchStatsResponse,
   SeedSampleEventsResponse,
@@ -126,6 +136,20 @@ export async function clearChats(): Promise<{ status: "cleared" }> {
   return response.data;
 }
 
+export async function clearAllDevData(options: {
+  clear_saved_sources?: boolean;
+  clear_model_settings?: boolean;
+} = {}): Promise<ClearAllDevDataResponse> {
+  const response = await api.delete<ClearAllDevDataResponse>("/dev/clear-all", {
+    data: {
+      clear_saved_sources: options.clear_saved_sources ?? false,
+      clear_model_settings: options.clear_model_settings ?? false,
+    },
+    timeout: 30000,
+  });
+  return response.data;
+}
+
 export async function getDevState(): Promise<DevState> {
   const response = await api.get<DevState>("/dev/state");
   return response.data;
@@ -179,6 +203,16 @@ export async function rebuildRelationships(): Promise<{ status: string; created:
 
 export async function clearRelationships(): Promise<{ status: "cleared" }> {
   const response = await api.delete<{ status: "cleared" }>("/dev/clear-relationships");
+  return response.data;
+}
+
+export async function applyMemoryPolicy(): Promise<{ status: string; updated: number; counts: Record<string, number> }> {
+  const response = await api.post<{ status: string; updated: number; counts: Record<string, number> }>("/dev/apply-memory-policy");
+  return response.data;
+}
+
+export async function cleanMemoryIndexes(): Promise<Record<string, unknown>> {
+  const response = await api.post<Record<string, unknown>>("/dev/clean-memory-indexes", {}, { timeout: 130000 });
   return response.data;
 }
 
@@ -267,6 +301,16 @@ export async function getProviderHealth(): Promise<Record<string, unknown>> {
 
 export async function getEmbeddingStatus(): Promise<EmbeddingStatusResponse> {
   const response = await api.get<EmbeddingStatusResponse>("/embeddings/status", { timeout: 30000 });
+  return response.data;
+}
+
+export async function getEmbeddingModels(): Promise<EmbeddingSettingsResponse> {
+  const response = await api.get<EmbeddingSettingsResponse>("/models/embeddings", { timeout: 30000 });
+  return response.data;
+}
+
+export async function selectEmbeddingModel(modelId: string): Promise<EmbeddingSettingsResponse> {
+  const response = await api.post<EmbeddingSettingsResponse>("/models/embeddings/select", { model_id: modelId }, { timeout: 30000 });
   return response.data;
 }
 
@@ -371,6 +415,43 @@ export async function getConnectors(): Promise<ConnectorListResponse> {
   return response.data;
 }
 
+export async function getConnectorSources(connectorType?: string): Promise<ConnectorSourcesResponse> {
+  const response = await api.get<ConnectorSourcesResponse>("/connectors/sources", {
+    params: { connector_type: connectorType || undefined },
+  });
+  return response.data;
+}
+
+export async function createConnectorSource(payload: ConnectorSourceCreateRequest): Promise<ConnectorSource> {
+  const response = await api.post<ConnectorSource>("/connectors/sources", payload);
+  return response.data;
+}
+
+export async function updateConnectorSource(sourceId: string, payload: ConnectorSourceUpdateRequest): Promise<ConnectorSource> {
+  const response = await api.put<ConnectorSource>(`/connectors/sources/${sourceId}`, payload);
+  return response.data;
+}
+
+export async function deleteConnectorSource(sourceId: string): Promise<{ status: string }> {
+  const response = await api.delete<{ status: string }>(`/connectors/sources/${sourceId}`);
+  return response.data;
+}
+
+export async function runConnectorSourceImport(sourceId: string): Promise<RunConnectorSourceImportResponse> {
+  const response = await api.post<RunConnectorSourceImportResponse>(`/connectors/sources/${sourceId}/import`, {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function getImportRuns(params: { source_id?: string; connector_type?: string; limit?: number } = {}): Promise<ImportRunsResponse> {
+  const response = await api.get<ImportRunsResponse>("/connectors/import-runs", { params });
+  return response.data;
+}
+
+export async function clearConnectorSourceEvents(sourceId: string): Promise<{ status: string; deleted_events: number; deleted_relationships: number }> {
+  const response = await api.delete<{ status: string; deleted_events: number; deleted_relationships: number }>(`/connectors/sources/${sourceId}/events`);
+  return response.data;
+}
+
 export async function previewFileImport(payload: FileImportPayload): Promise<FilePreviewResult> {
   const response = await api.post<FilePreviewResult>("/connectors/file-system/preview", payload);
   return response.data;
@@ -393,6 +474,16 @@ export async function importLogs(payload: LogImportPayload): Promise<LogImportRe
 
 export async function clearLogEvents(): Promise<ClearLogEventsResponse> {
   const response = await api.delete<ClearLogEventsResponse>("/connectors/logs/events");
+  return response.data;
+}
+
+export async function clearFileSystemEvents(): Promise<ClearFileSystemEventsResponse> {
+  const response = await api.delete<ClearFileSystemEventsResponse>("/connectors/file-system/events");
+  return response.data;
+}
+
+export async function clearGitEvents(): Promise<ClearGitEventsResponse> {
+  const response = await api.delete<ClearGitEventsResponse>("/connectors/git/events");
   return response.data;
 }
 

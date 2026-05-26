@@ -7,7 +7,7 @@ from app.domain.enums import EmbeddingStatus, EventSource
 from app.domain.models import Event
 from app.repositories.base import EventRepository
 from app.repositories.sqlite_utils import dumps_json, loads_json
-from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
+from app.services.memory_policy_service import apply_memory_policy
 
 
 class SQLiteEventRepository(EventRepository):
@@ -16,7 +16,7 @@ class SQLiteEventRepository(EventRepository):
         self._session_factory = get_session_factory()
 
     def create_event(self, event_data: dict[str, Any]) -> Event:
-        event = Event(**event_data)
+        event = Event(**apply_memory_policy(event_data))
         with self._session_factory() as session:
             session.add(self._to_record(event))
             session.commit()
@@ -24,7 +24,7 @@ class SQLiteEventRepository(EventRepository):
         return event
 
     def create_events(self, list_of_event_data: list[dict[str, Any]]) -> list[Event]:
-        events = [Event(**event_data) for event_data in list_of_event_data]
+        events = [Event(**apply_memory_policy(event_data)) for event_data in list_of_event_data]
         with self._session_factory() as session:
             session.add_all([self._to_record(event) for event in events])
             session.commit()
@@ -59,7 +59,7 @@ class SQLiteEventRepository(EventRepository):
             events = [self._to_event(record) for record in records]
         if include_hidden:
             return events
-        return [event for event in events if not is_hidden_from_default_memory(event)]
+        return [event for event in events if not event.hidden_from_default]
 
     def count_events(self) -> int:
         with self._session_factory() as session:
@@ -91,6 +91,31 @@ class SQLiteEventRepository(EventRepository):
             records = session.scalars(statement).all()
             return [self._to_event(record) for record in records]
 
+    def update_event_policy(self, event_id: str, policy: dict) -> None:
+        with self._session_factory() as session:
+            record = session.get(EventRecord, event_id)
+            if record is None:
+                return
+            record.memory_category = str(policy["memory_category"])
+            record.hidden_from_default = bool(policy["hidden_from_default"])
+            record.is_indexable = bool(policy["is_indexable"])
+            record.is_relationship_eligible = bool(policy["is_relationship_eligible"])
+            record.is_context_eligible = bool(policy["is_context_eligible"])
+            if not record.is_indexable:
+                record.embedding_status = EmbeddingStatus.not_required.value
+            session.commit()
+
+    def count_policy_eligibility(self) -> dict[str, int]:
+        events = self.list_all_events(include_hidden=True)
+        return {
+            "total_events": len(events),
+            "indexable_events": sum(1 for event in events if event.is_indexable),
+            "non_indexable_events": sum(1 for event in events if not event.is_indexable),
+            "relationship_eligible_events": sum(1 for event in events if event.is_relationship_eligible),
+            "context_eligible_events": sum(1 for event in events if event.is_context_eligible),
+            "hidden_events": sum(1 for event in events if event.hidden_from_default),
+        }
+
     def clear_events(self) -> None:
         with self._session_factory() as session:
             session.execute(delete(EventRecord))
@@ -99,6 +124,14 @@ class SQLiteEventRepository(EventRepository):
     def delete_events_by_source(self, source: str) -> int:
         with self._session_factory() as session:
             result = session.execute(delete(EventRecord).where(EventRecord.source == source))
+            session.commit()
+            return int(result.rowcount or 0)
+
+    def delete_events_by_ids(self, event_ids: list[str]) -> int:
+        if not event_ids:
+            return 0
+        with self._session_factory() as session:
+            result = session.execute(delete(EventRecord).where(EventRecord.id.in_(event_ids)))
             session.commit()
             return int(result.rowcount or 0)
 
@@ -111,8 +144,6 @@ class SQLiteEventRepository(EventRepository):
             pass
 
     def _to_record(self, event: Event) -> EventRecord:
-        category = get_memory_category(event)
-        hidden = is_hidden_from_default_memory(event)
         return EventRecord(
             id=event.id,
             source=event.source.value,
@@ -123,8 +154,11 @@ class SQLiteEventRepository(EventRepository):
             timestamp=event.timestamp,
             created_at=event.created_at,
             embedding_status=event.embedding_status.value,
-            memory_category=category,
-            hidden_from_default=hidden,
+            memory_category=event.memory_category,
+            hidden_from_default=event.hidden_from_default,
+            is_indexable=event.is_indexable,
+            is_relationship_eligible=event.is_relationship_eligible,
+            is_context_eligible=event.is_context_eligible,
         )
 
     def _to_event(self, record: EventRecord) -> Event:
@@ -138,6 +172,11 @@ class SQLiteEventRepository(EventRepository):
             timestamp=record.timestamp,
             created_at=record.created_at,
             embedding_status=EmbeddingStatus(record.embedding_status),
+            memory_category=record.memory_category,
+            hidden_from_default=bool(record.hidden_from_default),
+            is_indexable=bool(record.is_indexable),
+            is_relationship_eligible=bool(record.is_relationship_eligible),
+            is_context_eligible=bool(record.is_context_eligible),
         )
 
     def _matches_filters(
@@ -150,9 +189,9 @@ class SQLiteEventRepository(EventRepository):
     ) -> bool:
         if source and event.source.value != source:
             return False
-        event_category = get_memory_category(event)
+        event_category = event.memory_category
         if category and event_category != category:
             return False
-        if is_hidden_from_default_memory(event) and not include_hidden:
+        if event.hidden_from_default and not include_hidden:
             return category == "chat"
         return True

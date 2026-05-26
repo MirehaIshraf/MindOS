@@ -18,7 +18,7 @@ class ModelRuntimeService:
 
     def list_models(self) -> list[str]:
         try:
-            with httpx.Client(timeout=5) as client:
+            with httpx.Client(timeout=2.0) as client:
                 response = client.get(f"{self._base_url()}/api/tags")
                 response.raise_for_status()
                 data = response.json()
@@ -50,13 +50,12 @@ class ModelRuntimeService:
         models: list[str] = []
         ollama_available = False
         model_available = False
-        if self._settings.enable_local_llm:
-            try:
-                models = self.list_models()
-                ollama_available = True
-                model_available = self._settings.ollama_chat_model in models
-            except RuntimeError:
-                models = []
+        try:
+            models = self.list_models()
+            ollama_available = True
+            model_available = self._settings.ollama_chat_model in models
+        except RuntimeError:
+            models = []
         return {
             "local_llm_enabled": self._settings.enable_local_llm,
             "ollama_available": ollama_available,

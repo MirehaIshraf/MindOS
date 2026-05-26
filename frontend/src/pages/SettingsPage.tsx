@@ -6,18 +6,30 @@ import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
-import { getEmbeddingStatus, getErrorMessage, getModelSettings, selectChatModel, setModelEnabled, updateProviderConfig } from "../services/api";
-import type { EmbeddingStatusResponse, ModelConfig, ModelProvider, ModelSettingsResponse } from "../types";
+import {
+  getEmbeddingModels,
+  getEmbeddingStatus,
+  getErrorMessage,
+  getModelSettings,
+  reindexEmbeddings,
+  selectChatModel,
+  selectEmbeddingModel,
+  setModelEnabled,
+  updateProviderConfig,
+} from "../services/api";
+import type { EmbeddingSettingsResponse, EmbeddingStatusResponse, ModelConfig, ModelProvider, ModelSettingsResponse } from "../types";
 
-const installCommands: Record<string, string> = {
-  "ollama-llama3.2": "ollama pull llama3.2",
-  "ollama-qwen3": "ollama pull qwen3:8b",
-  "ollama-mistral": "ollama pull mistral",
-};
+const recommendedLocalModels = [
+  { modelId: "llama3.2:1b", label: "Llama 3.2 1B Local", command: "ollama pull llama3.2:1b" },
+  { modelId: "qwen3.5:4b", label: "Qwen 3.5 4B Local", command: "ollama pull qwen3.5:4b" },
+  { modelId: "qwen3:8b", label: "Qwen 3 8B Local", command: "ollama pull qwen3:8b" },
+  { modelId: "mistral", label: "Mistral Local", command: "ollama pull mistral" },
+];
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettingsResponse | null>(null);
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
+  const [embeddingSettings, setEmbeddingSettings] = useState<EmbeddingSettingsResponse | null>(null);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -32,16 +44,19 @@ export function SettingsPage() {
     () => settings?.models.filter((model) => model.enabled && model.configured) ?? [],
     [settings],
   );
-  const localModels = settings?.models.filter((model) => model.type === "local") ?? [];
+  const localModels = settings?.models.filter((model) => model.provider === "ollama" && model.available) ?? [];
+  const installedLocalModelIds = new Set(localModels.map((model) => model.model_id).concat(localModels.map((model) => model.model_id.replace(":latest", ""))));
+  const missingRecommendedModels = recommendedLocalModels.filter((model) => !installedLocalModelIds.has(model.modelId) && !installedLocalModelIds.has(model.modelId.replace(":latest", "")));
   const cloudProviders = settings?.providers.filter((provider) => provider.type === "cloud") ?? [];
 
   async function refreshSettings() {
     setLoadingAction("refresh");
     setError(null);
     try {
-      const [modelSettings, embeddings] = await Promise.all([getModelSettings(), getEmbeddingStatus()]);
+      const [modelSettings, embeddings, embeddingModels] = await Promise.all([getModelSettings(), getEmbeddingStatus(), getEmbeddingModels()]);
       setSettings(modelSettings);
       setEmbeddingStatus(embeddings);
+      setEmbeddingSettings(embeddingModels);
     } catch (caughtError) {
       console.error("SettingsPage failed to load model settings", caughtError);
       setError(getErrorMessage(caughtError));
@@ -107,6 +122,37 @@ export function SettingsPage() {
     }
   }
 
+  async function handleSelectEmbeddingModel(modelId: string) {
+    setLoadingAction("selectEmbedding");
+    setError(null);
+    setMessage(null);
+    try {
+      setEmbeddingSettings(await selectEmbeddingModel(modelId));
+      setEmbeddingStatus(await getEmbeddingStatus());
+      setMessage("Embedding model selected. Reindex memory to use it.");
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleReindexEmbeddings() {
+    setLoadingAction("reindexEmbeddings");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await reindexEmbeddings();
+      setEmbeddingStatus(await getEmbeddingStatus());
+      setEmbeddingSettings(await getEmbeddingModels());
+      setMessage(`Reindexed ${response.indexed} memories. Failed: ${response.failed}.`);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -150,24 +196,25 @@ export function SettingsPage() {
       </Card>
 
       <section className="space-y-4">
-        <SectionTitle icon={<Cpu size={18} />} title="Local Models" />
+        <SectionTitle icon={<Cpu size={18} />} title="Installed Local Models" />
         <div className="grid gap-4 lg:grid-cols-3">
+          {localModels.length === 0 ? (
+            <Card>
+              <p className="text-sm text-app-muted">No installed Ollama chat models were discovered. Start Ollama manually, then refresh.</p>
+            </Card>
+          ) : null}
           {localModels.map((model) => (
             <Card key={model.id}>
               <ModelCardHeader model={model} />
               <p className="mt-3 text-sm leading-6 text-app-muted">{model.description}</p>
               <div className="mt-4 space-y-2 text-sm">
                 <Row label="model id" value={model.model_id} />
-                <Row label="status" value={model.configured ? "Available in Ollama" : "Not installed"} tone={model.configured ? "success" : "warning"} />
+                <Row label="status" value="Available in Ollama" tone="success" />
+                <Row label="profile" value={model.default_context_profile} />
               </div>
-              {!model.configured ? (
-                <p className="mt-4 rounded-md border border-app-border bg-zinc-950 px-3 py-2 font-mono text-xs text-app-muted">
-                  {installCommands[model.id]}
-                </p>
-              ) : null}
               <ToggleRow
                 checked={model.enabled}
-                disabled={!model.configured || loadingAction === model.id}
+                disabled={loadingAction === model.id}
                 label="Enable in Chat"
                 onChange={(enabled) => void handleToggleModel(model, enabled)}
               />
@@ -175,6 +222,28 @@ export function SettingsPage() {
           ))}
         </div>
       </section>
+
+      {missingRecommendedModels.length > 0 ? (
+        <section className="space-y-4">
+          <SectionTitle icon={<Cpu size={18} />} title="Recommended Local Models" />
+          <div className="grid gap-4 lg:grid-cols-4">
+            {missingRecommendedModels.map((model) => (
+              <Card key={model.modelId}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-app-text">{model.label}</h3>
+                    <p className="mt-2 text-xs text-app-muted">Not installed</p>
+                  </div>
+                  <Badge variant="default">optional</Badge>
+                </div>
+                <p className="mt-4 rounded-md border border-app-border bg-zinc-950 px-3 py-2 font-mono text-xs text-app-muted">
+                  {model.command}
+                </p>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <SectionTitle icon={<Cloud size={18} />} title="Cloud Models" />
@@ -202,15 +271,52 @@ export function SettingsPage() {
         <SectionHeader icon={<DatabaseZap size={18} />} title="Memory Search" />
         <div className="mt-4 space-y-3 text-sm">
           <Row label="semantic search" value={embeddingStatus?.enabled ? "enabled" : "disabled"} tone={embeddingStatus?.enabled ? "success" : "warning"} />
-          <Row label="embedding model" value={embeddingStatus?.embedding_model ?? "nomic-embed-text"} />
+          <Row label="selected model" value={embeddingSettings?.selected_embedding_model ?? embeddingStatus?.embedding_model ?? "nomic-embed-text"} />
+          <Row label="index model" value={embeddingSettings?.index_model_id ?? embeddingStatus?.index_model ?? "none"} />
+          <Row label="reindex required" value={embeddingSettings?.index_stale || embeddingStatus?.index_stale ? "yes" : "no"} tone={embeddingSettings?.index_stale || embeddingStatus?.index_stale ? "warning" : "success"} />
           <Row label="Chroma" value={embeddingStatus?.chroma_available ? "available" : "unavailable"} tone={embeddingStatus?.chroma_available ? "success" : "warning"} />
           <Row label="indexed memories" value={String(embeddingStatus?.indexed_count ?? 0)} />
         </div>
+        {embeddingSettings?.index_stale || embeddingStatus?.index_stale ? (
+          <p className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            Embedding model changed. Reindex memory to use this model.
+          </p>
+        ) : null}
+        <div className="mt-5 grid gap-3 lg:grid-cols-3">
+          {embeddingSettings?.models.map((model) => (
+            <div key={model.id} className="rounded-md border border-app-border bg-zinc-950 px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-app-text">{model.display_name}</p>
+                  <p className="mt-1 text-xs text-app-muted">{model.model_id}</p>
+                </div>
+                <Badge variant={model.available ? "success" : "default"}>{model.available ? "available" : "not installed"}</Badge>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-app-muted">{model.description}</p>
+              {model.install_command && !model.available ? (
+                <p className="mt-3 rounded-md border border-app-border bg-black/20 px-2 py-2 font-mono text-xs text-app-muted">
+                  {model.install_command}
+                </p>
+              ) : null}
+              <Button
+                className="mt-3"
+                variant={embeddingSettings.selected_embedding_model_id === model.id ? "secondary" : "primary"}
+                disabled={!model.available || embeddingSettings.selected_embedding_model_id === model.id}
+                loading={loadingAction === "selectEmbedding"}
+                onClick={() => void handleSelectEmbeddingModel(model.id)}
+              >
+                {embeddingSettings.selected_embedding_model_id === model.id ? "Selected" : "Select"}
+              </Button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5">
+          <Button variant="primary" onClick={handleReindexEmbeddings} loading={loadingAction === "reindexEmbeddings"}>
+            Reindex Now
+          </Button>
+        </div>
         <p className="mt-4 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm leading-6 text-violet-100">
           Semantic search uses local Ollama embeddings. Memory content stays on this machine.
-        </p>
-        <p className="mt-3 rounded-md border border-app-border bg-zinc-950 px-3 py-2 font-mono text-xs text-app-muted">
-          ollama pull nomic-embed-text
         </p>
         <p className="mt-3 text-xs leading-5 text-app-muted">
           To enable semantic search, set ENABLE_EMBEDDINGS=true in backend/.env and restart the backend.
@@ -322,9 +428,26 @@ function ModelCardHeader({ model }: { model: ModelConfig }) {
         <h3 className="text-base font-semibold text-app-text">{model.display_name}</h3>
         <p className="mt-1 text-xs text-app-muted">{model.privacy_level === "local_private" ? "Local/private" : "Cloud/external"}</p>
       </div>
-      <Badge variant={model.enabled && model.configured ? "success" : "default"}>{model.enabled && model.configured ? "enabled" : "off"}</Badge>
+      <div className="flex flex-col items-end gap-2">
+        <Badge variant={model.enabled && model.configured ? "success" : "default"}>{model.enabled && model.configured ? "enabled" : "off"}</Badge>
+        <Badge variant="info">{localModelBadge(model.model_id)}</Badge>
+      </div>
     </div>
   );
+}
+
+function localModelBadge(modelId: string) {
+  const normalized = modelId.toLowerCase();
+  if (normalized.includes("llama3.2:1b")) {
+    return "Speed Mode";
+  }
+  if (normalized.includes("qwen3.5:4b")) {
+    return "Balanced";
+  }
+  if (normalized.includes("qwen3:8b") || normalized.includes("deepseek-r1")) {
+    return "Reasoning";
+  }
+  return "Local";
 }
 
 function PrivacyBadge({ model }: { model?: ModelConfig }) {

@@ -11,6 +11,7 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
     include_hidden: bool = True
     search_mode: str | None = "auto"
+    context_only: bool = False
 
     @field_validator("query")
     @classmethod
@@ -32,6 +33,9 @@ class SearchResult(BaseModel):
     embedding_status: str
     memory_category: str
     hidden_from_default: bool
+    is_indexable: bool
+    is_relationship_eligible: bool
+    is_context_eligible: bool
     score: float
     match_reason: str
     related_count: int = 0

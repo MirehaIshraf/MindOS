@@ -12,6 +12,9 @@ export type BackendHealth = {
 };
 
 export type ModelRuntimeStatus = {
+  status_generated_at?: string;
+  status_request_id?: string;
+  status_warnings?: string[];
   local_llm_enabled: boolean;
   ollama_available: boolean;
   chat_model: string;
@@ -30,9 +33,17 @@ export type ModelRuntimeStatus = {
   model_warning?: string | null;
   embeddings_enabled?: boolean;
   embedding_model?: string;
+  selected_embedding_model?: string;
+  selected_embedding_model_id?: string;
+  embedding_index_model?: string | null;
+  embedding_index_stale?: boolean;
+  embedding_model_available?: boolean;
   chroma_available?: boolean;
   chroma_indexed_count?: number;
   semantic_search_default?: boolean;
+  discovered_ollama_models?: string[];
+  local_chat_models_count?: number;
+  embedding_models_filtered_count?: number;
 };
 
 export type BackendStatus = ModelRuntimeStatus & {
@@ -76,6 +87,9 @@ export type MemoryEvent = {
   embedding_status: "not_required" | "pending" | "indexed" | "failed";
   memory_category: string;
   hidden_from_default: boolean;
+  is_indexable: boolean;
+  is_relationship_eligible: boolean;
+  is_context_eligible: boolean;
   related_count?: number;
 };
 
@@ -105,6 +119,8 @@ export type DevState = {
   file_system_event_count?: number;
   logs_event_count?: number;
   git_event_count?: number;
+  saved_sources_count?: number;
+  import_runs_count?: number;
   task_count: number;
   chat_session_count: number;
   chat_message_count: number;
@@ -112,6 +128,7 @@ export type DevState = {
   relationships_by_type?: Record<string, number>;
   events_by_source: Record<string, number>;
   events_by_category: Record<string, number>;
+  memory_policy?: Record<string, number>;
   local_llm_enabled?: boolean;
   ollama_available?: boolean;
   chat_model?: string;
@@ -146,6 +163,9 @@ export type SearchResult = {
   embedding_status: string;
   memory_category: string;
   hidden_from_default: boolean;
+  is_indexable: boolean;
+  is_relationship_eligible: boolean;
+  is_context_eligible: boolean;
   score: number;
   match_reason: string;
   related_count: number;
@@ -312,6 +332,29 @@ export type ModelSettingsResponse = {
   selected_chat_model: string;
 };
 
+export type EmbeddingModelConfig = {
+  id: string;
+  provider: string;
+  display_name: string;
+  model_id: string;
+  type: "local" | string;
+  enabled: boolean;
+  configured: boolean;
+  available: boolean;
+  dimension?: number | null;
+  description: string;
+  install_command?: string | null;
+};
+
+export type EmbeddingSettingsResponse = {
+  embedding_enabled: boolean;
+  selected_embedding_model: string;
+  selected_embedding_model_id: string;
+  index_model_id?: string | null;
+  index_stale: boolean;
+  models: EmbeddingModelConfig[];
+};
+
 export type ChatModelsResponse = {
   models: ModelConfig[];
   selected_chat_model: string;
@@ -397,10 +440,73 @@ export type Connector = {
   last_event_at?: string | null;
   supports_manual_import?: boolean | null;
   supports_live_watch?: boolean | null;
+  saved_sources_count?: number | null;
+  last_import_at?: string | null;
+  last_import_status?: string | null;
 };
 
 export type ConnectorListResponse = {
   connectors: Connector[];
+};
+
+export type ConnectorSource = {
+  id: string;
+  connector_type: "file_system" | "logs" | "git" | string;
+  name: string;
+  path: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_import_at?: string | null;
+  last_import_status?: string | null;
+  last_import_message?: string | null;
+};
+
+export type ConnectorSourcesResponse = {
+  sources: ConnectorSource[];
+  total: number;
+};
+
+export type ConnectorSourceCreateRequest = {
+  connector_type: string;
+  name: string;
+  path: string;
+  config?: Record<string, unknown>;
+  enabled?: boolean;
+};
+
+export type ConnectorSourceUpdateRequest = {
+  name?: string | null;
+  path?: string | null;
+  config?: Record<string, unknown> | null;
+  enabled?: boolean | null;
+};
+
+export type ImportRun = {
+  id: string;
+  source_id?: string | null;
+  connector_type: string;
+  path: string;
+  status: string;
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  message: string;
+  result_json: Record<string, unknown>;
+  started_at: string;
+  completed_at: string;
+};
+
+export type ImportRunsResponse = {
+  runs: ImportRun[];
+  total: number;
+};
+
+export type RunConnectorSourceImportResponse = {
+  source: ConnectorSource;
+  import_run: ImportRun;
+  result: Record<string, unknown>;
 };
 
 export type FileImportPayload = {
@@ -464,6 +570,34 @@ export type ClearLogEventsResponse = {
   status: "cleared";
   deleted_events: number;
   deleted_relationships: number;
+  deleted_vectors?: number | null;
+};
+
+export type ClearFileSystemEventsResponse = {
+  status: "cleared";
+  deleted_events: number;
+  deleted_relationships: number;
+  deleted_vectors?: number | null;
+};
+
+export type ClearGitEventsResponse = {
+  status: "cleared";
+  deleted_events: number;
+  deleted_relationships: number;
+  deleted_vectors?: number | null;
+};
+
+export type ClearAllDevDataResponse = {
+  status: "cleared";
+  events_deleted: number;
+  relationships_deleted: number;
+  tasks_deleted: number;
+  chats_deleted: number;
+  vectors_deleted: number | null;
+  import_runs_deleted: number;
+  saved_sources_deleted: number;
+  model_settings_cleared: boolean;
+  warnings?: string[];
 };
 
 export type GitImportPayload = {
@@ -484,6 +618,7 @@ export type GitCommitPreview = {
 export type GitPreviewResult = {
   repo_path: string;
   repo_name: string;
+  repo_root?: string | null;
   current_branch: string | null;
   is_git_repo: boolean;
   recent_commits: GitCommitPreview[];
@@ -533,6 +668,9 @@ export type ContextEvent = {
   match_reason: string | null;
   memory_category: string;
   hidden_from_default: boolean;
+  is_indexable?: boolean;
+  is_relationship_eligible?: boolean;
+  is_context_eligible?: boolean;
 };
 
 export type ContextRelationship = {
@@ -563,17 +701,29 @@ export type ContextPackage = {
 export type EmbeddingStatusResponse = {
   enabled: boolean;
   embedding_model: string;
+  selected_embedding_model?: string;
+  selected_embedding_model_id?: string;
+  index_model?: string | null;
+  index_stale?: boolean;
+  embedding_model_available?: boolean;
   ollama_available: boolean;
   chroma_available: boolean;
   chroma_path: string;
   indexed_count: number;
   event_status: Record<string, number>;
+  total_events?: number;
+  indexable_events?: number;
+  non_indexable_events?: number;
+  relationship_eligible_events?: number;
+  context_eligible_events?: number;
+  hidden_events?: number;
 };
 
 export type EmbeddingReindexResponse = {
   indexed: number;
   failed: number;
   skipped: number;
+  skipped_not_indexable?: number;
   total: number;
   errors: Array<Record<string, unknown>>;
 };
