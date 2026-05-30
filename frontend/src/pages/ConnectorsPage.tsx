@@ -512,8 +512,29 @@ export function ConnectorsPage() {
         )}
       </div>
 
-      <Card>
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <Card>
+          <h2 className="text-base font-semibold text-app-text">Upcoming Collectors</h2>
+          <p className="mt-2 text-sm leading-6 text-app-muted">
+            These clients will send events into MindOS through the local external ingestion API. They are planned and do not run automatically.
+          </p>
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <PlannedCollectorCard
+              title="VSCode Extension"
+              description="Collects file opens, saves, workspace activity, terminal commands, and debug activity."
+            />
+            <PlannedCollectorCard
+              title="Browser Extension"
+              description="Collects research pages, searches, saved tabs, and browsing context with user control."
+            />
+            <PlannedCollectorCard
+              title="Activity Tracker"
+              description="Tracks active app/window sessions locally to summarize work patterns."
+            />
+          </div>
+        </Card>
+
+        <Card>
+          <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-app-text">Saved Sources</h2>
             <p className="mt-2 text-sm leading-6 text-app-muted">
@@ -561,7 +582,7 @@ export function ConnectorsPage() {
   );
 }
 
-function ConnectorCard({
+  function ConnectorCard({
   connector,
   active = false,
   actionLabel = "Import",
@@ -627,9 +648,21 @@ function ConnectorCard({
       ) : null}
     </Card>
   );
-}
+  }
 
-function ImportPanel({
+  function PlannedCollectorCard({ title, description }: { title: string; description: string }) {
+    return (
+      <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-app-text">{title}</h3>
+          <Badge variant="default">Planned</Badge>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-app-muted">{description}</p>
+      </div>
+    );
+  }
+
+  function ImportPanel({
   form,
   setForm,
   loading,

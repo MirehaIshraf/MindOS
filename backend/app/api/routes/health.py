@@ -51,6 +51,7 @@ def status() -> dict[str, object]:
         "chat_message_count": chat_service.count_messages(),
         "relationship_count": relationship_service.count_relationships(),
         "search_mode": "keyword",
+        "tasks_status": "experimental_paused",
         "ollama_num_ctx": settings.ollama_num_ctx,
         "chat_context_direct_limit": settings.chat_context_direct_limit,
         "chat_context_related_per_event": settings.chat_context_related_per_event,

@@ -1,4 +1,16 @@
-CAPTURED_SOURCES = {"file_system", "logs", "git", "jira", "github", "email", "browser", "vscode", "manual"}
+CAPTURED_SOURCES = {
+    "file_system",
+    "logs",
+    "git",
+    "jira",
+    "github",
+    "email",
+    "browser",
+    "vscode",
+    "vscode_extension",
+    "browser_extension",
+    "manual",
+}
 
 
 def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = None) -> dict[str, object]:
@@ -22,6 +34,32 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
 
     if event_type == "report_generated":
         return _policy("report", hidden=False)
+
+    if source_value == "activity_tracker":
+        return {
+            "memory_category": "activity",
+            "hidden_from_default": True,
+            "is_indexable": False,
+            "is_relationship_eligible": False,
+            "is_context_eligible": False,
+        }
+
+    if source_value == "browser_extension" and bool((metadata or {}).get("private")):
+        policy = _policy("captured_event", hidden=True)
+        return policy
+
+    if source_value == "local_agent":
+        if event_type in {"agent_summary", "agent_action_result"}:
+            return _policy("agent", hidden=False)
+        if event_type in {"agent_observation", "agent_decision", "agent_action_preview"}:
+            return {
+                "memory_category": "agent",
+                "hidden_from_default": True,
+                "is_indexable": False,
+                "is_relationship_eligible": False,
+                "is_context_eligible": False,
+            }
+        return _policy("agent", hidden=True)
 
     if source_value in CAPTURED_SOURCES:
         return _policy("captured_event", hidden=False)

@@ -19,6 +19,7 @@ import type {
   ConnectorSourceCreateRequest,
   ConnectorSourcesResponse,
   ConnectorSourceUpdateRequest,
+  CollectorClientsResponse,
   DevState,
   EmbeddingReindexResponse,
   EmbeddingSettingsResponse,
@@ -37,6 +38,11 @@ import type {
   ModelSettingsResponse,
   IngestEventRequest,
   IngestEventResponse,
+  ExternalBulkIngestRequest,
+  ExternalBulkIngestResponse,
+  ExternalEventIngestRequest,
+  ExternalIngestResponse,
+  ExternalIngestStatusResponse,
   MemoryEvent,
   RelatedEventsResponse,
   RecentEventsResponse,
@@ -157,6 +163,21 @@ export async function getDevState(): Promise<DevState> {
 
 export async function ingestEvent(data: IngestEventRequest): Promise<IngestEventResponse> {
   const response = await api.post<IngestEventResponse>("/ingest", data);
+  return response.data;
+}
+
+export async function ingestExternalEvent(data: ExternalEventIngestRequest): Promise<ExternalIngestResponse> {
+  const response = await api.post<ExternalIngestResponse>("/ingest/external", data);
+  return response.data;
+}
+
+export async function ingestExternalEventsBulk(data: ExternalBulkIngestRequest): Promise<ExternalBulkIngestResponse> {
+  const response = await api.post<ExternalBulkIngestResponse>("/ingest/external/bulk", data, { timeout: 30000 });
+  return response.data;
+}
+
+export async function getIngestStatus(): Promise<ExternalIngestStatusResponse> {
+  const response = await api.get<ExternalIngestStatusResponse>("/ingest/status");
   return response.data;
 }
 
@@ -412,6 +433,11 @@ export async function getPlaybooks(): Promise<never> {
 
 export async function getConnectors(): Promise<ConnectorListResponse> {
   const response = await api.get<ConnectorListResponse>("/connectors");
+  return response.data;
+}
+
+export async function getCollectorClients(): Promise<CollectorClientsResponse> {
+  const response = await api.get<CollectorClientsResponse>("/connectors/collectors");
   return response.data;
 }
 

@@ -15,9 +15,11 @@ import {
   getErrorMessage,
   getDevState,
   getEmbeddingStatus,
+  getIngestStatus,
   getModelSettings,
   getRecentEvents,
   getStatus,
+  ingestExternalEvent,
   ingestEvent,
   planTask,
   rebuildRelationships,
@@ -33,6 +35,8 @@ import type {
   DevState,
   EmbeddingReindexResponse,
   EmbeddingStatusResponse,
+  ExternalIngestResponse,
+  ExternalIngestStatusResponse,
   EventSource,
   MemoryEvent,
   ModelSettingsResponse,
@@ -57,6 +61,16 @@ const emptyForm = {
 
 type IngestForm = typeof emptyForm;
 
+const emptyExternalForm = {
+  source: "vscode_extension",
+  type: "editor_file_saved",
+  title: "Saved auth_middleware.py",
+  content: "Edited JWT refresh flow",
+  metadata: '{\n  "file_path": "C:\\\\project\\\\auth_middleware.py",\n  "language": "python"\n}',
+};
+
+type ExternalIngestForm = typeof emptyExternalForm;
+
 export function DevPage() {
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [status, setStatus] = useState<BackendStatus | null>(null);
@@ -72,6 +86,9 @@ export function DevPage() {
   const [plannerResult, setPlannerResult] = useState<TaskPlanningResponse | null>(null);
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatusResponse | null>(null);
   const [embeddingResult, setEmbeddingResult] = useState<EmbeddingReindexResponse | null>(null);
+  const [ingestStatus, setIngestStatus] = useState<ExternalIngestStatusResponse | null>(null);
+  const [externalForm, setExternalForm] = useState<ExternalIngestForm>(emptyExternalForm);
+  const [externalResult, setExternalResult] = useState<ExternalIngestResponse | null>(null);
   const [clearAllResult, setClearAllResult] = useState<ClearAllDevDataResponse | null>(null);
   const [clearSavedSources, setClearSavedSources] = useState(false);
   const [clearModelSettings, setClearModelSettings] = useState(false);
@@ -167,6 +184,17 @@ export function DevPage() {
     } catch (caughtError) {
       console.warn("GET /models/settings failed", caughtError);
       applyWarning("models", "Model settings unavailable.");
+    }
+
+    try {
+      const ingestResponse = await getIngestStatus();
+      console.info("GET /ingest/status success");
+      if (refreshSeq.current === requestId) {
+        setIngestStatus(ingestResponse);
+      }
+    } catch (caughtError) {
+      console.warn("GET /ingest/status failed", caughtError);
+      applyWarning("ingest", "External ingest status unavailable.");
     }
   }
 
@@ -462,6 +490,37 @@ export function DevPage() {
     }
   }
 
+  async function handleExternalIngest() {
+    const title = externalForm.title.trim();
+    const type = externalForm.type.trim();
+    if (!type) {
+      setError("External event type is required.");
+      return;
+    }
+
+    setLoadingAction("externalIngest");
+    setError(null);
+    setMessage(null);
+    setExternalResult(null);
+    try {
+      const response = await ingestExternalEvent({
+        source: externalForm.source,
+        type,
+        title,
+        content: externalForm.content,
+        metadata: parseMetadata(externalForm.metadata),
+        client_id: `${externalForm.source}-dev`,
+      });
+      setExternalResult(response);
+      setMessage(`External event ingested: ${response.event_id}`);
+      await refreshAll();
+    } catch (caughtError) {
+      setError(caughtError instanceof SyntaxError ? caughtError.message : getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   const sourceCounts = useMemo(() => {
     if (!devState) {
       return [];
@@ -608,6 +667,48 @@ export function DevPage() {
           <Button className="mt-5" variant="primary" onClick={handleSeed} loading={loadingAction === "seed"}>
             Seed sample events
           </Button>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Activity size={18} />} title="Experimental Modules" />
+          <div className="mt-4 space-y-3 text-sm">
+            <Row label="Tasks" value={status?.tasks_status ?? "experimental_paused"} tone="danger" />
+            <p className="text-app-muted">Task execution is paused while MindOS focuses on connectors, collectors, and clean memory ingestion.</p>
+            <Button variant="secondary" onClick={() => window.location.assign("/tasks")}>
+              Open Tasks
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Send size={18} />} title="External Ingestion" />
+          <div className="mt-4 space-y-3 text-sm">
+            <Row label="POST" value="/ingest/external" />
+            <Row label="POST" value="/ingest/external/bulk" />
+            <Row label="enabled" value={String(ingestStatus?.external_ingest_enabled ?? true)} />
+            <Row label="recent events" value={String(ingestStatus?.recent_external_events ?? 0)} />
+            <Row label="collectors" value={String(ingestStatus?.collector_clients.length ?? 0)} />
+          </div>
+          {ingestStatus?.supported_sources.length ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {ingestStatus.supported_sources.map((source) => (
+                <Badge key={source} variant="info">{source}</Badge>
+              ))}
+            </div>
+          ) : null}
+          {ingestStatus?.collector_clients.length ? (
+            <div className="mt-4 space-y-2">
+              {ingestStatus.collector_clients.slice(0, 4).map((collector) => (
+                <div key={`${collector.type}-${collector.id}`} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Badge>{collector.type}</Badge>
+                    <span className="text-sm text-app-text">{collector.name}</span>
+                    <span className="ml-auto text-xs text-app-muted">{collector.events_count} events</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </Card>
 
         <Card>
@@ -875,6 +976,54 @@ export function DevPage() {
             <Button variant="primary" onClick={handleManualIngest} loading={loadingAction === "ingest"}>
               Ingest event
             </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<Send size={18} />} title="External Ingest Test" />
+          <div className="mt-4 space-y-3">
+            <label className="block text-xs font-medium uppercase text-app-muted">
+              Source
+              <select
+                value={externalForm.source}
+                onChange={(event) => setExternalForm((current) => ({ ...current, source: event.target.value }))}
+                className="mt-2 h-10 w-full rounded-md border border-app-border bg-zinc-950 px-3 text-sm text-app-text outline-none focus:border-app-primary"
+              >
+                {["vscode_extension", "browser_extension", "activity_tracker", "local_agent"].map((source) => (
+                  <option key={source} value={source}>
+                    {source}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <LabeledInput label="Type" value={externalForm.type} onChange={(value) => setExternalForm((current) => ({ ...current, type: value }))} />
+            <LabeledInput label="Title" value={externalForm.title} onChange={(value) => setExternalForm((current) => ({ ...current, title: value }))} />
+            <label className="block text-xs font-medium uppercase text-app-muted">
+              Content
+              <textarea
+                value={externalForm.content}
+                onChange={(event) => setExternalForm((current) => ({ ...current, content: event.target.value }))}
+                className="mt-2 min-h-20 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
+              />
+            </label>
+            <label className="block text-xs font-medium uppercase text-app-muted">
+              Metadata JSON
+              <textarea
+                value={externalForm.metadata}
+                onChange={(event) => setExternalForm((current) => ({ ...current, metadata: event.target.value }))}
+                className="mt-2 min-h-24 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
+              />
+            </label>
+            <Button variant="primary" onClick={handleExternalIngest} loading={loadingAction === "externalIngest"}>
+              Send External Event
+            </Button>
+            {externalResult ? (
+              <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+                <Badge variant="success">{externalResult.status}</Badge>
+                <p className="mt-2 text-app-muted">{externalResult.message}</p>
+                <p className="mt-1 text-xs text-app-muted">{externalResult.event_id}</p>
+              </div>
+            ) : null}
           </div>
         </Card>
       </div>

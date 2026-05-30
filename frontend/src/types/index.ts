@@ -25,6 +25,7 @@ export type ModelRuntimeStatus = {
   chat_context_related_per_event?: number;
   chat_context_max_total_chars?: number;
   chat_history_limit?: number;
+  tasks_status?: string;
   selected_chat_model?: string;
   available_chat_models_count?: number;
   available_chat_models?: Array<Pick<ModelConfig, "id" | "display_name" | "provider" | "type" | "available">>;
@@ -56,6 +57,7 @@ export type BackendStatus = ModelRuntimeStatus & {
   chat_message_count: number;
   relationship_count: number;
   search_mode: string;
+  tasks_status?: string;
 };
 
 export type PageRoute = {
@@ -69,6 +71,10 @@ export type EventSource =
   | "file_system"
   | "vscode"
   | "browser"
+  | "vscode_extension"
+  | "browser_extension"
+  | "activity_tracker"
+  | "local_agent"
   | "git"
   | "github"
   | "jira"
@@ -110,6 +116,56 @@ export type IngestEventRequest = {
 export type IngestEventResponse = {
   event_id: string;
   status: "ingested";
+};
+
+export type ExternalEventIngestRequest = {
+  source: "vscode_extension" | "browser_extension" | "activity_tracker" | "local_agent" | string;
+  type: string;
+  title?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+  timestamp?: string | null;
+  client_id?: string | null;
+  session_id?: string | null;
+};
+
+export type ExternalBulkIngestRequest = {
+  events: ExternalEventIngestRequest[];
+};
+
+export type ExternalIngestResponse = {
+  status: string;
+  event_id: string;
+  message: string;
+};
+
+export type ExternalBulkIngestResponse = {
+  status: string;
+  ingested: number;
+  failed: number;
+  event_ids: string[];
+  errors: Array<Record<string, unknown>>;
+};
+
+export type CollectorClient = {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  last_seen_at?: string | null;
+  events_count: number;
+};
+
+export type CollectorClientsResponse = {
+  collectors: CollectorClient[];
+};
+
+export type ExternalIngestStatusResponse = {
+  external_ingest_enabled: boolean;
+  supported_sources: string[];
+  preferred_event_types: Record<string, string[]>;
+  recent_external_events: number;
+  collector_clients: CollectorClient[];
 };
 
 export type DevState = {

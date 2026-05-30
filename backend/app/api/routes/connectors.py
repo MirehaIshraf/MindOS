@@ -21,8 +21,10 @@ from app.schemas.connectors import (
     LogPreviewRequest,
     LogPreviewResult,
 )
+from app.schemas.ingest import CollectorClientsResponse
 from app.services.connector_source_service import connector_source_service
 from app.services.connector_service import ConnectorService
+from app.services.external_ingest_service import external_ingest_service
 from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
 from app.services.log_import_service import LogImportService
@@ -37,6 +39,11 @@ git_import_service = GitImportService()
 @router.get("", response_model=ConnectorListResponse)
 def list_connectors() -> ConnectorListResponse:
     return service.list_connectors()
+
+
+@router.get("/collectors", response_model=CollectorClientsResponse)
+def list_collector_clients() -> CollectorClientsResponse:
+    return CollectorClientsResponse(collectors=external_ingest_service.collector_clients())
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

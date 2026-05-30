@@ -3,7 +3,6 @@ import {
   Cable,
   Code2,
   Database,
-  ListTodo,
   MessageSquare,
   Settings,
 } from "lucide-react";
@@ -14,7 +13,6 @@ import { useAppStore } from "../../store/appStore";
 const navItems = [
   { label: "Chat", path: "/chat", icon: MessageSquare, primary: true },
   { label: "Memory", path: "/memory", icon: Database },
-  { label: "Tasks", path: "/tasks", icon: ListTodo },
   { label: "Connectors", path: "/connectors", icon: Cable },
   { label: "Settings", path: "/settings", icon: Settings },
   { label: "Dev", path: "/dev", icon: Code2 },

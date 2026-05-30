@@ -152,6 +152,34 @@ ollama pull harrier-oss:0.6b
 
 Some Harrier and Qwen3 embedding tags may vary by publisher; installed embedding-like Ollama models are discovered and shown separately. Changing the embedding model does not automatically rebuild vectors. Reindex from Settings or Developer Mode after switching models. MindOS does not use cloud embeddings.
 
+## External Collectors
+
+MindOS exposes a local ingestion contract for future data collection clients such as a VSCode extension, browser extension, activity tracker, and local agent. These clients are not implemented yet; the API is ready for them.
+
+- `POST /ingest/external`
+- `POST /ingest/external/bulk`
+- `GET /ingest/status`
+- `GET /connectors/collectors`
+
+Example:
+
+```powershell
+curl -X POST http://localhost:8000/ingest/external `
+  -H "Content-Type: application/json" `
+  -d "{\"source\":\"vscode_extension\",\"type\":\"editor_file_saved\",\"title\":\"Saved auth_middleware.py\",\"content\":\"Edited JWT refresh flow\",\"metadata\":{\"file_path\":\"C:\\\\project\\\\auth_middleware.py\",\"language\":\"python\"}}"
+```
+
+Supported collector sources:
+
+- `vscode_extension`
+- `browser_extension`
+- `activity_tracker`
+- `local_agent`
+
+The VSCode extension will send editor and workspace events here. The browser extension will send research pages and saved browsing context here. The activity tracker should send summarized or low-noise activity events here. Data stays local in SQLite, and memory policy decides whether each event participates in embeddings, relationships, and chat context.
+
+Tasks are currently experimental and paused in the main product UI while the connector and collector data layer is stabilized.
+
 ## Setup
 
 ```powershell
