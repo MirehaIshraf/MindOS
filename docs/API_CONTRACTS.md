@@ -15,6 +15,8 @@ This document reflects the currently mounted route modules in `backend/app/api/r
 - `POST /ingest/external/bulk`: create up to 100 external collector events; each event is processed independently.
 - `GET /ingest/status`: returns supported external collector sources, preferred event types, recent external event count, and derived collector clients.
 
+If the VSCode connector is disabled in MindOS, `POST /ingest/external` for `source=vscode_extension` returns `403` with a JSON detail message.
+
 ## Memory / Events
 
 - `GET /events/recent`: list recent events with optional source/category/hidden filters.
@@ -60,7 +62,13 @@ This document reflects the currently mounted route modules in `backend/app/api/r
 
 ## Connectors
 
-- `GET /connectors`: connector cards/status.
+- `GET /connectors`: unified connector registry cards/status.
+- `GET /connectors/vscode/runtime`: runtime settings for the installed VSCode extension to poll.
+- `POST /connectors/vscode/heartbeat`: updates VSCode connector last-seen status; does not create a memory event.
+- `GET /connectors/{connector_id}`: one connector status response.
+- `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
+- `GET /connectors/{connector_id}/config`: read placeholder/stored connector config.
+- `POST /connectors/{connector_id}/config`: save placeholder/stored connector config.
 - `GET /connectors/collectors`: derived external collector clients.
 - `POST /connectors/file-system/preview`: preview folder import.
 - `POST /connectors/file-system/import`: import folder by path.

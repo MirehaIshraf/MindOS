@@ -19,8 +19,76 @@ class ConnectorStatus(BaseModel):
     last_import_status: str | None = None
 
 
+class ConnectorStatusResponse(BaseModel):
+    id: str
+    name: str
+    type: str
+    description: str
+    enabled: bool
+    configured: bool
+    connected: bool
+    status: str
+    event_count: int
+    last_event_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    config_summary: dict[str, Any] = Field(default_factory=dict)
+    supports_toggle: bool
+    supports_config: bool
+    supports_manual_import: bool
+    supports_live_events: bool
+
+
 class ConnectorListResponse(BaseModel):
-    connectors: list[ConnectorStatus]
+    connectors: list[ConnectorStatusResponse]
+
+
+class ConnectorToggleRequest(BaseModel):
+    enabled: bool
+
+
+class ConnectorToggleResponse(BaseModel):
+    id: str
+    enabled: bool
+    status: str
+    message: str
+
+
+class ConnectorConfigResponse(BaseModel):
+    id: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    configured: bool
+
+
+class ConnectorConfigUpdateRequest(BaseModel):
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class VSCodeConnectorRuntimeResponse(BaseModel):
+    id: str = "vscode"
+    enabled: bool
+    configured: bool
+    status: str
+    accepted_event_types: list[str]
+    capture_file_open: bool
+    capture_file_save: bool
+    capture_workspace_open: bool
+    capture_terminal_commands: bool
+    include_file_content_on_save: bool
+    max_content_chars: int
+
+
+class VSCodeHeartbeatRequest(BaseModel):
+    client_id: str = "vscode-local"
+    extension_version: str
+    workspace_name: str | None = None
+    workspace_folders: list[str] = Field(default_factory=list)
+    session_id: str
+    status: str = "active"
+
+
+class VSCodeHeartbeatResponse(BaseModel):
+    status: str = "ok"
+    connector_enabled: bool
 
 
 class FilePreviewRequest(BaseModel):

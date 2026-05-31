@@ -21,18 +21,16 @@ const categories = [
 const sources = [
   { label: "All Sources", value: undefined },
   { label: "File System", value: "file_system" },
-  { label: "Manual", value: "manual" },
-  { label: "VSCode", value: "vscode" },
-  { label: "Browser", value: "browser" },
-  { label: "VSCode Extension", value: "vscode_extension" },
-  { label: "Browser Extension", value: "browser_extension" },
-  { label: "Activity Tracker", value: "activity_tracker" },
-  { label: "Local Agent", value: "local_agent" },
-  { label: "Git", value: "git" },
+  { label: "Logs", value: "logs" },
+  { label: "Local Git", value: "git" },
+  { label: "VSCode", value: "vscode_extension" },
+  { label: "Browser", value: "browser_extension" },
   { label: "GitHub", value: "github" },
   { label: "Jira", value: "jira" },
-  { label: "Logs", value: "logs" },
   { label: "Email", value: "email" },
+  { label: "Activity Tracker", value: "activity_tracker" },
+  { label: "Local Agent", value: "local_agent" },
+  { label: "Manual", value: "manual" },
 ] as const;
 
 const searchModes = [
@@ -464,16 +462,21 @@ function truncate(value: string, maxLength: number) {
 }
 
 function formatSourceLabel(source: string) {
-  if (source === "mindos") {
-    return "MindOS";
-  }
-  if (source === "file_system") {
-    return "File System";
-  }
-  if (source === "git") {
-    return "Git";
-  }
-  return source;
+  const labels: Record<string, string> = {
+    mindos: "MindOS",
+    file_system: "File System",
+    logs: "Logs",
+    git: "Local Git",
+    vscode_extension: "VSCode",
+    browser_extension: "Browser",
+    activity_tracker: "Activity Tracker",
+    local_agent: "Local Agent",
+    github: "GitHub",
+    jira: "Jira",
+    email: "Email",
+    manual: "Manual",
+  };
+  return labels[source] ?? source;
 }
 
 function formatCategoryLabel(category: string) {

@@ -25,3 +25,8 @@ Rules:
 
 - `backend/`: FastAPI backend, SQLite persistence, memory/search/model services, connectors, and integrations.
 - `frontend/`: React frontend for Chat, Memory, Connectors, Settings, Dev, and experimental Tasks.
+- `extensions/vscode/`: VSCode extension MVP for sending local editor/workspace events to MindOS.
+
+## VSCode Extension MVP
+
+The VSCode connector lives in [extensions/vscode/README.md](extensions/vscode/README.md). It sends local editor/workspace events to the existing `/ingest/external` API. Install the packaged VSIX into normal VSCode, then use the MindOS Connectors page toggle to control collection. It does not send full file contents unless explicitly configured, and it filters sensitive files/content.

@@ -11,6 +11,7 @@ from app.schemas.ingest import (
     IngestEventResponse,
 )
 from app.services.external_ingest_service import PREFERRED_EXTERNAL_EVENT_TYPES, SUPPORTED_EXTERNAL_SOURCES, external_ingest_service
+from app.services.connector_registry_service import connector_registry_service
 from app.services.ingestion_service import IngestionService
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -49,6 +50,8 @@ def ingest_bulk(requests: list[IngestEventRequest] = Body(...)) -> BulkIngestRes
 def ingest_external_event(request: ExternalEventIngestRequest) -> ExternalIngestResponse:
     try:
         return external_ingest_service.ingest_event(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -68,6 +71,8 @@ def ingest_external_bulk(request: ExternalBulkIngestRequest) -> ExternalBulkInge
         try:
             event = external_ingest_service.ingest_event_raw(event_request)
             event_ids.append(event.id)
+        except PermissionError as exc:
+            errors.append({"index": index, "source": event_request.source, "type": event_request.type, "error": str(exc), "status_code": 403})
         except Exception as exc:
             errors.append({"index": index, "source": event_request.source, "type": event_request.type, "error": str(exc)})
     failed = len(errors)
@@ -89,4 +94,5 @@ def ingest_status() -> ExternalIngestStatusResponse:
         preferred_event_types=PREFERRED_EXTERNAL_EVENT_TYPES,
         recent_external_events=external_ingest_service.recent_external_events_count(),
         collector_clients=collectors,
+        connectors=connector_registry_service.list_connectors().connectors,
     )

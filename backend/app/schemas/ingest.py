@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.domain.enums import EventSource
+from app.schemas.connectors import ConnectorStatusResponse
 
 
 class IngestEventRequest(BaseModel):
@@ -74,3 +75,4 @@ class ExternalIngestStatusResponse(BaseModel):
     preferred_event_types: dict[str, list[str]]
     recent_external_events: int
     collector_clients: list[CollectorClientResponse]
+    connectors: list[ConnectorStatusResponse] = Field(default_factory=list)

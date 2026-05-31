@@ -166,6 +166,7 @@ export type ExternalIngestStatusResponse = {
   preferred_event_types: Record<string, string[]>;
   recent_external_events: number;
   collector_clients: CollectorClient[];
+  connectors: Connector[];
 };
 
 export type DevState = {
@@ -487,22 +488,39 @@ export type TaskHistoryResponse = {
 };
 
 export type Connector = {
+  id: string;
   name: string;
-  display_name?: string | null;
-  description?: string | null;
-  status: string;
+  type: "vscode" | "browser" | "github" | "jira" | "email" | "file_system" | "logs" | "git" | string;
+  description: string;
   enabled: boolean;
-  events_count?: number | null;
+  configured: boolean;
+  connected: boolean;
+  status: "off" | "connected" | "disconnected" | "needs_configuration" | "error" | string;
+  event_count: number;
   last_event_at?: string | null;
-  supports_manual_import?: boolean | null;
-  supports_live_watch?: boolean | null;
-  saved_sources_count?: number | null;
-  last_import_at?: string | null;
-  last_import_status?: string | null;
+  last_seen_at?: string | null;
+  config_summary: Record<string, unknown>;
+  supports_toggle: boolean;
+  supports_config: boolean;
+  supports_manual_import: boolean;
+  supports_live_events: boolean;
 };
 
 export type ConnectorListResponse = {
   connectors: Connector[];
+};
+
+export type ConnectorToggleResponse = {
+  id: string;
+  enabled: boolean;
+  status: string;
+  message: string;
+};
+
+export type ConnectorConfigResponse = {
+  id: string;
+  config: Record<string, unknown>;
+  configured: boolean;
 };
 
 export type ConnectorSource = {

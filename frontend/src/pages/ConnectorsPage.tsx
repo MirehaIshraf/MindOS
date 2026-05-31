@@ -1,6 +1,17 @@
-import axios from "axios";
-import { Cable, FolderOpen, RefreshCw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  Code2,
+  FileText,
+  FolderOpen,
+  GitBranch,
+  Github,
+  Globe,
+  Mail,
+  RefreshCw,
+  Ticket,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
@@ -9,10 +20,11 @@ import { Input } from "../components/shared/Input";
 import {
   clearConnectorSourceEvents,
   clearFileSystemEvents,
-  clearLogEvents,
   clearGitEvents,
+  clearLogEvents,
   createConnectorSource,
   deleteConnectorSource,
+  getApiErrorMessage,
   getConnectors,
   getConnectorSources,
   getImportRuns,
@@ -23,11 +35,13 @@ import {
   previewGitImport,
   previewLogImport,
   runConnectorSourceImport,
+  toggleConnector,
   updateConnectorSource,
 } from "../services/api";
 import type {
   Connector,
   ConnectorSource,
+  ConnectorSourceUpdateRequest,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
@@ -38,37 +52,13 @@ import type {
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
-  ConnectorSourceUpdateRequest,
 } from "../types";
 
-const emptyForm = {
-  folderPath: "",
-  recursive: true,
-  maxFiles: 100,
-  maxFileSizeKb: 256,
-  allowedExtensions: "",
-};
+const connectorOrder = ["vscode", "browser", "github", "jira", "email", "file_system", "logs", "git"];
 
-type ImportForm = typeof emptyForm;
-
-const emptyLogForm = {
-  filePath: "",
-  maxLines: 1000,
-  onlyErrors: false,
-  groupSimilar: true,
-};
-
-type LogImportForm = typeof emptyLogForm;
-
-const emptyGitForm = {
-  repoPath: "",
-  maxCommits: 50,
-  includeDiffSummary: true,
-  includeStatus: true,
-};
-
-type GitImportForm = typeof emptyGitForm;
-
+const emptyFileForm = { folderPath: "", recursive: true, maxFiles: 100, maxFileSizeKb: 256, allowedExtensions: "" };
+const emptyLogForm = { filePath: "", maxLines: 1000, onlyErrors: false, groupSimilar: true };
+const emptyGitForm = { repoPath: "", maxCommits: 50, includeDiffSummary: true, includeStatus: true };
 const emptySavedSourceForm = {
   name: "",
   path: "",
@@ -85,63 +75,114 @@ const emptySavedSourceForm = {
   enabled: true,
 };
 
+type FileForm = typeof emptyFileForm;
+type LogForm = typeof emptyLogForm;
+type GitForm = typeof emptyGitForm;
 type SavedSourceForm = typeof emptySavedSourceForm;
+type PanelId = Connector["id"] | "save" | null;
 
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
-  const [panelOpen, setPanelOpen] = useState<"files" | "logs" | "git" | "save" | null>(null);
+  const [selectedPanel, setSelectedPanel] = useState<PanelId>(null);
+  const [savedSources, setSavedSources] = useState<ConnectorSource[]>([]);
+  const [importRuns, setImportRuns] = useState<ImportRun[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [fileForm, setFileForm] = useState<FileForm>(emptyFileForm);
+  const [logForm, setLogForm] = useState<LogForm>(emptyLogForm);
+  const [gitForm, setGitForm] = useState<GitForm>(emptyGitForm);
+  const [saveForm, setSaveForm] = useState<SavedSourceForm>(emptySavedSourceForm);
   const [saveType, setSaveType] = useState<"file_system" | "logs" | "git">("file_system");
-  const [form, setForm] = useState<ImportForm>(emptyForm);
-  const [logForm, setLogForm] = useState<LogImportForm>(emptyLogForm);
-  const [gitForm, setGitForm] = useState<GitImportForm>(emptyGitForm);
-  const [preview, setPreview] = useState<FilePreviewResult | null>(null);
-  const [result, setResult] = useState<FileImportResult | null>(null);
+  const [editingSource, setEditingSource] = useState<ConnectorSource | null>(null);
+  const [filePreview, setFilePreview] = useState<FilePreviewResult | null>(null);
+  const [fileResult, setFileResult] = useState<FileImportResult | null>(null);
   const [logPreview, setLogPreview] = useState<LogPreviewResult | null>(null);
   const [logResult, setLogResult] = useState<LogImportResult | null>(null);
   const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
   const [gitResult, setGitResult] = useState<GitImportResult | null>(null);
-  const [savedSources, setSavedSources] = useState<ConnectorSource[]>([]);
-  const [sourceFilter, setSourceFilter] = useState("all");
-  const [editingSource, setEditingSource] = useState<ConnectorSource | null>(null);
-  const [importRuns, setImportRuns] = useState<ImportRun[]>([]);
-  const [saveForm, setSaveForm] = useState<SavedSourceForm>(emptySavedSourceForm);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void refreshConnectors();
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh(false);
+    }, 12_000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
-  async function refreshConnectors() {
-    setLoading("connectors");
-    setError(null);
+  const orderedConnectors = useMemo(
+    () => [...connectors].sort((a, b) => connectorOrder.indexOf(a.id) - connectorOrder.indexOf(b.id)),
+    [connectors],
+  );
+  const selectedConnector = selectedPanel && selectedPanel !== "save" ? connectors.find((connector) => connector.id === selectedPanel) : null;
+
+  async function refresh(showLoading = true) {
+    if (showLoading) {
+      setLoading("connectors");
+      setError(null);
+    }
     try {
-      const [response, sourcesResponse, runsResponse] = await Promise.all([
+      const [connectorResponse, sourceResponse, runsResponse] = await Promise.all([
         getConnectors(),
         getConnectorSources(),
         getImportRuns({ limit: 20 }),
       ]);
-      setConnectors(response.connectors);
-      setSavedSources(sourcesResponse.sources);
+      setConnectors(connectorResponse.connectors);
+      setSavedSources(sourceResponse.sources);
       setImportRuns(runsResponse.runs);
-    } catch {
-      setError("Could not load connectors. Backend may be offline.");
+    } catch (caughtError) {
+      if (showLoading) {
+        setError(getApiErrorMessage(caughtError));
+      }
+    } finally {
+      if (showLoading) {
+        setLoading(null);
+      }
+    }
+  }
+
+  async function handleToggle(connector: Connector, enabled: boolean) {
+    if (!connector.configured && enabled && !["vscode", "file_system", "logs", "git"].includes(connector.id)) {
+      setSelectedPanel(connector.id);
+      return;
+    }
+    setLoading(`toggle:${connector.id}`);
+    setError(null);
+    try {
+      const response = await toggleConnector(connector.id, enabled);
+      setNotice(response.message);
+      await refresh();
+    } catch (caughtError) {
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
   }
 
-  async function handlePreview() {
-    setLoading("preview");
+  async function handleFilePreview() {
+    setLoading("filePreview");
     setError(null);
-    setNotice(null);
-    setResult(null);
     try {
-      setPreview(await previewFileImport(toPayload(form)));
+      setFilePreview(await previewFileImport(toFilePayload(fileForm)));
+      setFileResult(null);
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Preview failed."));
-      setPreview(null);
+      setFilePreview(null);
+      setError(getApiErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleFileImport() {
+    setLoading("fileImport");
+    setError(null);
+    try {
+      setFileResult(await importFiles(toFilePayload(fileForm)));
+      setFilePreview(null);
+      await refresh();
+    } catch (caughtError) {
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -150,13 +191,12 @@ export function ConnectorsPage() {
   async function handleLogPreview() {
     setLoading("logPreview");
     setError(null);
-    setNotice(null);
-    setLogResult(null);
     try {
       setLogPreview(await previewLogImport(toLogPayload(logForm)));
+      setLogResult(null);
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Log preview failed."));
       setLogPreview(null);
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -165,37 +205,12 @@ export function ConnectorsPage() {
   async function handleLogImport() {
     setLoading("logImport");
     setError(null);
-    setNotice(null);
     try {
-      const response = await importLogs(toLogPayload(logForm));
-      setLogResult(response);
+      setLogResult(await importLogs(toLogPayload(logForm)));
       setLogPreview(null);
-      await refreshConnectors();
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Log import failed."));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleClearLogEvents() {
-    const confirmed = window.confirm(
-      "This will remove imported log events from MindOS memory. Other memory will not be deleted. Continue?",
-    );
-    if (!confirmed) {
-      return;
-    }
-    setLoading("clearLogs");
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await clearLogEvents();
-      setLogPreview(null);
-      setLogResult(null);
-      await refreshConnectors();
-      setNotice(response.deleted_events === 0 ? "No log events to clear." : `Cleared ${response.deleted_events} log events.`);
-    } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not clear log events."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -204,13 +219,12 @@ export function ConnectorsPage() {
   async function handleGitPreview() {
     setLoading("gitPreview");
     setError(null);
-    setNotice(null);
-    setGitResult(null);
     try {
       setGitPreview(await previewGitImport(toGitPayload(gitForm)));
+      setGitResult(null);
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Git preview failed."));
       setGitPreview(null);
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -219,76 +233,35 @@ export function ConnectorsPage() {
   async function handleGitImport() {
     setLoading("gitImport");
     setError(null);
-    setNotice(null);
     try {
-      const response = await importGitRepo(toGitPayload(gitForm));
-      setGitResult(response);
+      setGitResult(await importGitRepo(toGitPayload(gitForm)));
       setGitPreview(null);
-      await refreshConnectors();
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Git import failed."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
   }
 
-  async function handleClearGitEvents() {
-    const confirmed = window.confirm(
-      "This will remove imported Git events from MindOS memory. Other memory will not be deleted. Continue?",
-    );
-    if (!confirmed) {
+  async function handleClearEvents(connectorId: "file_system" | "logs" | "git") {
+    const labels = { file_system: "file/folder", logs: "log", git: "Git" };
+    if (!window.confirm(`This will remove imported ${labels[connectorId]} events from MindOS memory. Other memory will not be deleted. Continue?`)) {
       return;
     }
-    setLoading("clearGit");
+    setLoading(`clear:${connectorId}`);
     setError(null);
-    setNotice(null);
     try {
-      const response = await clearGitEvents();
-      setGitPreview(null);
-      setGitResult(null);
-      await refreshConnectors();
-      setNotice(response.deleted_events === 0 ? "No Git events to clear." : `Cleared ${response.deleted_events} Git events.`);
+      const response =
+        connectorId === "file_system"
+          ? await clearFileSystemEvents()
+          : connectorId === "logs"
+            ? await clearLogEvents()
+            : await clearGitEvents();
+      setNotice(response.deleted_events === 0 ? "No events to clear." : `Cleared ${response.deleted_events} events.`);
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not clear Git events."));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleImport() {
-    setLoading("import");
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await importFiles(toPayload(form));
-      setResult(response);
-      setPreview(null);
-      await refreshConnectors();
-    } catch (caughtError) {
-      setError(errorMessage(caughtError, "Import failed."));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleClearFileSystemEvents() {
-    const confirmed = window.confirm(
-      "This will remove imported file/folder events from MindOS memory. Other memory will not be deleted. Continue?",
-    );
-    if (!confirmed) {
-      return;
-    }
-    setLoading("clearFiles");
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await clearFileSystemEvents();
-      setPreview(null);
-      setResult(null);
-      await refreshConnectors();
-      setNotice(response.deleted_events === 0 ? "No file events to clear." : `Cleared ${response.deleted_events} file events.`);
-    } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not clear file events."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -297,14 +270,13 @@ export function ConnectorsPage() {
   function openSavePanel(connectorType: "file_system" | "logs" | "git", source?: ConnectorSource) {
     setSaveType(connectorType);
     setEditingSource(source ?? null);
-    setSaveForm(sourceToForm(source, connectorType));
-    setPanelOpen("save");
+    setSaveForm(sourceToForm(source));
+    setSelectedPanel("save");
   }
 
   async function handleSaveSource() {
     setLoading("saveSource");
     setError(null);
-    setNotice(null);
     try {
       const payload = sourcePayload(saveType, saveForm);
       if (editingSource) {
@@ -314,11 +286,11 @@ export function ConnectorsPage() {
         await createConnectorSource(payload);
         setNotice("Saved source created.");
       }
+      setSelectedPanel(saveType);
       setEditingSource(null);
-      setPanelOpen(null);
-      await refreshConnectors();
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not save source."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -327,13 +299,12 @@ export function ConnectorsPage() {
   async function handleRunSource(source: ConnectorSource) {
     setLoading(`run:${source.id}`);
     setError(null);
-    setNotice(null);
     try {
       const response = await runConnectorSourceImport(source.id);
       setNotice(response.import_run.message);
-      await refreshConnectors();
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not re-import saved source."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -348,9 +319,9 @@ export function ConnectorsPage() {
     try {
       await deleteConnectorSource(source.id);
       setNotice("Saved source deleted.");
-      await refreshConnectors();
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not delete saved source."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
@@ -364,29 +335,23 @@ export function ConnectorsPage() {
     setError(null);
     try {
       const response = await clearConnectorSourceEvents(source.id);
-      setNotice(response.deleted_events === 0 ? "No events to clear for this source." : `Cleared ${response.deleted_events} events for this source.`);
-      await refreshConnectors();
+      setNotice(response.deleted_events === 0 ? "No events to clear for this source." : `Cleared ${response.deleted_events} source events.`);
+      await refresh();
     } catch (caughtError) {
-      setError(errorMessage(caughtError, "Could not clear source events."));
+      setError(getApiErrorMessage(caughtError));
     } finally {
       setLoading(null);
     }
   }
 
-  const fileSystem = connectors.find((connector) => connector.name === "file_system");
-  const logs = connectors.find((connector) => connector.name === "logs");
-  const git = connectors.find((connector) => connector.name === "git");
-  const otherConnectors = connectors.filter((connector) => !["file_system", "logs", "git"].includes(connector.name));
-  const visibleSources = sourceFilter === "all" ? savedSources : savedSources.filter((source) => source.connector_type === sourceFilter);
-
   return (
-    <div className="space-y-6">
-      <header className="flex items-start justify-between gap-4">
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-app-text">Connectors</h1>
-          <p className="mt-2 text-sm text-app-muted">Choose what local sources MindOS can learn from.</p>
+          <p className="mt-1 text-sm text-app-muted">Choose what MindOS can learn from.</p>
         </div>
-        <Button variant="ghost" onClick={() => void refreshConnectors()} loading={loading === "connectors"}>
+        <Button variant="ghost" onClick={() => void refresh()} loading={loading === "connectors"}>
           <RefreshCw size={16} />
           Refresh
         </Button>
@@ -395,519 +360,438 @@ export function ConnectorsPage() {
       {error ? <StatusMessage message={error} variant="danger" /> : null}
       {notice ? <StatusMessage message={notice} variant="success" /> : null}
 
-      <div className="grid grid-cols-[1fr_420px] gap-4">
-        <div className="space-y-4">
-          {fileSystem ? (
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+          {orderedConnectors.map((connector) => (
             <ConnectorCard
-              connector={fileSystem}
-              active
-              actionLabel="Import Folder"
-              onImport={() => setPanelOpen("files")}
-              clearLabel="Clear File Events"
-              onClear={() => void handleClearFileSystemEvents()}
-              clearLoading={loading === "clearFiles"}
-              zeroStateLabel="No file events imported yet."
-              saveLabel="Save Folder Source"
-              onSave={() => openSavePanel("file_system")}
+              key={connector.id}
+              connector={connector}
+              loading={loading}
+              selected={selectedPanel === connector.id}
+              onToggle={(enabled) => void handleToggle(connector, enabled)}
+              onConfigure={() => setSelectedPanel(connector.id)}
+            />
+          ))}
+        </div>
+
+        <aside>
+          {selectedPanel === "save" ? (
+            <SaveSourcePanel
+              connectorType={saveType}
+              form={saveForm}
+              setForm={setSaveForm}
+              editing={Boolean(editingSource)}
+              loading={loading === "saveSource"}
+              onClose={() => {
+                setSelectedPanel(saveType);
+                setEditingSource(null);
+              }}
+              onSave={handleSaveSource}
+            />
+          ) : selectedConnector ? (
+            <ConfigurePanel
+              connector={selectedConnector}
+              savedSources={savedSources.filter((source) => source.connector_type === selectedConnector.id)}
+              importRuns={importRuns.filter((run) => run.connector_type === selectedConnector.id)}
+              showHistory={showHistory}
+              setShowHistory={setShowHistory}
+              loading={loading}
+              fileForm={fileForm}
+              setFileForm={setFileForm}
+              filePreview={filePreview}
+              fileResult={fileResult}
+              logForm={logForm}
+              setLogForm={setLogForm}
+              logPreview={logPreview}
+              logResult={logResult}
+              gitForm={gitForm}
+              setGitForm={setGitForm}
+              gitPreview={gitPreview}
+              gitResult={gitResult}
+              onClose={() => setSelectedPanel(null)}
+              onToggleConnector={(enabled) => void handleToggle(selectedConnector, enabled)}
+              onFilePreview={handleFilePreview}
+              onFileImport={handleFileImport}
+              onLogPreview={handleLogPreview}
+              onLogImport={handleLogImport}
+              onGitPreview={handleGitPreview}
+              onGitImport={handleGitImport}
+              onClearEvents={() => void handleClearEvents(selectedConnector.id as "file_system" | "logs" | "git")}
+              onSaveSource={() => openSavePanel(selectedConnector.id as "file_system" | "logs" | "git")}
+              onRunSource={(source) => void handleRunSource(source)}
+              onEditSource={(source) => openSavePanel(source.connector_type as "file_system" | "logs" | "git", source)}
+              onDeleteSource={(source) => void handleDeleteSource(source)}
+              onClearSource={(source) => void handleClearSourceEvents(source)}
             />
           ) : (
-            <Card>
-              <p className="text-sm text-app-muted">File System connector is unavailable.</p>
+            <Card className="sticky top-4">
+              <h2 className="text-base font-semibold text-app-text">Select a connector</h2>
+              <p className="mt-2 text-sm leading-6 text-app-muted">Configure imports, saved sources, and connector status from one place.</p>
             </Card>
           )}
-
-          {logs ? (
-            <ConnectorCard
-              connector={logs}
-              active
-              actionLabel="Import Log File"
-              onImport={() => setPanelOpen("logs")}
-              clearLabel="Clear Log Events"
-              onClear={() => void handleClearLogEvents()}
-              clearLoading={loading === "clearLogs"}
-              zeroStateLabel="No log events imported yet."
-              saveLabel="Save Log Source"
-              onSave={() => openSavePanel("logs")}
-            />
-          ) : null}
-
-          {git ? (
-            <ConnectorCard
-              connector={git}
-              active
-              actionLabel="Import Repository"
-              onImport={() => setPanelOpen("git")}
-              clearLabel="Clear Git Events"
-              onClear={() => void handleClearGitEvents()}
-              clearLoading={loading === "clearGit"}
-              zeroStateLabel="No Git events imported yet."
-              saveLabel="Save Git Source"
-              onSave={() => openSavePanel("git")}
-            />
-          ) : null}
-
-          <div className="grid grid-cols-2 gap-4">
-            {otherConnectors.map((connector) => (
-              <ConnectorCard key={connector.name} connector={connector} />
-            ))}
-          </div>
-        </div>
-
-        {panelOpen === "files" ? (
-          <ImportPanel
-            form={form}
-            setForm={setForm}
-            loading={loading}
-            preview={preview}
-            result={result}
-            onClose={() => setPanelOpen(null)}
-            onPreview={handlePreview}
-            onImport={handleImport}
-          />
-        ) : panelOpen === "logs" ? (
-          <LogImportPanel
-            form={logForm}
-            setForm={setLogForm}
-            loading={loading}
-            preview={logPreview}
-            result={logResult}
-            onClose={() => setPanelOpen(null)}
-            onPreview={handleLogPreview}
-            onImport={handleLogImport}
-          />
-        ) : panelOpen === "git" ? (
-          <GitImportPanel
-            form={gitForm}
-            setForm={setGitForm}
-            loading={loading}
-            preview={gitPreview}
-            result={gitResult}
-            onClose={() => setPanelOpen(null)}
-            onPreview={handleGitPreview}
-            onImport={handleGitImport}
-          />
-        ) : panelOpen === "save" ? (
-          <SaveSourcePanel
-            connectorType={saveType}
-            form={saveForm}
-            setForm={setSaveForm}
-            editing={Boolean(editingSource)}
-            loading={loading === "saveSource"}
-            onClose={() => {
-              setPanelOpen(null);
-              setEditingSource(null);
-            }}
-            onSave={handleSaveSource}
-          />
-        ) : (
-          <Card className="min-h-72">
-            <div className="flex h-full flex-col items-center justify-center text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300">
-                <Cable size={24} />
-              </div>
-              <h2 className="mt-4 text-base font-semibold text-app-text">No connector selected</h2>
-              <p className="mt-2 max-w-sm text-sm leading-6 text-app-muted">Start with a manual File System, Logs, or Local Git import.</p>
-            </div>
-          </Card>
-        )}
+        </aside>
       </div>
-
-        <Card>
-          <h2 className="text-base font-semibold text-app-text">Upcoming Collectors</h2>
-          <p className="mt-2 text-sm leading-6 text-app-muted">
-            These clients will send events into MindOS through the local external ingestion API. They are planned and do not run automatically.
-          </p>
-          <div className="mt-4 grid gap-3 lg:grid-cols-3">
-            <PlannedCollectorCard
-              title="VSCode Extension"
-              description="Collects file opens, saves, workspace activity, terminal commands, and debug activity."
-            />
-            <PlannedCollectorCard
-              title="Browser Extension"
-              description="Collects research pages, searches, saved tabs, and browsing context with user control."
-            />
-            <PlannedCollectorCard
-              title="Activity Tracker"
-              description="Tracks active app/window sessions locally to summarize work patterns."
-            />
-          </div>
-        </Card>
-
-        <Card>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-app-text">Saved Sources</h2>
-            <p className="mt-2 text-sm leading-6 text-app-muted">
-              Saved sources are local paths stored in your local MindOS database. MindOS only imports them when you click Re-import. Live watching is not enabled yet.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {["all", "file_system", "logs", "git"].map((filter) => (
-              <button key={filter} type="button" onClick={() => setSourceFilter(filter)}>
-                <Badge variant={sourceFilter === filter ? "info" : "default"}>{filter === "all" ? "All" : formatConnectorType(filter)}</Badge>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {visibleSources.length === 0 ? (
-            <p className="text-sm text-app-muted">No saved sources yet.</p>
-          ) : (
-            visibleSources.map((source) => (
-              <SavedSourceCard
-                key={source.id}
-                source={source}
-                loading={loading}
-                onRun={() => void handleRunSource(source)}
-                onEdit={() => openSavePanel(source.connector_type as "file_system" | "logs" | "git", source)}
-                onDelete={() => void handleDeleteSource(source)}
-                onClear={() => void handleClearSourceEvents(source)}
-              />
-            ))
-          )}
-        </div>
-      </Card>
-
-      <Card>
-        <h2 className="text-base font-semibold text-app-text">Recent Import Runs</h2>
-        <div className="mt-4 space-y-2">
-          {importRuns.length === 0 ? (
-            <p className="text-sm text-app-muted">No import runs yet.</p>
-          ) : (
-            importRuns.map((run) => <ImportRunRow key={run.id} run={run} sources={savedSources} />)
-          )}
-        </div>
-      </Card>
     </div>
   );
 }
 
-  function ConnectorCard({
+function ConnectorCard({
   connector,
-  active = false,
-  actionLabel = "Import",
-  onImport,
-  saveLabel,
-  onSave,
-  clearLabel,
-  onClear,
-  clearLoading = false,
-  zeroStateLabel,
+  loading,
+  selected,
+  onToggle,
+  onConfigure,
 }: {
   connector: Connector;
-  active?: boolean;
-  actionLabel?: string;
-  onImport?: () => void;
-  saveLabel?: string;
-  onSave?: () => void;
-  clearLabel?: string;
-  onClear?: () => void;
-  clearLoading?: boolean;
-  zeroStateLabel?: string;
+  loading: string | null;
+  selected: boolean;
+  onToggle: (enabled: boolean) => void;
+  onConfigure: () => void;
 }) {
-  const eventsCount = connector.events_count ?? 0;
-  const savedSourcesCount = connector.saved_sources_count ?? 0;
-
+  const Icon = connectorIcon(connector.id);
+  const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "file_system", "logs", "git"].includes(connector.id));
   return (
-    <Card>
+    <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300">
-            <FolderOpen size={20} />
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app-border bg-zinc-950 text-app-text">
+            <Icon size={20} />
           </div>
-          <div>
-            <h2 className="text-base font-semibold text-app-text">{connector.display_name ?? connector.name}</h2>
-            <p className="mt-2 text-sm leading-6 text-app-muted">{connector.description}</p>
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold text-app-text">{connector.name}</h2>
+            <p className="mt-1 truncate text-sm text-app-muted">{connector.description}</p>
           </div>
         </div>
-        <Badge variant={connector.status === "available" ? "success" : "default"}>{connector.status}</Badge>
+        <Toggle checked={connector.enabled} disabled={toggleDisabled || loading === `toggle:${connector.id}`} onChange={onToggle} />
       </div>
 
-      {active ? (
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <Badge variant="info">events: {eventsCount}</Badge>
-          <Badge>saved sources: {savedSourcesCount}</Badge>
-          {connector.last_event_at && eventsCount > 0 ? <Badge>last: {formatTimestamp(connector.last_event_at)}</Badge> : null}
-          {connector.last_import_at ? <Badge>last import: {formatTimestamp(connector.last_import_at)}</Badge> : null}
-          {connector.last_import_status ? <Badge>{connector.last_import_status}</Badge> : null}
-          {eventsCount === 0 && zeroStateLabel ? <span className="text-xs text-app-muted">{zeroStateLabel}</span> : null}
-          <Button variant="primary" onClick={onImport}>
-            {actionLabel}
-          </Button>
-          {onSave && saveLabel ? (
-            <Button variant="secondary" onClick={onSave}>
-              {saveLabel}
-            </Button>
-          ) : null}
-          {onClear && clearLabel ? (
-            <Button variant="danger" onClick={onClear} loading={clearLoading}>
-              {clearLabel}
-            </Button>
-          ) : null}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <StatusBadge status={connector.status} />
+        {connector.supports_live_events ? <Badge>live</Badge> : null}
+        {connector.supports_manual_import ? <Badge>manual</Badge> : null}
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+        <div>
+          <span className="block uppercase">Events</span>
+          <span className="mt-1 block text-sm font-medium text-app-text">{connector.event_count}</span>
+        </div>
+        <div>
+          <span className="block uppercase">{connector.supports_live_events ? "Last seen" : "Last sync"}</span>
+          <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(connector.last_seen_at ?? connector.last_event_at)}</span>
+        </div>
+      </div>
+
+      <Button className="mt-5 w-full" variant="secondary" onClick={onConfigure}>
+        Configure
+      </Button>
+    </Card>
+  );
+}
+
+function ConfigurePanel(props: {
+  connector: Connector;
+  savedSources: ConnectorSource[];
+  importRuns: ImportRun[];
+  showHistory: boolean;
+  setShowHistory: (show: boolean) => void;
+  loading: string | null;
+  fileForm: FileForm;
+  setFileForm: Dispatch<SetStateAction<FileForm>>;
+  filePreview: FilePreviewResult | null;
+  fileResult: FileImportResult | null;
+  logForm: LogForm;
+  setLogForm: Dispatch<SetStateAction<LogForm>>;
+  logPreview: LogPreviewResult | null;
+  logResult: LogImportResult | null;
+  gitForm: GitForm;
+  setGitForm: Dispatch<SetStateAction<GitForm>>;
+  gitPreview: GitPreviewResult | null;
+  gitResult: GitImportResult | null;
+  onClose: () => void;
+  onToggleConnector: (enabled: boolean) => void;
+  onFilePreview: () => void;
+  onFileImport: () => void;
+  onLogPreview: () => void;
+  onLogImport: () => void;
+  onGitPreview: () => void;
+  onGitImport: () => void;
+  onClearEvents: () => void;
+  onSaveSource: () => void;
+  onRunSource: (source: ConnectorSource) => void;
+  onEditSource: (source: ConnectorSource) => void;
+  onDeleteSource: (source: ConnectorSource) => void;
+  onClearSource: (source: ConnectorSource) => void;
+}) {
+  const { connector } = props;
+  return (
+    <Card className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto">
+      <PanelHeader title={connector.name} onClose={props.onClose} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <StatusBadge status={connector.status} />
+        <Badge>events: {connector.event_count}</Badge>
+        <Badge>{connector.supports_live_events ? `last seen: ${formatDate(connector.last_seen_at)}` : `last sync: ${formatDate(connector.last_event_at)}`}</Badge>
+      </div>
+
+      {connector.id === "vscode" ? (
+        <VSCodePanel connector={connector} onToggle={props.onToggleConnector} />
+      ) : connector.id === "file_system" ? (
+        <FileSystemPanel {...props} />
+      ) : connector.id === "logs" ? (
+        <LogsPanel {...props} />
+      ) : connector.id === "git" ? (
+        <GitPanel {...props} />
+      ) : (
+        <PlaceholderConfig connector={connector} />
+      )}
+    </Card>
+  );
+}
+
+function VSCodePanel({ connector, onToggle }: { connector: Connector; onToggle: (enabled: boolean) => void }) {
+  const [showInstall, setShowInstall] = useState(false);
+  return (
+    <div className="mt-5 space-y-4">
+      {connector.enabled && connector.status === "disconnected" ? (
+        <StatusMessage message="Extension installed? Open VSCode or check backend URL." variant="warning" />
+      ) : null}
+      <div className="flex items-center justify-between rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-app-text">Collect VSCode events</p>
+          <p className="mt-1 text-xs text-app-muted">Install once. After that, this toggle controls collection.</p>
+        </div>
+        <Toggle checked={connector.enabled} disabled={false} onChange={onToggle} />
+      </div>
+      <KeyValue label="Backend URL" value="http://localhost:8000" />
+      <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => setShowInstall(!showInstall)}>
+        {showInstall ? "Hide install steps" : "Install extension manually"}
+      </button>
+      {showInstall ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>Open <code>extensions/vscode</code>.</li>
+            <li><code>npm install</code></li>
+            <li><code>npm run compile</code></li>
+            <li><code>npm run package</code></li>
+            <li><code>code --install-extension mindos-vscode-0.1.0.vsix</code></li>
+          </ol>
         </div>
       ) : null}
-    </Card>
-  );
-  }
-
-  function PlannedCollectorCard({ title, description }: { title: string; description: string }) {
-    return (
-      <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-app-text">{title}</h3>
-          <Badge variant="default">Planned</Badge>
-        </div>
-        <p className="mt-2 text-sm leading-6 text-app-muted">{description}</p>
-      </div>
-    );
-  }
-
-  function ImportPanel({
-  form,
-  setForm,
-  loading,
-  preview,
-  result,
-  onClose,
-  onPreview,
-  onImport,
-}: {
-  form: ImportForm;
-  setForm: (updater: ImportForm | ((current: ImportForm) => ImportForm)) => void;
-  loading: string | null;
-  preview: FilePreviewResult | null;
-  result: FileImportResult | null;
-  onClose: () => void;
-  onPreview: () => void;
-  onImport: () => void;
-}) {
-  return (
-    <Card className="max-h-[calc(100vh-7rem)] overflow-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-app-text">Import Folder</h2>
-          <p className="mt-2 text-sm leading-6 text-app-muted">
-            MindOS will only read files from the folder path you provide. Files stay local and are stored in your local
-            MindOS database.
-          </p>
-        </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
-          <X size={18} />
-        </button>
-      </div>
-
-      <div className="mt-5 space-y-4">
-        <LabeledInput
-          label="Folder path"
-          value={form.folderPath}
-          placeholder="C:\\Users\\YourName\\Projects\\my-project"
-          onChange={(value) => setForm((current) => ({ ...current, folderPath: value }))}
-        />
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.recursive}
-            onChange={(event) => setForm((current) => ({ ...current, recursive: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Recursive
-        </label>
-        <div className="grid grid-cols-2 gap-3">
-          <LabeledInput
-            label="Max files"
-            type="number"
-            value={String(form.maxFiles)}
-            onChange={(value) => setForm((current) => ({ ...current, maxFiles: Number(value) }))}
-          />
-          <LabeledInput
-            label="Max file size KB"
-            type="number"
-            value={String(form.maxFileSizeKb)}
-            onChange={(value) => setForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))}
-          />
-        </div>
-        <LabeledInput
-          label="Allowed extensions"
-          value={form.allowedExtensions}
-          placeholder=".py,.ts,.tsx,.md,.json"
-          onChange={(value) => setForm((current) => ({ ...current, allowedExtensions: value }))}
-        />
-
-        <div className="flex gap-3">
-          <Button variant="secondary" onClick={onPreview} loading={loading === "preview"} disabled={!form.folderPath.trim()}>
-            Preview
-          </Button>
-          <Button variant="primary" onClick={onImport} loading={loading === "import"} disabled={!form.folderPath.trim()}>
-            Import
-          </Button>
-        </div>
-      </div>
-
-      {preview ? <PreviewBlock preview={preview} /> : null}
-      {result ? <ResultBlock result={result} /> : null}
-    </Card>
+    </div>
   );
 }
 
-function LogImportPanel({
-  form,
-  setForm,
-  loading,
-  preview,
-  result,
-  onClose,
-  onPreview,
-  onImport,
-}: {
-  form: LogImportForm;
-  setForm: (updater: LogImportForm | ((current: LogImportForm) => LogImportForm)) => void;
-  loading: string | null;
-  preview: LogPreviewResult | null;
-  result: LogImportResult | null;
-  onClose: () => void;
-  onPreview: () => void;
-  onImport: () => void;
-}) {
+function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
   return (
-    <Card className="max-h-[calc(100vh-7rem)] overflow-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-app-text">Import Log File</h2>
-          <p className="mt-2 text-sm leading-6 text-app-muted">
-            MindOS reads only the log file path you provide. Logs stay local and are stored in your local MindOS database.
-          </p>
-        </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
-          <X size={18} />
-        </button>
-      </div>
-
-      <div className="mt-5 space-y-4">
-        <LabeledInput
-          label="Log file path"
-          value={form.filePath}
-          placeholder="C:\\Users\\YourName\\logs\\application.log"
-          onChange={(value) => setForm((current) => ({ ...current, filePath: value }))}
-        />
-        <LabeledInput
-          label="Max lines"
-          type="number"
-          value={String(form.maxLines)}
-          onChange={(value) => setForm((current) => ({ ...current, maxLines: Number(value) }))}
-        />
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.onlyErrors}
-            onChange={(event) => setForm((current) => ({ ...current, onlyErrors: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Only errors
-        </label>
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.groupSimilar}
-            onChange={(event) => setForm((current) => ({ ...current, groupSimilar: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Group similar logs
-        </label>
-
-        <div className="flex gap-3">
-          <Button variant="secondary" onClick={onPreview} loading={loading === "logPreview"} disabled={!form.filePath.trim()}>
-            Preview
-          </Button>
-          <Button variant="primary" onClick={onImport} loading={loading === "logImport"} disabled={!form.filePath.trim()}>
-            Import
-          </Button>
-        </div>
-      </div>
-
-      {preview ? <LogPreviewBlock preview={preview} /> : null}
-      {result ? <LogResultBlock result={result} /> : null}
-    </Card>
+    <ManualConnectorPanel
+      form={
+        <>
+          <LabeledInput label="Folder path" value={props.fileForm.folderPath} onChange={(value) => props.setFileForm((current) => ({ ...current, folderPath: value }))} />
+          <div className="grid grid-cols-2 gap-3">
+            <LabeledInput label="Max files" type="number" value={String(props.fileForm.maxFiles)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxFiles: Number(value) }))} />
+            <LabeledInput label="Max KB" type="number" value={String(props.fileForm.maxFileSizeKb)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))} />
+          </div>
+          <Checkbox label="Recursive" checked={props.fileForm.recursive} onChange={(checked) => props.setFileForm((current) => ({ ...current, recursive: checked }))} />
+          <LabeledInput label="Extensions" value={props.fileForm.allowedExtensions} placeholder=".py,.ts,.md" onChange={(value) => props.setFileForm((current) => ({ ...current, allowedExtensions: value }))} />
+        </>
+      }
+      preview={props.filePreview ? <FilePreviewBlock preview={props.filePreview} /> : null}
+      result={props.fileResult ? <ImportResult result={props.fileResult} /> : null}
+      previewLoading={props.loading === "filePreview"}
+      importLoading={props.loading === "fileImport"}
+      clearLoading={props.loading === "clear:file_system"}
+      savedSources={props.savedSources}
+      importRuns={props.importRuns}
+      showHistory={props.showHistory}
+      setShowHistory={props.setShowHistory}
+      onPreview={props.onFilePreview}
+      onImport={props.onFileImport}
+      onClearEvents={props.onClearEvents}
+      onSaveSource={props.onSaveSource}
+      onRunSource={props.onRunSource}
+      onEditSource={props.onEditSource}
+      onDeleteSource={props.onDeleteSource}
+      onClearSource={props.onClearSource}
+      loading={props.loading}
+    />
   );
 }
 
-function GitImportPanel({
+function LogsPanel(props: Parameters<typeof ConfigurePanel>[0]) {
+  return (
+    <ManualConnectorPanel
+      form={
+        <>
+          <LabeledInput label="Log file path" value={props.logForm.filePath} onChange={(value) => props.setLogForm((current) => ({ ...current, filePath: value }))} />
+          <LabeledInput label="Max lines" type="number" value={String(props.logForm.maxLines)} onChange={(value) => props.setLogForm((current) => ({ ...current, maxLines: Number(value) }))} />
+          <Checkbox label="Only errors" checked={props.logForm.onlyErrors} onChange={(checked) => props.setLogForm((current) => ({ ...current, onlyErrors: checked }))} />
+          <Checkbox label="Group similar" checked={props.logForm.groupSimilar} onChange={(checked) => props.setLogForm((current) => ({ ...current, groupSimilar: checked }))} />
+        </>
+      }
+      preview={props.logPreview ? <LogPreviewBlock preview={props.logPreview} /> : null}
+      result={props.logResult ? <ImportResult result={props.logResult} /> : null}
+      previewLoading={props.loading === "logPreview"}
+      importLoading={props.loading === "logImport"}
+      clearLoading={props.loading === "clear:logs"}
+      savedSources={props.savedSources}
+      importRuns={props.importRuns}
+      showHistory={props.showHistory}
+      setShowHistory={props.setShowHistory}
+      onPreview={props.onLogPreview}
+      onImport={props.onLogImport}
+      onClearEvents={props.onClearEvents}
+      onSaveSource={props.onSaveSource}
+      onRunSource={props.onRunSource}
+      onEditSource={props.onEditSource}
+      onDeleteSource={props.onDeleteSource}
+      onClearSource={props.onClearSource}
+      loading={props.loading}
+    />
+  );
+}
+
+function GitPanel(props: Parameters<typeof ConfigurePanel>[0]) {
+  return (
+    <ManualConnectorPanel
+      form={
+        <>
+          <LabeledInput label="Repository path" value={props.gitForm.repoPath} onChange={(value) => props.setGitForm((current) => ({ ...current, repoPath: value }))} />
+          <LabeledInput label="Max commits" type="number" value={String(props.gitForm.maxCommits)} onChange={(value) => props.setGitForm((current) => ({ ...current, maxCommits: Number(value) }))} />
+          <Checkbox label="Include diff summary" checked={props.gitForm.includeDiffSummary} onChange={(checked) => props.setGitForm((current) => ({ ...current, includeDiffSummary: checked }))} />
+          <Checkbox label="Include status" checked={props.gitForm.includeStatus} onChange={(checked) => props.setGitForm((current) => ({ ...current, includeStatus: checked }))} />
+        </>
+      }
+      preview={props.gitPreview ? <GitPreviewBlock preview={props.gitPreview} /> : null}
+      result={props.gitResult ? <ImportResult result={props.gitResult} /> : null}
+      previewLoading={props.loading === "gitPreview"}
+      importLoading={props.loading === "gitImport"}
+      clearLoading={props.loading === "clear:git"}
+      savedSources={props.savedSources}
+      importRuns={props.importRuns}
+      showHistory={props.showHistory}
+      setShowHistory={props.setShowHistory}
+      onPreview={props.onGitPreview}
+      onImport={props.onGitImport}
+      onClearEvents={props.onClearEvents}
+      onSaveSource={props.onSaveSource}
+      onRunSource={props.onRunSource}
+      onEditSource={props.onEditSource}
+      onDeleteSource={props.onDeleteSource}
+      onClearSource={props.onClearSource}
+      loading={props.loading}
+    />
+  );
+}
+
+function ManualConnectorPanel({
   form,
-  setForm,
-  loading,
   preview,
   result,
-  onClose,
+  previewLoading,
+  importLoading,
+  clearLoading,
+  savedSources,
+  importRuns,
+  showHistory,
+  setShowHistory,
   onPreview,
   onImport,
+  onClearEvents,
+  onSaveSource,
+  onRunSource,
+  onEditSource,
+  onDeleteSource,
+  onClearSource,
+  loading,
 }: {
-  form: GitImportForm;
-  setForm: (updater: GitImportForm | ((current: GitImportForm) => GitImportForm)) => void;
-  loading: string | null;
-  preview: GitPreviewResult | null;
-  result: GitImportResult | null;
-  onClose: () => void;
+  form: ReactNode;
+  preview: ReactNode;
+  result: ReactNode;
+  previewLoading: boolean;
+  importLoading: boolean;
+  clearLoading: boolean;
+  savedSources: ConnectorSource[];
+  importRuns: ImportRun[];
+  showHistory: boolean;
+  setShowHistory: (show: boolean) => void;
   onPreview: () => void;
   onImport: () => void;
+  onClearEvents: () => void;
+  onSaveSource: () => void;
+  onRunSource: (source: ConnectorSource) => void;
+  onEditSource: (source: ConnectorSource) => void;
+  onDeleteSource: (source: ConnectorSource) => void;
+  onClearSource: (source: ConnectorSource) => void;
+  loading: string | null;
 }) {
   return (
-    <Card className="max-h-[calc(100vh-7rem)] overflow-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-app-text">Import Git Repository</h2>
-          <p className="mt-2 text-sm leading-6 text-app-muted">
-            MindOS only runs read-only Git commands for import. It will not commit, push, pull, checkout, reset, or modify your repository.
-          </p>
+    <div className="mt-5 space-y-5">
+      <div className="space-y-3">{form}</div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={onPreview} loading={previewLoading}>
+          Preview
+        </Button>
+        <Button variant="primary" onClick={onImport} loading={importLoading}>
+          Import
+        </Button>
+        <Button variant="secondary" onClick={onSaveSource}>
+          Save Source
+        </Button>
+        <Button variant="danger" onClick={onClearEvents} loading={clearLoading}>
+          Clear Events
+        </Button>
+      </div>
+      {preview}
+      {result}
+
+      <div className="border-t border-app-border pt-4">
+        <h3 className="text-sm font-semibold text-app-text">Saved Sources</h3>
+        <div className="mt-3 space-y-2">
+          {savedSources.length === 0 ? (
+            <p className="text-sm text-app-muted">No saved sources.</p>
+          ) : (
+            savedSources.map((source) => (
+              <SavedSourceRow
+                key={source.id}
+                source={source}
+                loading={loading}
+                onRun={() => onRunSource(source)}
+                onEdit={() => onEditSource(source)}
+                onDelete={() => onDeleteSource(source)}
+                onClear={() => onClearSource(source)}
+              />
+            ))
+          )}
         </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
-          <X size={18} />
+      </div>
+
+      <div className="border-t border-app-border pt-4">
+        <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => setShowHistory(!showHistory)}>
+          {showHistory ? "Hide import history" : "View import history"}
         </button>
+        {showHistory ? (
+          <div className="mt-3 space-y-2">
+            {importRuns.length === 0 ? (
+              <p className="text-sm text-app-muted">No import runs.</p>
+            ) : (
+              importRuns.map((run) => <ImportRunRow key={run.id} run={run} />)
+            )}
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
 
-      <div className="mt-5 space-y-4">
-        <LabeledInput
-          label="Repository path"
-          value={form.repoPath}
-          placeholder="C:\\Users\\YourName\\Projects\\my-project"
-          onChange={(value) => setForm((current) => ({ ...current, repoPath: value }))}
-        />
-        <LabeledInput
-          label="Max commits"
-          type="number"
-          value={String(form.maxCommits)}
-          onChange={(value) => setForm((current) => ({ ...current, maxCommits: Number(value) }))}
-        />
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.includeDiffSummary}
-            onChange={(event) => setForm((current) => ({ ...current, includeDiffSummary: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Include diff summary
-        </label>
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.includeStatus}
-            onChange={(event) => setForm((current) => ({ ...current, includeStatus: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Include working tree status
-        </label>
-
-        <div className="flex gap-3">
-          <Button variant="secondary" onClick={onPreview} loading={loading === "gitPreview"} disabled={!form.repoPath.trim()}>
-            Preview
-          </Button>
-          <Button variant="primary" onClick={onImport} loading={loading === "gitImport"} disabled={!form.repoPath.trim()}>
-            Import
-          </Button>
-        </div>
+function PlaceholderConfig({ connector }: { connector: Connector }) {
+  return (
+    <div className="mt-5 rounded-md border border-app-border bg-zinc-950 p-4">
+      <p className="text-sm leading-6 text-app-muted">Configuration will be added when this connector is implemented.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge>{connector.configured ? "configured" : "needs setup"}</Badge>
+        <Badge>events: {connector.event_count}</Badge>
       </div>
-
-      {preview ? <GitPreviewBlock preview={preview} /> : null}
-      {result ? <GitResultBlock result={result} /> : null}
-    </Card>
+    </div>
   );
 }
 
@@ -922,144 +806,46 @@ function SaveSourcePanel({
 }: {
   connectorType: "file_system" | "logs" | "git";
   form: SavedSourceForm;
-  setForm: (updater: SavedSourceForm | ((current: SavedSourceForm) => SavedSourceForm)) => void;
+  setForm: Dispatch<SetStateAction<SavedSourceForm>>;
   editing: boolean;
   loading: boolean;
   onClose: () => void;
   onSave: () => void;
 }) {
   return (
-    <Card className="max-h-[calc(100vh-7rem)] overflow-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-app-text">{editing ? "Edit Saved Source" : `Save ${formatConnectorType(connectorType)} Source`}</h2>
-          <p className="mt-2 text-sm leading-6 text-app-muted">
-            Saved sources are local paths. MindOS only imports them when you click Re-import.
-          </p>
-        </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
-          <X size={18} />
-        </button>
-      </div>
-
+    <Card className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto">
+      <PanelHeader title={editing ? "Edit Source" : `Save ${formatConnector(connectorType)} Source`} onClose={onClose} />
       <div className="mt-5 space-y-4">
-        <LabeledInput
-          label="Name"
-          value={form.name}
-          placeholder={connectorType === "git" ? "MindOS Repo" : connectorType === "logs" ? "Auth Service Log" : "SonoSync Backend"}
-          onChange={(value) => setForm((current) => ({ ...current, name: value }))}
-        />
-        <LabeledInput
-          label={connectorType === "logs" ? "Log file path" : connectorType === "git" ? "Repository path" : "Folder path"}
-          value={form.path}
-          placeholder={connectorType === "logs" ? "C:\\Users\\YourName\\logs\\application.log" : "C:\\Users\\YourName\\Projects\\my-project"}
-          onChange={(value) => setForm((current) => ({ ...current, path: value }))}
-        />
-        <label className="flex items-center gap-3 text-sm text-app-text">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
-            className="h-4 w-4 accent-violet-600"
-          />
-          Enabled
-        </label>
-
+        <LabeledInput label="Name" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} />
+        <LabeledInput label={connectorType === "logs" ? "Log file path" : connectorType === "git" ? "Repository path" : "Folder path"} value={form.path} onChange={(value) => setForm((current) => ({ ...current, path: value }))} />
+        <Checkbox label="Enabled" checked={form.enabled} onChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))} />
         {connectorType === "file_system" ? (
           <>
-            <label className="flex items-center gap-3 text-sm text-app-text">
-              <input
-                type="checkbox"
-                checked={form.recursive}
-                onChange={(event) => setForm((current) => ({ ...current, recursive: event.target.checked }))}
-                className="h-4 w-4 accent-violet-600"
-              />
-              Recursive
-            </label>
+            <Checkbox label="Recursive" checked={form.recursive} onChange={(checked) => setForm((current) => ({ ...current, recursive: checked }))} />
             <div className="grid grid-cols-2 gap-3">
-              <LabeledInput
-                label="Max files"
-                type="number"
-                value={String(form.maxFiles)}
-                onChange={(value) => setForm((current) => ({ ...current, maxFiles: Number(value) }))}
-              />
-              <LabeledInput
-                label="Max file size KB"
-                type="number"
-                value={String(form.maxFileSizeKb)}
-                onChange={(value) => setForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))}
-              />
+              <LabeledInput label="Max files" type="number" value={String(form.maxFiles)} onChange={(value) => setForm((current) => ({ ...current, maxFiles: Number(value) }))} />
+              <LabeledInput label="Max KB" type="number" value={String(form.maxFileSizeKb)} onChange={(value) => setForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))} />
             </div>
-            <LabeledInput
-              label="Allowed extensions"
-              value={form.allowedExtensions}
-              placeholder=".py,.ts,.tsx,.md,.json"
-              onChange={(value) => setForm((current) => ({ ...current, allowedExtensions: value }))}
-            />
+            <LabeledInput label="Extensions" value={form.allowedExtensions} onChange={(value) => setForm((current) => ({ ...current, allowedExtensions: value }))} />
           </>
         ) : null}
-
         {connectorType === "logs" ? (
           <>
-            <LabeledInput
-              label="Max lines"
-              type="number"
-              value={String(form.maxLines)}
-              onChange={(value) => setForm((current) => ({ ...current, maxLines: Number(value) }))}
-            />
-            <label className="flex items-center gap-3 text-sm text-app-text">
-              <input
-                type="checkbox"
-                checked={form.onlyErrors}
-                onChange={(event) => setForm((current) => ({ ...current, onlyErrors: event.target.checked }))}
-                className="h-4 w-4 accent-violet-600"
-              />
-              Only errors
-            </label>
-            <label className="flex items-center gap-3 text-sm text-app-text">
-              <input
-                type="checkbox"
-                checked={form.groupSimilar}
-                onChange={(event) => setForm((current) => ({ ...current, groupSimilar: event.target.checked }))}
-                className="h-4 w-4 accent-violet-600"
-              />
-              Group similar logs
-            </label>
+            <LabeledInput label="Max lines" type="number" value={String(form.maxLines)} onChange={(value) => setForm((current) => ({ ...current, maxLines: Number(value) }))} />
+            <Checkbox label="Only errors" checked={form.onlyErrors} onChange={(checked) => setForm((current) => ({ ...current, onlyErrors: checked }))} />
+            <Checkbox label="Group similar" checked={form.groupSimilar} onChange={(checked) => setForm((current) => ({ ...current, groupSimilar: checked }))} />
           </>
         ) : null}
-
         {connectorType === "git" ? (
           <>
-            <LabeledInput
-              label="Max commits"
-              type="number"
-              value={String(form.maxCommits)}
-              onChange={(value) => setForm((current) => ({ ...current, maxCommits: Number(value) }))}
-            />
-            <label className="flex items-center gap-3 text-sm text-app-text">
-              <input
-                type="checkbox"
-                checked={form.includeDiffSummary}
-                onChange={(event) => setForm((current) => ({ ...current, includeDiffSummary: event.target.checked }))}
-                className="h-4 w-4 accent-violet-600"
-              />
-              Include diff summary
-            </label>
-            <label className="flex items-center gap-3 text-sm text-app-text">
-              <input
-                type="checkbox"
-                checked={form.includeStatus}
-                onChange={(event) => setForm((current) => ({ ...current, includeStatus: event.target.checked }))}
-                className="h-4 w-4 accent-violet-600"
-              />
-              Include working tree status
-            </label>
+            <LabeledInput label="Max commits" type="number" value={String(form.maxCommits)} onChange={(value) => setForm((current) => ({ ...current, maxCommits: Number(value) }))} />
+            <Checkbox label="Include diff summary" checked={form.includeDiffSummary} onChange={(checked) => setForm((current) => ({ ...current, includeDiffSummary: checked }))} />
+            <Checkbox label="Include status" checked={form.includeStatus} onChange={(checked) => setForm((current) => ({ ...current, includeStatus: checked }))} />
           </>
         ) : null}
-
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           <Button variant="primary" onClick={onSave} loading={loading} disabled={!form.name.trim() || !form.path.trim()}>
-            {editing ? "Save Changes" : "Save Source"}
+            Save
           </Button>
           <Button variant="ghost" onClick={onClose}>
             Cancel
@@ -1070,14 +856,18 @@ function SaveSourcePanel({
   );
 }
 
-function SavedSourceCard({
-  source,
-  loading,
-  onRun,
-  onEdit,
-  onDelete,
-  onClear,
-}: {
+function PanelHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <h2 className="text-base font-semibold text-app-text">{title}</h2>
+      <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
+        <X size={18} />
+      </button>
+    </div>
+  );
+}
+
+function SavedSourceRow({ source, loading, onRun, onEdit, onDelete, onClear }: {
   source: ConnectorSource;
   loading: string | null;
   onRun: () => void;
@@ -1086,34 +876,28 @@ function SavedSourceCard({
   onClear: () => void;
 }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+    <div className="rounded-md border border-app-border bg-zinc-950 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-app-text">{source.name}</h3>
-            <Badge variant="info">{formatConnectorType(source.connector_type)}</Badge>
-            <Badge variant={source.enabled ? "success" : "default"}>{source.enabled ? "enabled" : "disabled"}</Badge>
+          <p className="truncate text-sm font-medium text-app-text">{source.name}</p>
+          <p className="mt-1 truncate text-xs text-app-muted">{source.path}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Badge>{source.last_import_status ?? "not imported"}</Badge>
+            {source.last_import_at ? <Badge>{formatDate(source.last_import_at)}</Badge> : null}
           </div>
-          <p className="mt-2 truncate text-xs text-app-muted">{source.path}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {source.last_import_status ? <Badge>{source.last_import_status}</Badge> : <Badge>not imported yet</Badge>}
-            {source.last_import_at ? <Badge>last: {formatTimestamp(source.last_import_at)}</Badge> : null}
-          </div>
-          {source.last_import_message ? <p className="mt-2 text-xs leading-5 text-app-muted">{source.last_import_message}</p> : null}
         </div>
       </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="primary" onClick={onRun} loading={loading === `run:${source.id}`}>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button className="h-8 px-3 text-xs" variant="primary" onClick={onRun} loading={loading === `run:${source.id}`}>
           Re-import
         </Button>
-        <Button variant="secondary" onClick={onEdit}>
+        <Button className="h-8 px-3 text-xs" variant="secondary" onClick={onEdit}>
           Edit
         </Button>
-        <Button variant="secondary" onClick={onClear} loading={loading === `clearSource:${source.id}`}>
-          Clear Events
+        <Button className="h-8 px-3 text-xs" variant="secondary" onClick={onClear} loading={loading === `clearSource:${source.id}`}>
+          Clear
         </Button>
-        <Button variant="danger" onClick={onDelete} loading={loading === `delete:${source.id}`}>
+        <Button className="h-8 px-3 text-xs" variant="danger" onClick={onDelete} loading={loading === `delete:${source.id}`}>
           Delete
         </Button>
       </div>
@@ -1121,170 +905,71 @@ function SavedSourceCard({
   );
 }
 
-function ImportRunRow({ run, sources }: { run: ImportRun; sources: ConnectorSource[] }) {
-  const source = run.source_id ? sources.find((item) => item.id === run.source_id) : null;
+function ImportRunRow({ run }: { run: ImportRun }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+    <div className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={run.status === "success" ? "success" : run.status === "partial" ? "warning" : "danger"}>{run.status}</Badge>
-        <Badge>{formatConnectorType(run.connector_type)}</Badge>
-        <span className="text-sm font-medium text-app-text">{source?.name ?? "Direct import"}</span>
-        <span className="ml-auto text-xs text-app-muted">{formatTimestamp(run.completed_at)}</span>
+        <span className="text-xs text-app-muted">{formatDate(run.completed_at)}</span>
       </div>
-      <p className="mt-2 truncate text-xs text-app-muted">{run.path}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Badge variant="success">imported: {run.imported_count}</Badge>
-        <Badge>skipped: {run.skipped_count}</Badge>
-        <Badge variant={run.failed_count > 0 ? "danger" : "default"}>failed: {run.failed_count}</Badge>
-      </div>
-      <p className="mt-2 text-xs leading-5 text-app-muted">{run.message}</p>
+      <p className="mt-1 truncate text-xs text-app-muted">{run.path}</p>
+      <p className="mt-1 text-xs text-app-muted">
+        imported {run.imported_count}, skipped {run.skipped_count}, failed {run.failed_count}
+      </p>
     </div>
   );
 }
 
-function PreviewBlock({ preview }: { preview: FilePreviewResult }) {
+function FilePreviewBlock({ preview }: { preview: FilePreviewResult }) {
   return (
-    <div className="mt-6 space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="info">candidates: {preview.total_candidates}</Badge>
-        <Badge>skipped: {preview.skipped.length}</Badge>
-      </div>
-      <CompactList title="Preview files" items={preview.preview_files} />
-      <CompactList title="Skipped" items={preview.skipped.slice(0, 20)} />
-    </div>
-  );
-}
-
-function ResultBlock({ result }: { result: FileImportResult }) {
-  return (
-    <div className="mt-6 space-y-3">
-      <StatusMessage message={result.message} variant={result.failed_count > 0 ? "warning" : "success"} />
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="success">imported: {result.imported_count}</Badge>
-        <Badge>skipped: {result.skipped_count}</Badge>
-        <Badge variant={result.failed_count > 0 ? "danger" : "default"}>failed: {result.failed_count}</Badge>
-        <Badge variant="info">event IDs: {result.events_created.length}</Badge>
-      </div>
-      <CompactList title="Skipped" items={result.skipped.slice(0, 20)} />
-      <CompactList title="Failed" items={result.failed.slice(0, 20)} />
-    </div>
+    <CompactBlock title="Preview">
+      <Badge variant="info">candidates: {preview.total_candidates}</Badge>
+      <Badge>shown: {preview.preview_files.length}</Badge>
+      <Badge>skipped: {preview.skipped.length}</Badge>
+    </CompactBlock>
   );
 }
 
 function LogPreviewBlock({ preview }: { preview: LogPreviewResult }) {
   return (
-    <div className="mt-6 space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="info">scanned: {preview.total_lines_scanned}</Badge>
-        <Badge variant="success">matched: {preview.matched_lines}</Badge>
-      </div>
-      <div className="space-y-2">
-        {preview.preview.map((line) => (
-          <div key={line.line_number} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Badge variant={line.level === "ERROR" || line.level === "TRACEBACK" ? "danger" : line.level === "WARNING" ? "warning" : "default"}>
-                {line.level}
-              </Badge>
-              <span className="text-xs text-app-muted">line {line.line_number}</span>
-              {line.timestamp ? <span className="ml-auto text-xs text-app-muted">{line.timestamp}</span> : null}
-            </div>
-            <p className="mt-2 text-sm leading-6 text-app-text">{line.message}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function LogResultBlock({ result }: { result: LogImportResult }) {
-  return (
-    <div className="mt-6 space-y-3">
-      <StatusMessage message={result.message} variant={result.failed_count > 0 ? "warning" : "success"} />
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="success">imported: {result.imported_count}</Badge>
-        <Badge>skipped: {result.skipped_count}</Badge>
-        <Badge variant={result.failed_count > 0 ? "danger" : "default"}>failed: {result.failed_count}</Badge>
-        <Badge variant="info">groups: {result.groups_created}</Badge>
-        <Badge>event IDs: {result.events_created.length}</Badge>
-      </div>
-    </div>
+    <CompactBlock title="Preview">
+      <Badge variant="info">scanned: {preview.total_lines_scanned}</Badge>
+      <Badge variant="success">matched: {preview.matched_lines}</Badge>
+    </CompactBlock>
   );
 }
 
 function GitPreviewBlock({ preview }: { preview: GitPreviewResult }) {
   return (
-    <div className="mt-6 space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="info">{preview.repo_name}</Badge>
-        {preview.repo_root ? <Badge>root: {preview.repo_root}</Badge> : null}
-        <Badge>branch: {preview.current_branch ?? "detached"}</Badge>
-        <Badge>commits: {preview.recent_commits.length}</Badge>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {Object.entries(preview.status_summary).map(([key, value]) => (
-          <Badge key={key}>
-            {key}: {value}
-          </Badge>
-        ))}
-      </div>
-      <div className="space-y-2">
-        {preview.recent_commits.map((commit) => (
-          <div key={commit.hash} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Badge variant="info">{commit.short_hash}</Badge>
-              <span className="ml-auto text-xs text-app-muted">{formatTimestamp(commit.date)}</span>
-            </div>
-            <p className="mt-2 text-sm font-medium text-app-text">{commit.message}</p>
-            <p className="mt-1 text-xs text-app-muted">{commit.author}</p>
-          </div>
-        ))}
-      </div>
-    </div>
+    <CompactBlock title="Preview">
+      <Badge variant="info">{preview.repo_name}</Badge>
+      <Badge>branch: {preview.current_branch ?? "detached"}</Badge>
+      <Badge>commits: {preview.recent_commits.length}</Badge>
+    </CompactBlock>
   );
 }
 
-function GitResultBlock({ result }: { result: GitImportResult }) {
+function ImportResult({ result }: { result: { imported_count: number; skipped_count: number; failed_count: number; message: string } }) {
   return (
-    <div className="mt-6 space-y-3">
+    <CompactBlock title="Result">
       <StatusMessage message={result.message} variant={result.failed_count > 0 ? "warning" : "success"} />
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="success">imported: {result.imported_count}</Badge>
-        <Badge>skipped: {result.skipped_count}</Badge>
-        <Badge variant={result.failed_count > 0 ? "danger" : "default"}>failed: {result.failed_count}</Badge>
-        <Badge>event IDs: {result.events_created.length}</Badge>
-      </div>
-    </div>
+      <Badge variant="success">imported: {result.imported_count}</Badge>
+      <Badge>skipped: {result.skipped_count}</Badge>
+      <Badge variant={result.failed_count > 0 ? "danger" : "default"}>failed: {result.failed_count}</Badge>
+    </CompactBlock>
   );
 }
 
-function CompactList({ title, items }: { title: string; items: Array<Record<string, string | number>> }) {
-  if (items.length === 0) {
-    return null;
-  }
+function CompactBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div>
-      <h3 className="text-xs font-medium uppercase text-app-muted">{title}</h3>
-      <div className="mt-2 space-y-2">
-        {items.map((item, index) => (
-          <div key={`${String(item.path ?? item.name)}-${index}`} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
-            <p className="truncate text-sm text-app-text">{String(item.name ?? item.path)}</p>
-            <p className="mt-1 truncate text-xs text-app-muted">{String(item.path ?? "")}</p>
-            {"reason" in item ? <Badge>{String(item.reason)}</Badge> : null}
-            {"size_kb" in item ? <p className="mt-1 text-xs text-app-muted">{String(item.size_kb)} KB</p> : null}
-          </div>
-        ))}
-      </div>
+    <div className="rounded-md border border-app-border bg-zinc-950 p-3">
+      <h3 className="mb-2 text-xs font-medium uppercase text-app-muted">{title}</h3>
+      <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
 }
 
-function LabeledInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
+function LabeledInput({ label, value, onChange, placeholder, type = "text" }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -1299,7 +984,58 @@ function LabeledInput({
   );
 }
 
-function toPayload(form: ImportForm): FileImportPayload {
+function Checkbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-3 text-sm text-app-text">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-violet-600" />
+      {label}
+    </label>
+  );
+}
+
+function Toggle({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${checked ? "bg-violet-600" : "bg-zinc-700"}`}
+    >
+      <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${checked ? "left-6" : "left-1"}`} />
+    </button>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const label = status === "needs_configuration" ? "Needs setup" : status.charAt(0).toUpperCase() + status.slice(1);
+  const variant = status === "connected" ? "success" : status === "disconnected" || status === "needs_configuration" ? "warning" : status === "error" ? "danger" : "default";
+  return <Badge variant={variant}>{label}</Badge>;
+}
+
+function KeyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs uppercase text-app-muted">{label}</p>
+      <p className="mt-1 text-sm text-app-text">{value}</p>
+    </div>
+  );
+}
+
+function connectorIcon(id: string) {
+  return {
+    vscode: Code2,
+    browser: Globe,
+    github: Github,
+    jira: Ticket,
+    email: Mail,
+    file_system: FolderOpen,
+    logs: FileText,
+    git: GitBranch,
+  }[id] ?? FolderOpen;
+}
+
+function toFilePayload(form: FileForm): FileImportPayload {
   return {
     folder_path: form.folderPath.trim(),
     recursive: form.recursive,
@@ -1309,7 +1045,7 @@ function toPayload(form: ImportForm): FileImportPayload {
   };
 }
 
-function toLogPayload(form: LogImportForm): LogImportPayload {
+function toLogPayload(form: LogForm): LogImportPayload {
   return {
     file_path: form.filePath.trim(),
     max_lines: clampNumber(form.maxLines, 1, 10000),
@@ -1318,7 +1054,7 @@ function toLogPayload(form: LogImportForm): LogImportPayload {
   };
 }
 
-function toGitPayload(form: GitImportForm): GitImportPayload {
+function toGitPayload(form: GitForm): GitImportPayload {
   return {
     repo_path: form.repoPath.trim(),
     max_commits: clampNumber(form.maxCommits, 1, 500),
@@ -1327,7 +1063,7 @@ function toGitPayload(form: GitImportForm): GitImportPayload {
   };
 }
 
-function sourceToForm(source: ConnectorSource | undefined, connectorType: "file_system" | "logs" | "git"): SavedSourceForm {
+function sourceToForm(source?: ConnectorSource): SavedSourceForm {
   if (!source) {
     return { ...emptySavedSourceForm };
   }
@@ -1346,58 +1082,27 @@ function sourceToForm(source: ConnectorSource | undefined, connectorType: "file_
     includeDiffSummary: booleanConfig(config.include_diff_summary, true),
     includeStatus: booleanConfig(config.include_status, true),
     enabled: source.enabled,
-    ...(connectorType === "file_system" ? {} : {}),
   };
 }
 
 function sourcePayload(connectorType: "file_system" | "logs" | "git", form: SavedSourceForm) {
-  const base = {
-    connector_type: connectorType,
-    name: form.name.trim(),
-    path: form.path.trim(),
-    enabled: form.enabled,
-  };
-
+  const base = { connector_type: connectorType, name: form.name.trim(), path: form.path.trim(), enabled: form.enabled };
   if (connectorType === "file_system") {
-    return {
-      ...base,
-      config: {
-        recursive: form.recursive,
-        max_files: clampNumber(form.maxFiles, 1, 1000),
-        max_file_size_kb: clampNumber(form.maxFileSizeKb, 1, 2048),
-        allowed_extensions: parseExtensions(form.allowedExtensions),
-      },
-    };
+    return { ...base, config: { recursive: form.recursive, max_files: clampNumber(form.maxFiles, 1, 1000), max_file_size_kb: clampNumber(form.maxFileSizeKb, 1, 2048), allowed_extensions: parseExtensions(form.allowedExtensions) } };
   }
-
   if (connectorType === "logs") {
-    return {
-      ...base,
-      config: {
-        max_lines: clampNumber(form.maxLines, 1, 10000),
-        only_errors: form.onlyErrors,
-        group_similar: form.groupSimilar,
-      },
-    };
+    return { ...base, config: { max_lines: clampNumber(form.maxLines, 1, 10000), only_errors: form.onlyErrors, group_similar: form.groupSimilar } };
   }
-
-  return {
-    ...base,
-    config: {
-      max_commits: clampNumber(form.maxCommits, 1, 500),
-      include_diff_summary: form.includeDiffSummary,
-      include_status: form.includeStatus,
-    },
-  };
+  return { ...base, config: { max_commits: clampNumber(form.maxCommits, 1, 500), include_diff_summary: form.includeDiffSummary, include_status: form.includeStatus } };
 }
 
 function updateSourcePayload(payload: ReturnType<typeof sourcePayload>): ConnectorSourceUpdateRequest {
-  return {
-    name: payload.name,
-    path: payload.path,
-    config: payload.config,
-    enabled: payload.enabled,
-  };
+  return { name: payload.name, path: payload.path, config: payload.config, enabled: payload.enabled };
+}
+
+function parseExtensions(value: string) {
+  const extensions = value.split(",").map((extension) => extension.trim()).filter(Boolean);
+  return extensions.length ? extensions : null;
 }
 
 function numberConfig(value: unknown, fallback: number) {
@@ -1408,40 +1113,21 @@ function booleanConfig(value: unknown, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function parseExtensions(value: string) {
-  const extensions = value
-    .split(",")
-    .map((extension) => extension.trim())
-    .filter(Boolean);
-  return extensions.length > 0 ? extensions : null;
-}
-
 function clampNumber(value: number, min: number, max: number) {
-  if (Number.isNaN(value)) {
-    return min;
-  }
-  return Math.max(min, Math.min(max, value));
+  return Number.isNaN(value) ? min : Math.max(min, Math.min(max, value));
 }
 
-function errorMessage(error: unknown, fallback: string) {
-  if (axios.isAxiosError(error)) {
-    const detail = error.response?.data?.detail;
-    return typeof detail === "string" ? detail : fallback;
-  }
-  return fallback;
+function formatConnector(value: string) {
+  if (value === "file_system") return "File System";
+  if (value === "git") return "Local Git";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatConnectorType(value: string) {
-  if (value === "file_system") {
-    return "File System";
+function formatDate(value?: string | null) {
+  if (!value) {
+    return "--";
   }
-  if (value === "logs") {
-    return "Logs";
-  }
-  if (value === "git") {
-    return "Git";
-  }
-  return value;
+  return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function StatusMessage({ message, variant }: { message: string; variant: "success" | "warning" | "danger" }) {
@@ -1451,13 +1137,4 @@ function StatusMessage({ message, variant }: { message: string; variant: "succes
     danger: "border-red-500/30 bg-red-500/10 text-red-200",
   };
   return <div className={`rounded-md border px-4 py-3 text-sm ${classes[variant]}`}>{message}</div>;
-}
-
-function formatTimestamp(value: string) {
-  return new Date(value).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

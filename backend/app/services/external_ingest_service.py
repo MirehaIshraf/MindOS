@@ -10,6 +10,7 @@ from app.schemas.ingest import (
     ExternalEventIngestRequest,
     ExternalIngestResponse,
 )
+from app.services.connector_registry_service import connector_registry_service
 from app.services.relationship_service import relationship_service
 
 SUPPORTED_EXTERNAL_SOURCES = [
@@ -51,6 +52,11 @@ PREFERRED_EXTERNAL_EVENT_TYPES = {
         "agent_action_preview",
         "agent_action_result",
     ],
+}
+
+EXTERNAL_SOURCE_TO_CONNECTOR = {
+    "vscode_extension": "vscode",
+    "browser_extension": "browser",
 }
 
 
@@ -99,6 +105,7 @@ class ExternalIngestService:
 
     def _create_event(self, request: ExternalEventIngestRequest) -> Event:
         source_value = self._normalize_source(request.source)
+        self._ensure_connector_enabled(source_value)
         event_type = self._normalize_type(request.type)
         metadata = self._normalize_metadata(source_value, request)
         title = request.title.strip() or self._default_title(source_value, event_type, metadata)
@@ -117,7 +124,32 @@ class ExternalIngestService:
             relationship_service.detect_relationships_for_event(event)
         except Exception:
             pass
+        self._record_connector_seen(source_value, metadata)
         return event
+
+    def _ensure_connector_enabled(self, source: str) -> None:
+        connector_id = EXTERNAL_SOURCE_TO_CONNECTOR.get(source)
+        if not connector_id:
+            return
+        if not connector_registry_service.is_enabled(connector_id):
+            connector_name = connector_registry_service.get_connector(connector_id).name
+            raise PermissionError(f"{connector_name} connector is disabled in MindOS.")
+
+    def _record_connector_seen(self, source: str, metadata: dict[str, Any]) -> None:
+        connector_id = EXTERNAL_SOURCE_TO_CONNECTOR.get(source)
+        if not connector_id:
+            return
+        try:
+            connector_registry_service.record_seen(
+                connector_id,
+                {
+                    "client_id": metadata.get("client_id"),
+                    "session_id": metadata.get("session_id"),
+                    "workspace_name": metadata.get("workspace_name"),
+                },
+            )
+        except Exception:
+            pass
 
     def _external_events(self) -> list[Event]:
         return [

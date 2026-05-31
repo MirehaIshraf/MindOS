@@ -688,6 +688,14 @@ export function DevPage() {
             <Row label="enabled" value={String(ingestStatus?.external_ingest_enabled ?? true)} />
             <Row label="recent events" value={String(ingestStatus?.recent_external_events ?? 0)} />
             <Row label="collectors" value={String(ingestStatus?.collector_clients.length ?? 0)} />
+            <Row
+              label="VSCode events"
+              value={String(
+                ingestStatus?.collector_clients
+                  .filter((collector) => collector.type === "vscode_extension")
+                  .reduce((total, collector) => total + collector.events_count, 0) ?? 0,
+              )}
+            />
           </div>
           {ingestStatus?.supported_sources.length ? (
             <div className="mt-4 flex flex-wrap gap-2">

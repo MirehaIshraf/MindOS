@@ -48,6 +48,19 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
         policy = _policy("captured_event", hidden=True)
         return policy
 
+    if source_value == "vscode_extension":
+        if event_type == "editor_file_opened":
+            return {
+                "memory_category": "captured_event",
+                "hidden_from_default": True,
+                "is_indexable": False,
+                "is_relationship_eligible": False,
+                "is_context_eligible": False,
+            }
+        if event_type in {"editor_file_saved", "editor_workspace_opened"}:
+            return _policy("captured_event", hidden=False)
+        return _policy("captured_event", hidden=True)
+
     if source_value == "local_agent":
         if event_type in {"agent_summary", "agent_action_result"}:
             return _policy("agent", hidden=False)

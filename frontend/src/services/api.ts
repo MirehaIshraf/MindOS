@@ -14,11 +14,13 @@ import type {
   ClearFileSystemEventsResponse,
   ClearLogEventsResponse,
   ClearGitEventsResponse,
+  ConnectorConfigResponse,
   ConnectorListResponse,
   ConnectorSource,
   ConnectorSourceCreateRequest,
   ConnectorSourcesResponse,
   ConnectorSourceUpdateRequest,
+  ConnectorToggleResponse,
   CollectorClientsResponse,
   DevState,
   EmbeddingReindexResponse,
@@ -433,6 +435,21 @@ export async function getPlaybooks(): Promise<never> {
 
 export async function getConnectors(): Promise<ConnectorListResponse> {
   const response = await api.get<ConnectorListResponse>("/connectors");
+  return response.data;
+}
+
+export async function toggleConnector(id: string, enabled: boolean): Promise<ConnectorToggleResponse> {
+  const response = await api.post<ConnectorToggleResponse>(`/connectors/${id}/toggle`, { enabled });
+  return response.data;
+}
+
+export async function getConnectorConfig(id: string): Promise<ConnectorConfigResponse> {
+  const response = await api.get<ConnectorConfigResponse>(`/connectors/${id}/config`);
+  return response.data;
+}
+
+export async function updateConnectorConfig(id: string, config: Record<string, unknown>): Promise<ConnectorConfigResponse> {
+  const response = await api.post<ConnectorConfigResponse>(`/connectors/${id}/config`, { config });
   return response.data;
 }
 

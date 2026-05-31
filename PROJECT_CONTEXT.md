@@ -39,19 +39,23 @@ Implemented or partially implemented:
 - Local Git repository import
 - Saved connector sources
 - Import history
+- VSCode extension MVP with local VSIX packaging and backend-controlled runtime polling
 - Chat sessions and raw chat memory events
 - Task lifecycle events
 - External ingestion endpoint
 
 Planned:
 
-- VSCode extension
 - Browser extension
 - Activity tracker
 - Local agent observations
 - GitHub read connector
 - Jira read connector
 - Email read connector
+
+The Connectors page now uses a unified connector registry pattern: each connector is represented as a card with status, toggle, configure action, event count, and last seen/sync metadata.
+
+For VSCode, the MindOS connector toggle is the source of truth. The installed extension polls the local backend runtime endpoint and starts/stops collection without requiring an Extension Development Host.
 
 ## Current Storage
 

@@ -2,11 +2,16 @@ from fastapi import APIRouter, HTTPException
 
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.schemas.connectors import (
+    ConnectorConfigResponse,
+    ConnectorConfigUpdateRequest,
     ConnectorListResponse,
     ConnectorSourceCreateRequest,
     ConnectorSourceResponse,
     ConnectorSourcesResponse,
     ConnectorSourceUpdateRequest,
+    ConnectorStatusResponse,
+    ConnectorToggleRequest,
+    ConnectorToggleResponse,
     FileImportRequest,
     FileImportResult,
     FilePreviewRequest,
@@ -20,9 +25,13 @@ from app.schemas.connectors import (
     LogImportResult,
     LogPreviewRequest,
     LogPreviewResult,
+    VSCodeConnectorRuntimeResponse,
+    VSCodeHeartbeatRequest,
+    VSCodeHeartbeatResponse,
 )
 from app.schemas.ingest import CollectorClientsResponse
 from app.services.connector_source_service import connector_source_service
+from app.services.connector_registry_service import connector_registry_service
 from app.services.connector_service import ConnectorService
 from app.services.external_ingest_service import external_ingest_service
 from app.services.file_import_service import FileImportService
@@ -44,6 +53,16 @@ def list_connectors() -> ConnectorListResponse:
 @router.get("/collectors", response_model=CollectorClientsResponse)
 def list_collector_clients() -> CollectorClientsResponse:
     return CollectorClientsResponse(collectors=external_ingest_service.collector_clients())
+
+
+@router.get("/vscode/runtime", response_model=VSCodeConnectorRuntimeResponse)
+def get_vscode_runtime() -> VSCodeConnectorRuntimeResponse:
+    return connector_registry_service.get_vscode_runtime()
+
+
+@router.post("/vscode/heartbeat", response_model=VSCodeHeartbeatResponse)
+def record_vscode_heartbeat(request: VSCodeHeartbeatRequest) -> VSCodeHeartbeatResponse:
+    return connector_registry_service.record_vscode_heartbeat(request)
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)
@@ -184,3 +203,35 @@ def import_git_repo(request: GitImportRequest) -> GitImportResult:
         return git_import_service.import_repo(request)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/{connector_id}", response_model=ConnectorStatusResponse)
+def get_connector(connector_id: str) -> ConnectorStatusResponse:
+    try:
+        return connector_registry_service.get_connector(connector_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Connector not found.") from error
+
+
+@router.post("/{connector_id}/toggle", response_model=ConnectorToggleResponse)
+def toggle_connector(connector_id: str, request: ConnectorToggleRequest) -> ConnectorToggleResponse:
+    try:
+        return connector_registry_service.set_enabled(connector_id, request.enabled)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Connector not found.") from error
+
+
+@router.get("/{connector_id}/config", response_model=ConnectorConfigResponse)
+def get_connector_config(connector_id: str) -> ConnectorConfigResponse:
+    try:
+        return connector_registry_service.get_config(connector_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Connector not found.") from error
+
+
+@router.post("/{connector_id}/config", response_model=ConnectorConfigResponse)
+def update_connector_config(connector_id: str, request: ConnectorConfigUpdateRequest) -> ConnectorConfigResponse:
+    try:
+        return connector_registry_service.save_config(connector_id, request.config)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Connector not found.") from error

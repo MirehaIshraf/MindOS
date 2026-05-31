@@ -104,12 +104,18 @@ Before adding a new feature:
 ## Connector Rules
 
 - Connectors must be explicit user action.
+- Connector UX must use the same toggle/config/status pattern across connector types.
+- Do not put "upcoming" marketing text in product UI; unsupported connectors should appear as off or needing setup.
 - No automatic folder scanning.
 - No automatic browser tracking without extension/user permission.
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
 - External collectors should use the external ingestion API.
+- VSCode connector is an implemented MVP connector and should stay user-controlled.
+- VSCode connector should behave like an installed extension, not only a debug Extension Development Host.
+- MindOS connector toggle is the source of truth for collection; VSCode local settings are only local/emergency controls.
+- Update docs alongside connector, ingestion, memory, or API changes.
 
 ## Current Known Direction
 

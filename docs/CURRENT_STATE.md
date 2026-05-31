@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-Last updated: 2026-05-27
+Last updated: 2026-05-31
 
 ## Backend Status
 
@@ -28,7 +28,8 @@ Last updated: 2026-05-27
 | Logs connector | Working | Path-based log import with clear events. |
 | Local Git connector | Working | Read-only local Git import with clear events. |
 | Saved sources | Working/Partial | Saved connector sources and import runs exist for file/log/git. |
-| External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors. Clients are planned. |
+| External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors; disabled VSCode connector rejects VSCode events. |
+| VSCode extension | Working | MVP exists in `extensions/vscode`; installable local VSIX flow with backend-controlled runtime polling. |
 | Model registry | Working/Partial | Local Ollama discovery, cloud provider config, FakeLLM fallback. |
 | Embedding registry | Working/Partial | Curated and discovered local embedding models; changing model requires reindex. |
 | Dev tools | Working/Partial | Useful but should not be treated as product UI. |
@@ -39,7 +40,7 @@ Last updated: 2026-05-27
 |---|---|---|
 | Chat | Working | Primary UI. |
 | Memory | Working | Browse/search memory, including source/category filters. |
-| Connectors | Working/Partial | Manual imports, saved sources, import history, planned collector cards. |
+| Connectors | Working/Partial | Registry-driven cards with toggle/config/status; manual imports and saved sources remain in configure panels. |
 | Settings | Working/Partial | Chat and embedding model settings. |
 | Dev | Working/Partial | Debug page; should use `/status` as source of truth. |
 | Tasks | Paused/Experimental | Route/page exists but is hidden from main sidebar. |
@@ -50,16 +51,18 @@ Last updated: 2026-05-27
 - File System path import: working; clear file events exists.
 - Logs path import: working; clear log events exists.
 - Local Git path import: working and read-only; clear Git events exists.
+- VSCode extension MVP: working; packaged local install flow, polls MindOS runtime, sends workspace/file-save events after the MindOS VSCode connector toggle is enabled.
 - Saved connector sources: working/partial for file system, logs, and Git.
 - Import history: working/partial for saved source imports.
 - External ingestion API: working/partial; collector clients are derived from event metadata.
 
 ## Planned Collectors
 
-- VSCode extension
 - Browser extension
 - Activity tracker
 - Local agent collector
+
+Browser, GitHub, Jira, and Email appear as disabled/unconfigured connector placeholders. They do not perform real integration work yet.
 
 These should send data to `/ingest/external` or `/ingest/external/bulk`.
 
@@ -70,7 +73,8 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 - Raw chat events should not be indexed or related. Use memory policy and clean indexes if old data polluted Chroma/relationships.
 - Model and embedding registries must not mix chat and embedding models.
 - Ollama must not auto-start from status checks.
-- External collector clients are not implemented yet; only the ingestion API exists.
+- VSCode extension MVP can be packaged with `npm run package` and installed into normal VSCode. F5/debug host is only needed for extension development.
+- Browser extension, activity tracker, and local agent collector are not implemented yet; only the ingestion API exists for those sources.
 - Activity tracker summaries are intended to be indexable later, but current policy treats all `activity_tracker` source events as hidden/non-indexable.
 
 ## What Not To Rebuild
@@ -85,7 +89,7 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 ## Next Recommended Work
 
 1. Stabilize connector data collection.
-2. VSCode extension MVP.
+2. Harden/package VSCode extension MVP.
 3. Browser extension MVP.
 4. Activity tracker.
 5. Memory summaries/noise reduction.

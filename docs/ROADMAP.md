@@ -2,9 +2,10 @@
 
 ## Current Phase: Data Collection Foundation
 
+- Connector UX standardization
+- VSCode extension MVP
 - Stabilize connectors
 - External ingestion
-- VSCode extension
 - Browser extension
 - Activity tracker
 - Memory policy cleanup
@@ -13,6 +14,9 @@
 
 ## Next Phase: Better Memory
 
+- Browser extension MVP
+- Activity tracker MVP
+- GitHub/Jira/Email read connectors
 - Summaries
 - Source timeline
 - Source health

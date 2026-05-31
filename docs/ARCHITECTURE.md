@@ -49,6 +49,20 @@ User explicitly imports or collector sends event -> ExternalIngestService/Ingest
 
 File system, logs, and local Git imports are manual path-based flows. Saved connector sources allow re-importing previously configured paths. External collectors use `/ingest/external`.
 
+## Connector Registry Pattern
+
+`ConnectorRegistryService` is the backend source of truth for connector cards. It returns one normalized status shape for VSCode, Browser, GitHub, Jira, Email, File System, Logs, and Local Git.
+
+The frontend should render connector status from `GET /connectors` instead of maintaining separate hardcoded connector states. Connector cards should share the same product pattern: status, toggle, configure action, event count, and last seen/sync metadata.
+
+External clients send events through `/ingest/external`. For implemented live connectors such as VSCode, the registry toggle has enforcement: disabled connectors should reject or ignore events cleanly rather than silently collecting data.
+
+## VSCode Extension Runtime Flow
+
+Installed VSCode extension -> polls `/connectors/vscode/runtime` -> sends `/connectors/vscode/heartbeat` -> sends events only if the backend VSCode connector is enabled -> backend ingests through `/ingest/external`.
+
+The MindOS web app toggle is the collection source of truth. VSCode local settings are only local controls such as the emergency kill switch and privacy filters. Heartbeats update connector status but do not create memory events.
+
 ## Semantic Search Flow
 
 SQLite event -> embedding text builder -> Ollama embedding model -> ChromaDB vector index -> search query embedding -> vector results -> full event fetch from SQLite

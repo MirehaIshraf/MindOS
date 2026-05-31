@@ -1,0 +1,151 @@
+{
+  "name": "mindos-vscode",
+  "displayName": "MindOS VSCode Connector",
+  "description": "Sends local VSCode activity events to MindOS.",
+  "version": "0.1.0",
+  "publisher": "mindos",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*",
+    "onCommand:mindos.connect",
+    "onCommand:mindos.disconnect",
+    "onCommand:mindos.enableLocalCollection",
+    "onCommand:mindos.disableLocalCollection",
+    "onCommand:mindos.testConnection",
+    "onCommand:mindos.openSettings",
+    "onCommand:mindos.openMindOS",
+    "onCommand:mindos.showQuickActions",
+    "onCommand:mindos.enableConnector",
+    "onCommand:mindos.disableConnector",
+    "onCommand:mindos.flushQueue"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mindos.connect",
+        "title": "MindOS: Enable Local Collection"
+      },
+      {
+        "command": "mindos.disconnect",
+        "title": "MindOS: Disable Local Collection"
+      },
+      {
+        "command": "mindos.enableLocalCollection",
+        "title": "MindOS: Enable Local Collection"
+      },
+      {
+        "command": "mindos.disableLocalCollection",
+        "title": "MindOS: Disable Local Collection"
+      },
+      {
+        "command": "mindos.testConnection",
+        "title": "MindOS: Test Connection"
+      },
+      {
+        "command": "mindos.openSettings",
+        "title": "MindOS: Open Settings"
+      },
+      {
+        "command": "mindos.openMindOS",
+        "title": "MindOS: Open MindOS"
+      },
+      {
+        "command": "mindos.flushQueue",
+        "title": "MindOS: Flush Queue"
+      }
+    ],
+    "configuration": {
+      "title": "MindOS",
+      "properties": {
+        "mindos.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Local MindOS backend URL."
+        },
+        "mindos.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Local emergency kill switch. When false, this extension sends no MindOS events even if the MindOS backend connector is enabled."
+        },
+        "mindos.clientId": {
+          "type": "string",
+          "default": "vscode-local",
+          "description": "Client id sent with MindOS events."
+        },
+        "mindos.captureFileOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Capture active editor file open events."
+        },
+        "mindos.captureFileSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture file save events."
+        },
+        "mindos.captureWorkspaceOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture workspace opened event on activation."
+        },
+        "mindos.captureTerminalCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for future safe terminal command capture. Not implemented in this MVP."
+        },
+        "mindos.includeFileContentOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include a truncated file content snippet on save when safe."
+        },
+        "mindos.maxContentChars": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 0,
+          "maximum": 20000,
+          "description": "Maximum characters included when save content capture is enabled."
+        },
+        "mindos.excludeGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.next/**",
+            "**/target/**",
+            "**/.env",
+            "**/*.pem",
+            "**/*.key"
+          ],
+          "description": "Glob-like file patterns ignored by the MindOS connector."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "vsix": "npm run package",
+    "install-local": "code --install-extension mindos-vscode-0.1.0.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.2",
+    "typescript": "^5.5.4"
+  }
+}

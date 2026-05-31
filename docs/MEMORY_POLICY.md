@@ -25,8 +25,9 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | git/git_commit | Yes | Yes | Yes | Yes | Local Git import is read-only. |
 | git/git_repo_snapshot | Yes | Yes | Yes | Yes | Repository snapshot context. |
 | git/git_working_tree_status | Yes | Yes | Yes | Yes | Working tree status context. |
-| vscode_extension/editor_file_saved | Yes | Yes | Yes | Yes | Future external collector event. |
-| vscode_extension/editor_file_opened | Yes | Yes | Yes | Yes | Future external collector event. |
+| vscode_extension/editor_file_saved | Yes | Yes | Yes | Yes | Useful editor event, especially when safe content snippets are included. |
+| vscode_extension/editor_file_opened | No | No | No | No | Open events are noisy and hidden/non-indexable by default. |
+| vscode_extension/editor_workspace_opened | Yes | Yes | Yes | Yes | Useful session/workspace context. |
 | browser_extension/browser_page_visited | Yes unless private | Yes unless private | Yes unless private | Yes unless private | If `metadata.private=true`, event is hidden but currently remains eligible. Revisit if private browsing should be fully excluded. |
 | activity_tracker/app_focus_changed | No | No | No | No | Raw activity tracker events are noisy. |
 | activity_tracker/work_session_summary | No by current source-level policy | No by current source-level policy | No by current source-level policy | No by current source-level policy | Intended direction is summarized tracker events should become indexable; current code treats all activity_tracker events as hidden/non-indexable. |
@@ -45,7 +46,8 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - `chat_summary` is indexable and context eligible.
 - Raw activity tracker events are hidden and non-indexable by default.
 - Activity summaries are intended to become indexable, but the current source-level code treats all `activity_tracker` events as hidden/non-indexable.
-- File, log, Git, VSCode extension, browser extension, and useful captured events are indexable/context eligible by default.
+- File, log, Git, VSCode saved/workspace, browser extension, and useful captured events are indexable/context eligible by default.
+- VSCode file-opened events are stored but hidden/non-indexable by default to avoid open-file noise.
 - `task_completed` and `report_generated` are indexable/context eligible.
 
 ## Why This Exists
