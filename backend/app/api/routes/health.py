@@ -58,6 +58,8 @@ def status() -> dict[str, object]:
         "chat_context_max_total_chars": settings.chat_context_max_total_chars,
         "chat_history_limit": settings.chat_history_limit,
     }
+    source_counts = event_service.count_by_source()
+    payload["browser_event_count"] = source_counts.get("browser_extension", 0)
     if settings.storage_backend.lower() == "sqlite":
         payload["database_path"] = str(get_database_path())
     runtime_status: dict[str, object]

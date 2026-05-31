@@ -138,6 +138,7 @@ export function ChatPage() {
           contextStats: response.context_stats,
           warning: response.warning,
           answerStyle: response.answer_style,
+          intent: response.intent,
         }),
       ]);
       await refreshSessions();
@@ -358,6 +359,7 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       contextStats: message.context_stats ?? undefined,
       warning: message.warning ?? undefined,
       answerStyle: message.answer_style ?? undefined,
+      intent: message.intent ?? undefined,
     };
   });
 }
@@ -396,6 +398,9 @@ function loadingStatusMessages(style: string) {
       "Preparing root-cause analysis...",
     ];
   }
+  if (style === "memory_lookup") {
+    return ["Checking local memory...", "Looking for precise matches...", "Preparing concise answer..."];
+  }
   return ["Searching local memory...", "Checking related events...", "Preparing answer..."];
 }
 
@@ -412,6 +417,11 @@ function detectPendingStyle(message: string) {
   }
   if (["summarize", "summary", "overview", "what did i work on", "report"].some((term) => text.includes(term))) {
     return "summary";
+  }
+  if (
+    ["did i", "have i", "ever", "saved", "search", "searched", "find", "went through", "gone through"].some((term) => text.includes(term))
+  ) {
+    return "memory_lookup";
   }
   return "normal";
 }

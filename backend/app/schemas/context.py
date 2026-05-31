@@ -29,6 +29,31 @@ class ContextBuildRequest(BaseModel):
         return max(0, min(value, 10))
 
 
+class QueryIntentRequest(BaseModel):
+    query: str
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be empty")
+        return value
+
+
+class QueryIntent(BaseModel):
+    intent: str
+    confidence: float
+    search_terms: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    excluded_sources: list[str] = Field(default_factory=list)
+    excluded_types: list[str] = Field(default_factory=list)
+    relationship_types_allowed: list[str] = Field(default_factory=list)
+    retrieval_profile: str
+    needs_local_memory: bool
+    allow_general_model_knowledge: bool
+    answer_style: str
+
+
 class ContextEvent(BaseModel):
     event_id: str
     source: str
@@ -67,3 +92,4 @@ class ContextPackage(BaseModel):
     summary: str
     token_estimate: int
     warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)

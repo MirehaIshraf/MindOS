@@ -39,9 +39,11 @@ The repository applies memory policy during event creation. Eligible events may 
 
 ## Chat Flow
 
-User message -> selected model -> ContextBuilderService -> SearchService direct events -> RelationshipService related events -> formatted context -> ModelRouterService -> provider/FakeLLM -> response cleaner -> saved chat session and chat memory events
+User message -> QueryIntentService -> selected retrieval profile -> ContextBuilderService -> SearchService direct events -> optional RelationshipService expansion -> formatted context -> ModelRouterService -> provider/FakeLLM -> response cleaner -> saved chat session and chat memory events
 
 Chat context should use context-eligible events. Raw chat_message and chat_response memory events are stored for history but excluded from normal chat RAG context.
+
+Memory lookup queries use a precision profile: purified search terms, preferred source filtering, no default relationship expansion, and noisy event types excluded. Root-cause and summary queries can use broader context.
 
 ## Connector Flow
 
@@ -62,6 +64,12 @@ External clients send events through `/ingest/external`. For implemented live co
 Installed VSCode extension -> polls `/connectors/vscode/runtime` -> sends `/connectors/vscode/heartbeat` -> sends events only if the backend VSCode connector is enabled -> backend ingests through `/ingest/external`.
 
 The MindOS web app toggle is the collection source of truth. VSCode local settings are only local controls such as the emergency kill switch and privacy filters. Heartbeats update connector status but do not create memory events.
+
+## Browser Extension Runtime Flow
+
+Installed browser extension -> popup checks `/connectors/browser/runtime` -> sends `/connectors/browser/heartbeat` -> user clicks Save to MindOS -> extension sends a `browser_extension` event through `/ingest/external`.
+
+The Browser MVP is manual-only. It does not read browser history, track tab changes, or send full page content automatically. Heartbeats update connector status but do not create memory events.
 
 ## Semantic Search Flow
 

@@ -91,6 +91,28 @@ class VSCodeHeartbeatResponse(BaseModel):
     connector_enabled: bool
 
 
+class BrowserConnectorRuntimeResponse(BaseModel):
+    id: str = "browser"
+    enabled: bool
+    configured: bool
+    status: str
+    accepted_event_types: list[str]
+    capture_mode: str = "manual"
+    max_content_chars: int
+
+
+class BrowserHeartbeatRequest(BaseModel):
+    client_id: str = "browser-local"
+    extension_version: str
+    browser: str = "chrome"
+    status: str = "active"
+
+
+class BrowserHeartbeatResponse(BaseModel):
+    status: str = "ok"
+    connector_enabled: bool
+
+
 class FilePreviewRequest(BaseModel):
     folder_path: str
     recursive: bool = True

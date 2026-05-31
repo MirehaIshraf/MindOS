@@ -92,6 +92,15 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
                 {contextStats.sources.length > 0 ? (
                   <p className="text-xs leading-5 text-app-muted">Sources: {contextStats.sources.join(", ")}</p>
                 ) : null}
+                {contextStats.intent ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Badge>intent: {contextStats.intent}</Badge>
+                    {contextStats.retrieval_profile ? <Badge>profile: {contextStats.retrieval_profile}</Badge> : null}
+                  </div>
+                ) : null}
+                {contextStats.search_terms && contextStats.search_terms.length > 0 ? (
+                  <p className="text-xs leading-5 text-app-muted">Search terms: {contextStats.search_terms.join(", ")}</p>
+                ) : null}
                 {message.contextSummary ? <p className="text-xs leading-5 text-app-muted">{message.contextSummary}</p> : null}
                 {contextStats.warnings && contextStats.warnings.length > 0 ? (
                   <p className="text-xs leading-5 text-amber-200">{contextStats.warnings.join("; ")}</p>
@@ -129,6 +138,12 @@ function SourceCard({ source }: { source: ChatSource }) {
         </p>
       ) : null}
       {source.content_preview ? <p className="mt-2 text-xs leading-5 text-app-muted">{source.content_preview}</p> : null}
+      {source.url ? (
+        <a className="mt-2 block truncate text-xs text-violet-300 hover:text-violet-200" href={source.url} target="_blank" rel="noreferrer">
+          {source.url}
+        </a>
+      ) : null}
+      {!source.url && source.path ? <p className="mt-2 truncate text-xs text-app-muted">{source.path}</p> : null}
     </div>
   );
 }
@@ -142,6 +157,9 @@ function AnswerStyleBadge({ message }: { message: ChatMessageRecord }) {
   }
   if (message.answerStyle === "summary") {
     return <Badge variant="info">Summary</Badge>;
+  }
+  if (message.answerStyle === "memory_lookup" || message.intent === "memory_lookup") {
+    return <Badge variant="info">Memory lookup</Badge>;
   }
   return null;
 }

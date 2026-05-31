@@ -89,6 +89,7 @@ Before adding a new feature:
 - Raw chat_message/chat_response events are stored but excluded from normal indexing, relationships, and chat context.
 - Activity tracker raw events are noisy and should be hidden/non-indexable by default.
 - Summaries are preferred over raw noisy streams.
+- Chat retrieval should route through query intent first; precision memory lookups should avoid weak relationship expansion and noisy event types.
 
 ## Model Rules
 
@@ -108,6 +109,9 @@ Before adding a new feature:
 - Do not put "upcoming" marketing text in product UI; unsupported connectors should appear as off or needing setup.
 - No automatic folder scanning.
 - No automatic browser tracking without extension/user permission.
+- Browser connector MVP is manual save only; do not add automatic browsing history collection.
+- Do not request browser history permission without explicit instruction.
+- Browser data must stay user-controlled and should only be sent after an explicit user action.
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
@@ -115,6 +119,7 @@ Before adding a new feature:
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
 - VSCode connector should behave like an installed extension, not only a debug Extension Development Host.
 - MindOS connector toggle is the source of truth for collection; VSCode local settings are only local/emergency controls.
+- Browser connector is an implemented MVP connector for manually saved pages/selections, not passive tracking.
 - Update docs alongside connector, ingestion, memory, or API changes.
 
 ## Current Known Direction

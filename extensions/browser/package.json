@@ -1,0 +1,15 @@
+{
+  "name": "mindos-browser",
+  "displayName": "MindOS Browser Connector",
+  "description": "Save selected browser pages and research context to MindOS.",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "zip": "npm run build && powershell -NoProfile -Command \"Compress-Archive -Force -Path manifest.json,src,dist,README.md -DestinationPath mindos-browser-0.1.0.zip\""
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

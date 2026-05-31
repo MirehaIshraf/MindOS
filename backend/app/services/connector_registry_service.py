@@ -7,6 +7,9 @@ from app.core.database import AppSettingRecord, get_session_factory, initialize_
 from app.core.dependencies import get_connector_source_repository, get_event_repository
 from app.repositories.base import ConnectorSourceRepository, EventRepository
 from app.schemas.connectors import (
+    BrowserConnectorRuntimeResponse,
+    BrowserHeartbeatRequest,
+    BrowserHeartbeatResponse,
     ConnectorConfigResponse,
     ConnectorListResponse,
     ConnectorStatusResponse,
@@ -30,6 +33,17 @@ VSCODE_RUNTIME_DEFAULTS = {
     "capture_terminal_commands": False,
     "include_file_content_on_save": False,
     "max_content_chars": 2000,
+}
+
+BROWSER_ACCEPTED_EVENT_TYPES = [
+    "browser_page_saved",
+    "browser_selection_saved",
+    "browser_research_note",
+]
+
+BROWSER_RUNTIME_DEFAULTS = {
+    "capture_mode": "manual",
+    "max_content_chars": 4000,
 }
 
 
@@ -66,9 +80,9 @@ CONNECTOR_DEFINITIONS = [
         id="browser",
         name="Browser",
         type="browser",
-        description="Capture selected research pages and browsing context.",
+        description="Save selected research pages.",
         default_enabled=False,
-        configured_by_default=False,
+        configured_by_default=True,
         supports_toggle=True,
         supports_config=True,
         supports_manual_import=False,
@@ -277,6 +291,29 @@ class ConnectorRegistryService:
         self._set_setting("connector.vscode.heartbeat", payload)
         return VSCodeHeartbeatResponse(connector_enabled=self.is_enabled("vscode"))
 
+    def get_browser_runtime(self) -> BrowserConnectorRuntimeResponse:
+        connector = self.get_connector("browser")
+        config = {**BROWSER_RUNTIME_DEFAULTS, **self.get_config_dict("browser")}
+        return BrowserConnectorRuntimeResponse(
+            enabled=connector.enabled,
+            configured=connector.configured,
+            status=connector.status,
+            accepted_event_types=BROWSER_ACCEPTED_EVENT_TYPES,
+            capture_mode=str(config.get("capture_mode") or "manual"),
+            max_content_chars=int(config.get("max_content_chars", 4000) or 4000),
+        )
+
+    def record_browser_heartbeat(self, request: BrowserHeartbeatRequest) -> BrowserHeartbeatResponse:
+        payload = {
+            "client_id": request.client_id,
+            "extension_version": request.extension_version,
+            "browser": request.browser,
+            "status": request.status,
+            "last_seen_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._set_setting("connector.browser.heartbeat", payload)
+        return BrowserHeartbeatResponse(connector_enabled=self.is_enabled("browser"))
+
     def record_seen(self, connector_id: str, metadata: dict[str, Any] | None = None) -> None:
         definition = self._definition(connector_id)
         payload = {
@@ -285,6 +322,10 @@ class ConnectorRegistryService:
             "last_seen_at": datetime.now(timezone.utc).isoformat(),
         }
         self._set_setting(f"connector.{definition.id}.heartbeat", payload)
+
+    def heartbeat_metadata(self, connector_id: str) -> dict[str, Any]:
+        definition = self._definition(connector_id)
+        return self._get_heartbeat(definition.id)
 
     def get_config_dict(self, connector_id: str) -> dict[str, Any]:
         value = self._get_setting(f"connector.{connector_id}.config", {})
@@ -314,7 +355,7 @@ class ConnectorRegistryService:
             return False
         if definition.supports_manual_import:
             return True
-        if definition.id == "vscode" and last_seen_at:
+        if definition.supports_live_events and last_seen_at:
             return _aware(last_seen_at) >= datetime.now(timezone.utc) - timedelta(minutes=2)
         return False
 
@@ -332,7 +373,7 @@ class ConnectorRegistryService:
             return "needs_configuration"
         if connected:
             return "connected"
-        if definition.id == "vscode":
+        if definition.id in {"vscode", "browser"}:
             return "disconnected"
         if definition.supports_live_events:
             return "disconnected" if last_seen_at else "needs_configuration"

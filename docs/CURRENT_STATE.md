@@ -22,14 +22,15 @@ Last updated: 2026-05-31
 | Search | Working | Keyword plus semantic/hybrid when embeddings are enabled. |
 | Embeddings | Working/Partial | Uses Ollama + ChromaDB; optional systems fail over to keyword search. |
 | Relationships | Working/Partial | Stored in SQLite; quality and noise reduction need continued tuning. |
-| Chat | Working | Uses ContextBuilderService and selected model through ModelRouter. |
+| Chat | Working | Uses QueryIntentService, ContextBuilderService, and selected model through ModelRouter. |
 | Tasks | Paused/Experimental | Backend and page still exist, but product priority is data collection. |
 | File connector | Working | Path-based folder import with clear events. |
 | Logs connector | Working | Path-based log import with clear events. |
 | Local Git connector | Working | Read-only local Git import with clear events. |
 | Saved sources | Working/Partial | Saved connector sources and import runs exist for file/log/git. |
-| External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors; disabled VSCode connector rejects VSCode events. |
+| External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors; disabled VSCode/Browser connectors reject their events. |
 | VSCode extension | Working | MVP exists in `extensions/vscode`; installable local VSIX flow with backend-controlled runtime polling. |
+| Browser extension | Working | MVP exists in `extensions/browser`; manual page/selection save flow controlled by MindOS Browser connector toggle. |
 | Model registry | Working/Partial | Local Ollama discovery, cloud provider config, FakeLLM fallback. |
 | Embedding registry | Working/Partial | Curated and discovered local embedding models; changing model requires reindex. |
 | Dev tools | Working/Partial | Useful but should not be treated as product UI. |
@@ -52,17 +53,17 @@ Last updated: 2026-05-31
 - Logs path import: working; clear log events exists.
 - Local Git path import: working and read-only; clear Git events exists.
 - VSCode extension MVP: working; packaged local install flow, polls MindOS runtime, sends workspace/file-save events after the MindOS VSCode connector toggle is enabled.
+- Browser extension MVP: working; manual popup save flow for pages, selected text, and notes after the MindOS Browser connector toggle is enabled.
 - Saved connector sources: working/partial for file system, logs, and Git.
 - Import history: working/partial for saved source imports.
 - External ingestion API: working/partial; collector clients are derived from event metadata.
 
 ## Planned Collectors
 
-- Browser extension
 - Activity tracker
 - Local agent collector
 
-Browser, GitHub, Jira, and Email appear as disabled/unconfigured connector placeholders. They do not perform real integration work yet.
+GitHub, Jira, and Email appear as disabled/unconfigured connector placeholders. They do not perform real integration work yet.
 
 These should send data to `/ingest/external` or `/ingest/external/bulk`.
 
@@ -74,7 +75,9 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 - Model and embedding registries must not mix chat and embedding models.
 - Ollama must not auto-start from status checks.
 - VSCode extension MVP can be packaged with `npm run package` and installed into normal VSCode. F5/debug host is only needed for extension development.
-- Browser extension, activity tracker, and local agent collector are not implemented yet; only the ingestion API exists for those sources.
+- Browser extension does not track browsing history automatically and should remain manual unless explicitly changed.
+- Chat retrieval now uses deterministic query intent routing, but retrieval quality still needs tuning with real memory data.
+- Activity tracker and local agent collector are not implemented yet; only the ingestion API exists for those sources.
 - Activity tracker summaries are intended to be indexable later, but current policy treats all `activity_tracker` source events as hidden/non-indexable.
 
 ## What Not To Rebuild
@@ -90,7 +93,7 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 
 1. Stabilize connector data collection.
 2. Harden/package VSCode extension MVP.
-3. Browser extension MVP.
-4. Activity tracker.
+3. Activity tracker.
+4. Browser extension packaging hardening.
 5. Memory summaries/noise reduction.
 6. Later: revisit task execution.

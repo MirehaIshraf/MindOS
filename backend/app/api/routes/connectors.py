@@ -2,6 +2,9 @@ from fastapi import APIRouter, HTTPException
 
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.schemas.connectors import (
+    BrowserConnectorRuntimeResponse,
+    BrowserHeartbeatRequest,
+    BrowserHeartbeatResponse,
     ConnectorConfigResponse,
     ConnectorConfigUpdateRequest,
     ConnectorListResponse,
@@ -63,6 +66,16 @@ def get_vscode_runtime() -> VSCodeConnectorRuntimeResponse:
 @router.post("/vscode/heartbeat", response_model=VSCodeHeartbeatResponse)
 def record_vscode_heartbeat(request: VSCodeHeartbeatRequest) -> VSCodeHeartbeatResponse:
     return connector_registry_service.record_vscode_heartbeat(request)
+
+
+@router.get("/browser/runtime", response_model=BrowserConnectorRuntimeResponse)
+def get_browser_runtime() -> BrowserConnectorRuntimeResponse:
+    return connector_registry_service.get_browser_runtime()
+
+
+@router.post("/browser/heartbeat", response_model=BrowserHeartbeatResponse)
+def record_browser_heartbeat(request: BrowserHeartbeatRequest) -> BrowserHeartbeatResponse:
+    return connector_registry_service.record_browser_heartbeat(request)
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

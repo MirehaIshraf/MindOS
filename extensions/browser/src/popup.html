@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MindOS</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <div>
+          <h1>MindOS</h1>
+          <p id="status">Checking...</p>
+        </div>
+        <button id="testConnection" type="button">Test</button>
+      </header>
+
+      <section class="page">
+        <h2 id="pageTitle">Current page</h2>
+        <p id="pageDomain"></p>
+        <p id="pageUrl"></p>
+      </section>
+
+      <section id="warning" class="warning hidden"></section>
+
+      <section id="selectionBlock" class="selection hidden">
+        <label>Selected text</label>
+        <p id="selectionPreview"></p>
+      </section>
+
+      <label class="note">
+        Add a short note
+        <textarea id="note" rows="4" placeholder="Why is this useful?"></textarea>
+      </label>
+
+      <details class="settings">
+        <summary>Settings</summary>
+        <label>
+          Backend URL
+          <input id="backendUrl" type="text" />
+        </label>
+      </details>
+
+      <button id="save" class="save" type="button">Save to MindOS</button>
+      <p id="message" class="message"></p>
+    </main>
+    <script type="module" src="../dist/popup.js"></script>
+  </body>
+</html>

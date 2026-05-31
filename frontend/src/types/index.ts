@@ -259,6 +259,9 @@ export type ChatSource = {
   source_kind?: "direct" | "related" | string;
   relationship_type?: string | null;
   relationship_reason?: string | null;
+  metadata?: Record<string, unknown>;
+  url?: string | null;
+  path?: string | null;
 };
 
 export type ChatContextStats = {
@@ -268,6 +271,11 @@ export type ChatContextStats = {
   sources: string[];
   token_estimate: number;
   warnings?: string[];
+  intent?: string | null;
+  retrieval_profile?: string | null;
+  search_terms?: string[];
+  preferred_sources?: string[];
+  excluded_types?: string[];
 };
 
 export type ChatMessage = {
@@ -286,6 +294,7 @@ export type ChatMessage = {
   contextStats?: ChatContextStats | null;
   warning?: string | null;
   answerStyle?: string;
+  intent?: string | null;
 };
 
 export type ChatRequestPayload = {
@@ -309,6 +318,7 @@ export type ChatResponse = {
   context_summary: string;
   context_stats?: ChatContextStats | null;
   answer_style: string;
+  intent?: string | null;
 };
 
 export type ChatSession = {
@@ -338,6 +348,7 @@ export type StoredChatMessage = {
   context_stats?: ChatContextStats | null;
   warning?: string | null;
   answer_style?: string | null;
+  intent?: string | null;
   created_at: string;
 };
 
@@ -770,6 +781,7 @@ export type ContextPackage = {
   summary: string;
   token_estimate: number;
   warnings: string[];
+  metadata?: Record<string, unknown>;
 };
 
 export type EmbeddingStatusResponse = {

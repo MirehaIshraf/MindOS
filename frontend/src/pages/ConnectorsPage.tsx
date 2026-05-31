@@ -143,7 +143,7 @@ export function ConnectorsPage() {
   }
 
   async function handleToggle(connector: Connector, enabled: boolean) {
-    if (!connector.configured && enabled && !["vscode", "file_system", "logs", "git"].includes(connector.id)) {
+    if (!connector.configured && enabled && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id)) {
       setSelectedPanel(connector.id);
       return;
     }
@@ -449,7 +449,7 @@ function ConnectorCard({
   onConfigure: () => void;
 }) {
   const Icon = connectorIcon(connector.id);
-  const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "file_system", "logs", "git"].includes(connector.id));
+  const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id));
   return (
     <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
@@ -535,6 +535,8 @@ function ConfigurePanel(props: {
 
       {connector.id === "vscode" ? (
         <VSCodePanel connector={connector} onToggle={props.onToggleConnector} />
+      ) : connector.id === "browser" ? (
+        <BrowserPanel connector={connector} onToggle={props.onToggleConnector} />
       ) : connector.id === "file_system" ? (
         <FileSystemPanel {...props} />
       ) : connector.id === "logs" ? (
@@ -574,6 +576,42 @@ function VSCodePanel({ connector, onToggle }: { connector: Connector; onToggle: 
             <li><code>npm run compile</code></li>
             <li><code>npm run package</code></li>
             <li><code>code --install-extension mindos-vscode-0.1.0.vsix</code></li>
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle: (enabled: boolean) => void }) {
+  const [showInstall, setShowInstall] = useState(false);
+  return (
+    <div className="mt-5 space-y-4">
+      {connector.enabled && connector.status === "disconnected" ? (
+        <StatusMessage message="Extension installed? Open the browser popup or check the backend URL." variant="warning" />
+      ) : null}
+      <div className="flex items-center justify-between rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-app-text">Save browser research</p>
+          <p className="mt-1 text-xs text-app-muted">Install once. Use the extension popup to save pages manually.</p>
+        </div>
+        <Toggle checked={connector.enabled} disabled={false} onChange={onToggle} />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <KeyValue label="Backend URL" value="http://localhost:8000" />
+        <KeyValue label="Capture mode" value="Manual" />
+      </div>
+      <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => setShowInstall(!showInstall)}>
+        {showInstall ? "Hide install steps" : "Install extension manually"}
+      </button>
+      {showInstall ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>Open <code>extensions/browser</code>.</li>
+            <li><code>npm install</code></li>
+            <li><code>npm run build</code></li>
+            <li>Open Chrome or Edge Extensions.</li>
+            <li>Choose Load unpacked and select <code>extensions/browser</code>.</li>
           </ol>
         </div>
       ) : null}

@@ -4,9 +4,9 @@
 
 - Connector UX standardization
 - VSCode extension MVP
+- Browser extension MVP
 - Stabilize connectors
 - External ingestion
-- Browser extension
 - Activity tracker
 - Memory policy cleanup
 - Connector permissions
@@ -14,8 +14,8 @@
 
 ## Next Phase: Better Memory
 
-- Browser extension MVP
 - Activity tracker MVP
+- Browser extension packaging and privacy hardening
 - GitHub/Jira/Email read connectors
 - Summaries
 - Source timeline

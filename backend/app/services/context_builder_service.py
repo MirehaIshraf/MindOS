@@ -1,10 +1,11 @@
 from collections import Counter, defaultdict
+from typing import Any
 
 from app.core.config import get_settings
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.domain.models import Event, Relationship
 from app.repositories.base import EventRepository, RelationshipRepository
-from app.schemas.context import ContextEvent, ContextPackage, ContextRelationship, ContextSourceGroup
+from app.schemas.context import ContextEvent, ContextPackage, ContextRelationship, ContextSourceGroup, QueryIntent
 from app.services.memory_classifier import get_memory_category, is_hidden_from_default_memory
 from app.services.search_service import SearchService
 
@@ -12,6 +13,17 @@ HIGH_PRIORITY_RELATIONSHIPS = {"FIXED_BY", "CAUSED_BY", "SAME_TASK", "SAME_FILE"
 MEDIUM_PRIORITY_RELATIONSHIPS = {"SAME_REPO"}
 LOW_PRIORITY_RELATIONSHIPS = {"SAME_TOPIC", "TEMPORAL_NEARBY"}
 PROFILE_DEFAULTS = {
+    "precision_lookup": {
+        "direct_limit": 5,
+        "related_per_event": 0,
+        "direct_chars": 900,
+        "related_chars": 0,
+        "max_total_chars": 4500,
+        "allow_low_priority": False,
+        "expand_relationships": False,
+        "min_score": 0.35,
+        "search_mode": "hybrid",
+    },
     "speed_chat": {
         "direct_limit": 3,
         "related_per_event": 0,
@@ -19,6 +31,9 @@ PROFILE_DEFAULTS = {
         "related_chars": 200,
         "max_total_chars": 3000,
         "allow_low_priority": False,
+        "expand_relationships": False,
+        "min_score": None,
+        "search_mode": "auto",
     },
     "fast_chat": {
         "direct_limit": 4,
@@ -27,6 +42,42 @@ PROFILE_DEFAULTS = {
         "related_chars": 400,
         "max_total_chars": 6000,
         "allow_low_priority": False,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
+    },
+    "root_cause": {
+        "direct_limit": 5,
+        "related_per_event": 1,
+        "direct_chars": 900,
+        "related_chars": 500,
+        "max_total_chars": 7000,
+        "allow_low_priority": False,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
+    },
+    "summary": {
+        "direct_limit": 10,
+        "related_per_event": 1,
+        "direct_chars": 900,
+        "related_chars": 350,
+        "max_total_chars": 9000,
+        "allow_low_priority": False,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
+    },
+    "general_chat": {
+        "direct_limit": 3,
+        "related_per_event": 0,
+        "direct_chars": 500,
+        "related_chars": 0,
+        "max_total_chars": 2500,
+        "allow_low_priority": False,
+        "expand_relationships": False,
+        "min_score": 0.45,
+        "search_mode": "hybrid",
     },
     "deep_analysis": {
         "direct_limit": 8,
@@ -35,6 +86,9 @@ PROFILE_DEFAULTS = {
         "related_chars": 700,
         "max_total_chars": 12000,
         "allow_low_priority": True,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
     },
     "deep_chat": {
         "direct_limit": 8,
@@ -43,6 +97,9 @@ PROFILE_DEFAULTS = {
         "related_chars": 600,
         "max_total_chars": 10000,
         "allow_low_priority": True,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
     },
     "task": {
         "direct_limit": 5,
@@ -51,6 +108,9 @@ PROFILE_DEFAULTS = {
         "related_chars": 450,
         "max_total_chars": 7000,
         "allow_low_priority": False,
+        "expand_relationships": True,
+        "min_score": None,
+        "search_mode": "auto",
     },
 }
 
@@ -73,6 +133,7 @@ class ContextBuilderService:
         related_per_event: int | None = None,
         include_hidden: bool = True,
         profile: str = "fast_chat",
+        intent: QueryIntent | None = None,
     ) -> ContextPackage:
         settings = get_settings()
         limit = limit or settings.chat_context_direct_limit
@@ -83,6 +144,7 @@ class ContextBuilderService:
             related_per_event=related_per_event,
             include_hidden=include_hidden,
             profile=profile,
+            intent=intent,
         )
 
     def build_task_context(self, instruction: str, limit: int = 5, related_per_event: int = 1) -> ContextPackage:
@@ -137,6 +199,7 @@ class ContextBuilderService:
                 [
                     f"[{index}] Source: {event.source} | Type: {event.type} | Time: {event.timestamp.isoformat()}",
                     f"Title: {event.title}",
+                    *self._metadata_lines(event),
                     f"Content: {event.content}",
                     "",
                 ]
@@ -161,6 +224,7 @@ class ContextBuilderService:
                     prefix,
                     f"Source: {event.source} | Type: {event.type} | Time: {event.timestamp.isoformat()}",
                     f"Title: {event.title}",
+                    *self._metadata_lines(event),
                     f"Content: {event.content}",
                     "",
                 ]
@@ -178,14 +242,21 @@ class ContextBuilderService:
         related_per_event: int,
         include_hidden: bool,
         profile: str,
+        intent: QueryIntent | None = None,
     ) -> ContextPackage:
         profile_config = self._profile_config(profile)
+        search_query = self._search_query(query, intent)
+        preferred_sources = intent.preferred_sources if intent and intent.preferred_sources else None
         search_response = self._search_service.search_events(
-            query=query,
-            sources=None,
+            query=search_query,
+            sources=preferred_sources,
             limit=min(limit, profile_config["direct_limit"]),
             include_hidden=include_hidden,
             context_only=True,
+            search_mode=str(profile_config.get("search_mode") or "auto"),
+            excluded_sources=intent.excluded_sources if intent else None,
+            excluded_types=intent.excluded_types if intent else None,
+            min_score=profile_config.get("min_score") if isinstance(profile_config.get("min_score"), float) else None,
         )
         direct_events: list[ContextEvent] = []
         related_events: list[ContextEvent] = []
@@ -207,11 +278,17 @@ class ContextBuilderService:
                 )
             )
 
+        effective_related_per_event = min(related_per_event, int(profile_config["related_per_event"]))
+        if not bool(profile_config.get("expand_relationships", True)):
+            effective_related_per_event = 0
+        relationship_types_allowed = set(intent.relationship_types_allowed or []) if intent else set()
+
         for direct in direct_events:
             related_items = self._prioritized_related_items(
                 self._relationship_repository.get_related_events(direct.event_id, limit=20),
                 allow_low_priority=profile_config["allow_low_priority"],
-                needed=related_per_event,
+                needed=effective_related_per_event,
+                relationship_types_allowed=relationship_types_allowed,
             )
             for item in related_items:
                 event = item["event"]
@@ -235,8 +312,18 @@ class ContextBuilderService:
             related_events=related_events,
             relationships=relationships,
             warnings=[search_response.warning] if search_response.warning else [],
+            metadata={
+                "intent": intent.model_dump(mode="json") if intent else None,
+                "search_query": search_query,
+                "search_mode": search_response.search_mode,
+            },
         )
         return self._trim_package(package, profile_config=profile_config)
+
+    def _search_query(self, query: str, intent: QueryIntent | None) -> str:
+        if intent and intent.search_terms:
+            return intent.search_terms[0]
+        return query
 
     def _package(
         self,
@@ -246,9 +333,10 @@ class ContextBuilderService:
         related_events: list[ContextEvent],
         relationships: list[ContextRelationship],
         warnings: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ContextPackage:
         source_groups = self._source_groups([*direct_events, *related_events])
-        summary = self._summary(direct_events, related_events, relationships, source_groups)
+        summary = self._summary(query, direct_events, related_events, relationships, source_groups)
         token_estimate = self._token_estimate(query, summary, [*direct_events, *related_events])
         return ContextPackage(
             query=query,
@@ -259,9 +347,10 @@ class ContextBuilderService:
             summary=summary,
             token_estimate=token_estimate,
             warnings=warnings or [],
+            metadata=metadata or {},
         )
 
-    def _trim_package(self, package: ContextPackage, profile_config: dict[str, int | bool]) -> ContextPackage:
+    def _trim_package(self, package: ContextPackage, profile_config: dict[str, Any]) -> ContextPackage:
         if self._total_chars(package) <= profile_config["max_total_chars"]:
             return package
 
@@ -275,6 +364,7 @@ class ContextBuilderService:
             related_events=trimmed_related,
             relationships=package.relationships,
             warnings=[*package.warnings, "Context trimmed for speed."],
+            metadata=package.metadata,
         )
         if self._total_chars(rebuilt) <= profile_config["max_total_chars"]:
             return rebuilt
@@ -289,6 +379,7 @@ class ContextBuilderService:
             related_events=rebuilt.related_events,
             relationships=rebuilt.relationships,
             warnings=rebuilt.warnings,
+            metadata=rebuilt.metadata,
         )
 
     def _to_context_event(self, event: Event, score: float | None, match_reason: str | None, max_chars: int) -> ContextEvent:
@@ -328,12 +419,15 @@ class ContextBuilderService:
 
     def _summary(
         self,
+        query: str,
         direct_events: list[ContextEvent],
         related_events: list[ContextEvent],
         relationships: list[ContextRelationship],
         source_groups: list[ContextSourceGroup],
     ) -> str:
         sources = ", ".join(group.source for group in source_groups[:4]) or "none"
+        if not related_events and not relationships:
+            return f"Found {len(direct_events)} precise memory matches for: {query}. Sources: {sources}."
         relationship_types = Counter(relationship.relationship_type for relationship in relationships)
         strongest = ", ".join(kind for kind, _ in relationship_types.most_common(3)) or "none"
         return (
@@ -355,9 +449,17 @@ class ContextBuilderService:
                 return relationship
         return None
 
-    def _prioritized_related_items(self, items: list[dict], allow_low_priority: bool, needed: int) -> list[dict]:
+    def _prioritized_related_items(
+        self,
+        items: list[dict],
+        allow_low_priority: bool,
+        needed: int,
+        relationship_types_allowed: set[str] | None = None,
+    ) -> list[dict]:
         if needed <= 0:
             return []
+        if relationship_types_allowed:
+            items = [item for item in items if item["relationship"].relationship_type in relationship_types_allowed]
 
         high = self._sort_related([item for item in items if item["relationship"].relationship_type in HIGH_PRIORITY_RELATIONSHIPS])
         medium = self._sort_related([item for item in items if item["relationship"].relationship_type in MEDIUM_PRIORITY_RELATIONSHIPS])
@@ -373,7 +475,7 @@ class ContextBuilderService:
     def _sort_related(self, items: list[dict]) -> list[dict]:
         return sorted(items, key=lambda item: item["relationship"].strength, reverse=True)
 
-    def _profile_config(self, profile: str) -> dict[str, int | bool]:
+    def _profile_config(self, profile: str) -> dict[str, Any]:
         config = dict(PROFILE_DEFAULTS.get(profile, PROFILE_DEFAULTS["fast_chat"]))
         settings = get_settings()
         if profile == "fast_chat":
@@ -382,6 +484,23 @@ class ContextBuilderService:
             config["direct_chars"] = settings.chat_context_max_chars_per_event
             config["max_total_chars"] = settings.chat_context_max_total_chars
         return config
+
+    def _metadata_lines(self, event: ContextEvent) -> list[str]:
+        metadata = event.metadata or {}
+        lines: list[str] = []
+        url = metadata.get("url")
+        if isinstance(url, str) and url:
+            lines.append(f"URL: {url}")
+        page_title = metadata.get("page_title")
+        if isinstance(page_title, str) and page_title and page_title != event.title:
+            lines.append(f"Page title: {page_title}")
+        domain = metadata.get("domain")
+        if isinstance(domain, str) and domain:
+            lines.append(f"Domain: {domain}")
+        path = metadata.get("file_path") or metadata.get("path") or metadata.get("relative_path") or metadata.get("repo_path")
+        if isinstance(path, str) and path:
+            lines.append(f"Path: {path}")
+        return lines
 
     def _total_chars(self, package: ContextPackage) -> int:
         return len(self.format_context_for_llm(package))

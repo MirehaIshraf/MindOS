@@ -26,36 +26,46 @@ class SearchService:
         include_hidden: bool = True,
         search_mode: str | None = "auto",
         context_only: bool = False,
+        excluded_sources: list[str] | None = None,
+        included_types: list[str] | None = None,
+        excluded_types: list[str] | None = None,
+        min_score: float | None = None,
     ) -> SearchResponse:
         requested_mode = (search_mode or "auto").lower()
         if requested_mode not in {"keyword", "semantic", "hybrid", "auto"}:
             requested_mode = "auto"
 
         if requested_mode == "keyword":
-            return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            return self._filter_response(
+                self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types),
+                min_score,
+            )
 
         semantic_available = embedding_index_service.embeddings_available()
         if requested_mode in {"semantic", "hybrid"} and not semantic_available:
-            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
             response.warning = merge_warning(response.warning, "Semantic search unavailable. Falling back to keyword search.")
             response.requested_search_mode = requested_mode
-            return response
+            return self._filter_response(response, min_score)
 
         stale_warning = embedding_index_service.index_stale_warning()
 
         if requested_mode == "semantic":
-            response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
             if stale_warning and response.search_mode == "semantic":
                 response.warning = merge_warning(response.warning, stale_warning)
-            return response
+            return self._filter_response(response, min_score)
 
         if requested_mode == "hybrid" or semantic_available:
-            response = self._hybrid_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            response = self._hybrid_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
             if stale_warning and response.search_mode == "hybrid":
                 response.warning = merge_warning(response.warning, stale_warning)
-            return response
+            return self._filter_response(response, min_score)
 
-        return self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+        return self._filter_response(
+            self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types),
+            min_score,
+        )
 
     def _keyword_search(
         self,
@@ -66,14 +76,20 @@ class SearchService:
         include_hidden: bool,
         requested_mode: str | None = "keyword",
         context_only: bool = False,
+        excluded_sources: list[str] | None = None,
+        included_types: list[str] | None = None,
+        excluded_types: list[str] | None = None,
     ) -> SearchResponse:
         normalized_query = query.strip().lower()
         tokens = self._tokenize(normalized_query)
         allowed_sources = {source.lower() for source in sources} if sources else None
+        blocked_sources = {source.lower() for source in excluded_sources or []}
+        allowed_types = {event_type.lower() for event_type in included_types or []}
+        blocked_types = {event_type.lower() for event_type in excluded_types or []}
         scored_results: list[tuple[float, Event, str]] = []
 
         for event in self._event_repository.list_all_events():
-            if allowed_sources and event.source.value not in allowed_sources:
+            if not self._event_allowed(event, allowed_sources, blocked_sources, allowed_types, blocked_types):
                 continue
             if context_only and not event.is_context_eligible:
                 continue
@@ -117,6 +133,9 @@ class SearchService:
         include_hidden: bool,
         requested_mode: str | None = "semantic",
         context_only: bool = False,
+        excluded_sources: list[str] | None = None,
+        included_types: list[str] | None = None,
+        excluded_types: list[str] | None = None,
     ) -> SearchResponse:
         try:
             vector_rows = embedding_index_service.semantic_search(
@@ -127,14 +146,18 @@ class SearchService:
                 include_hidden=include_hidden,
             )
         except Exception as exc:
-            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+            response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
             response.warning = merge_warning(response.warning, f"Semantic search failed. Falling back to keyword search: {exc}")
             return response
 
         results: list[SearchResult] = []
+        allowed_sources = {source.lower() for source in sources} if sources else None
+        blocked_sources = {source.lower() for source in excluded_sources or []}
+        allowed_types = {event_type.lower() for event_type in included_types or []}
+        blocked_types = {event_type.lower() for event_type in excluded_types or []}
         for row in vector_rows:
             event = self._event_repository.get_event_by_id(row["event_id"])
-            if event is None or (context_only and not event.is_context_eligible):
+            if event is None or not self._event_allowed(event, allowed_sources, blocked_sources, allowed_types, blocked_types) or (context_only and not event.is_context_eligible):
                 continue
             results.append(self._to_search_result(event, raw_score=row["score"], max_score=1, match_reason="Semantic match"))
         return SearchResponse(
@@ -155,9 +178,12 @@ class SearchService:
         include_hidden: bool,
         requested_mode: str | None = "hybrid",
         context_only: bool = False,
+        excluded_sources: list[str] | None = None,
+        included_types: list[str] | None = None,
+        excluded_types: list[str] | None = None,
     ) -> SearchResponse:
-        keyword_response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
-        semantic_response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only)
+        keyword_response = self._keyword_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
+        semantic_response = self._semantic_search(query, sources, category, limit, include_hidden, requested_mode, context_only, excluded_sources, included_types, excluded_types)
         if semantic_response.search_mode != "semantic":
             semantic_response.requested_search_mode = requested_mode
             return semantic_response
@@ -213,6 +239,33 @@ class SearchService:
 
     def get_event_detail(self, event_id: str) -> Event | None:
         return self._event_repository.get_event_by_id(event_id)
+
+    def _filter_response(self, response: SearchResponse, min_score: float | None) -> SearchResponse:
+        if min_score is None:
+            return response
+        response.results = [result for result in response.results if result.score >= min_score or "keyword" in result.match_reason.lower()]
+        response.total = len(response.results)
+        return response
+
+    def _event_allowed(
+        self,
+        event: Event,
+        allowed_sources: set[str] | None,
+        blocked_sources: set[str],
+        allowed_types: set[str],
+        blocked_types: set[str],
+    ) -> bool:
+        source = event.source.value.lower()
+        event_type = event.type.lower()
+        if allowed_sources and source not in allowed_sources:
+            return False
+        if source in blocked_sources:
+            return False
+        if allowed_types and event_type not in allowed_types:
+            return False
+        if event_type in blocked_types:
+            return False
+        return True
 
     def _tokenize(self, normalized_query: str) -> list[str]:
         return [token for token in re.findall(r"[a-z0-9_]+", normalized_query) if token not in STOP_WORDS and len(token) > 1]

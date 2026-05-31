@@ -15,7 +15,7 @@ This document reflects the currently mounted route modules in `backend/app/api/r
 - `POST /ingest/external/bulk`: create up to 100 external collector events; each event is processed independently.
 - `GET /ingest/status`: returns supported external collector sources, preferred event types, recent external event count, and derived collector clients.
 
-If the VSCode connector is disabled in MindOS, `POST /ingest/external` for `source=vscode_extension` returns `403` with a JSON detail message.
+If the VSCode or Browser connector is disabled in MindOS, `POST /ingest/external` for `source=vscode_extension` or `source=browser_extension` returns `403` with a JSON detail message.
 
 ## Memory / Events
 
@@ -32,6 +32,7 @@ If the VSCode connector is disabled in MindOS, `POST /ingest/external` for `sour
 ## Context
 
 - `POST /context/build`: build a structured context package for chat/task debugging.
+- `POST /context/intent`: classify a query into an intent and retrieval profile for debugging.
 - `GET /context/event/{event_id}`: build context around one event and related memory.
 
 ## Chat
@@ -65,6 +66,8 @@ If the VSCode connector is disabled in MindOS, `POST /ingest/external` for `sour
 - `GET /connectors`: unified connector registry cards/status.
 - `GET /connectors/vscode/runtime`: runtime settings for the installed VSCode extension to poll.
 - `POST /connectors/vscode/heartbeat`: updates VSCode connector last-seen status; does not create a memory event.
+- `GET /connectors/browser/runtime`: runtime settings for the browser extension popup/background script.
+- `POST /connectors/browser/heartbeat`: updates Browser connector last-seen status; does not create a memory event.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
 - `GET /connectors/{connector_id}/config`: read placeholder/stored connector config.

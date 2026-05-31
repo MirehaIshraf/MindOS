@@ -14,6 +14,7 @@ MindOS is a local-first AI workspace for developers. It runs on the user's machi
 - Safe execution only after confirmation
 - Simple UI, powerful backend
 - Retrieval and context are controlled by FastAPI, not directly by the model
+- Query intent and retrieval precision are decided by FastAPI before model calls
 
 ## Current MVP Direction
 
@@ -40,13 +41,13 @@ Implemented or partially implemented:
 - Saved connector sources
 - Import history
 - VSCode extension MVP with local VSIX packaging and backend-controlled runtime polling
+- Browser extension MVP for manually saved pages, selected text, and research notes
 - Chat sessions and raw chat memory events
 - Task lifecycle events
 - External ingestion endpoint
 
 Planned:
 
-- Browser extension
 - Activity tracker
 - Local agent observations
 - GitHub read connector
@@ -56,6 +57,8 @@ Planned:
 The Connectors page now uses a unified connector registry pattern: each connector is represented as a card with status, toggle, configure action, event count, and last seen/sync metadata.
 
 For VSCode, the MindOS connector toggle is the source of truth. The installed extension polls the local backend runtime endpoint and starts/stops collection without requiring an Extension Development Host.
+
+For Browser, the MVP is manual-only. The extension popup checks the local backend runtime state and sends a page/selection event only when the user clicks Save to MindOS.
 
 ## Current Storage
 
@@ -89,6 +92,8 @@ Raw chat messages should not pollute the main memory graph:
 - indexed by default: no
 - relationship eligible by default: no
 - used in normal RAG context: no
+
+Small memory lookup questions should use precise retrieval. For example, "Did I search about happiness ever?" should search for `happiness`, prefer manually saved browser/file/log/git memory, avoid weak relationship expansion, and answer from exact local memory rather than generic model knowledge.
 
 ## Future Task Vision
 

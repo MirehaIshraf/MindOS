@@ -48,6 +48,11 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
         policy = _policy("captured_event", hidden=True)
         return policy
 
+    if source_value == "browser_extension":
+        if event_type in {"browser_page_saved", "browser_selection_saved", "browser_research_note"}:
+            return _policy("captured_event", hidden=False)
+        return _policy("captured_event", hidden=True)
+
     if source_value == "vscode_extension":
         if event_type == "editor_file_opened":
             return {

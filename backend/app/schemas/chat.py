@@ -37,6 +37,9 @@ class ChatSource(BaseModel):
     source_kind: str = "direct"
     relationship_type: str | None = None
     relationship_reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    url: str | None = None
+    path: str | None = None
 
 
 class ChatContextStats(BaseModel):
@@ -46,6 +49,11 @@ class ChatContextStats(BaseModel):
     sources: list[str]
     token_estimate: int
     warnings: list[str] = Field(default_factory=list)
+    intent: str | None = None
+    retrieval_profile: str | None = None
+    search_terms: list[str] = Field(default_factory=list)
+    preferred_sources: list[str] = Field(default_factory=list)
+    excluded_types: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -61,6 +69,7 @@ class ChatResponse(BaseModel):
     context_summary: str = ""
     context_stats: ChatContextStats | None = None
     answer_style: str = "normal"
+    intent: str | None = None
 
 
 class ChatSessionResponse(BaseModel):
@@ -90,6 +99,7 @@ class ChatStoredMessageResponse(BaseModel):
     context_stats: dict[str, Any] | None = None
     warning: str | None = None
     answer_style: str | None = None
+    intent: str | None = None
     created_at: datetime
 
 

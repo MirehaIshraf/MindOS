@@ -19,6 +19,7 @@ from app.schemas.context import ContextEvent, ContextPackage
 from app.services.context_builder_service import ContextBuilderService
 from app.services.model_registry_service import model_registry_service
 from app.services.model_router_service import model_router_service
+from app.services.query_intent_service import query_intent_service
 from app.services.response_cleaner import clean_llm_response
 from app.services.relationship_service import relationship_service
 
@@ -92,13 +93,15 @@ class ChatService:
             session = self._chat_repository.create_session(short_title(request.message))
 
         model_config = self._resolve_requested_model(request.model_id)
-        context_profile = model_config.default_context_profile if model_config else "fast_chat"
+        query_intent = query_intent_service.classify(request.message)
+        context_profile = query_intent.retrieval_profile or (model_config.default_context_profile if model_config else "fast_chat")
         context_package: ContextPackage | None = None
-        if request.use_context:
+        if request.use_context or query_intent.needs_local_memory:
             context_package = self._context_builder.build_chat_context(
                 query=request.message,
                 profile=context_profile,
                 include_hidden=True,
+                intent=query_intent,
             )
 
         # Search happens before storage so the current user message cannot retrieve itself.
@@ -113,7 +116,7 @@ class ChatService:
 
         history = [message.model_dump(mode="json") for message in request.history]
         task_hint = detect_task_hint(request.message)
-        answer_style = detect_answer_style(request.message, task_hint)
+        answer_style = query_intent.answer_style or detect_answer_style(request.message, task_hint)
         reply, model_name, provider, model_display_name, llm_warning = self._generate_reply(
             message=request.message,
             history=history,
@@ -127,7 +130,11 @@ class ChatService:
         sources_used = context_sources(context_package)
         context_stats = context_stats_payload(context_package)
         sources_payload = [source.model_dump(mode="json") for source in sources_used]
-        search_mode = "hybrid" if get_settings().enable_embeddings else "keyword"
+        search_mode = (
+            str(context_package.metadata.get("search_mode"))
+            if context_package and context_package.metadata.get("search_mode")
+            else ("hybrid" if get_settings().enable_embeddings else "keyword")
+        )
         warning = combined_warning(
             "; ".join(context_package.warnings) if context_package and context_package.warnings else None,
             llm_warning,
@@ -148,6 +155,7 @@ class ChatService:
                 "context_stats": context_stats.model_dump() if context_stats else None,
                 "warning": warning,
                 "answer_style": answer_style,
+                "intent": query_intent.intent,
             },
         )
         self._record_chat_memory_event(
@@ -165,6 +173,7 @@ class ChatService:
                 "task_hint": task_hint,
                 "warning": warning,
                 "answer_style": answer_style,
+                "intent": query_intent.intent,
             },
         )
 
@@ -181,6 +190,7 @@ class ChatService:
             context_summary=context_package.summary if context_package else "",
             context_stats=context_stats,
             answer_style=answer_style,
+            intent=query_intent.intent,
         )
 
     def list_sessions(self, limit: int = 20) -> ChatSessionsResponse:
@@ -311,6 +321,8 @@ def context_event_to_source(event: ContextEvent, source_kind: str) -> ChatSource
     relationship_reason = None
     if source_kind == "related" and event.match_reason and ": " in event.match_reason:
         relationship_type, relationship_reason = event.match_reason.split(": ", 1)
+    metadata = event.metadata or {}
+    path = metadata.get("file_path") or metadata.get("path") or metadata.get("relative_path") or metadata.get("repo_path")
     return ChatSource(
         event_id=event.event_id,
         source=event.source,
@@ -323,12 +335,16 @@ def context_event_to_source(event: ContextEvent, source_kind: str) -> ChatSource
         source_kind=source_kind,
         relationship_type=relationship_type,
         relationship_reason=relationship_reason,
+        metadata=metadata,
+        url=metadata.get("url") if isinstance(metadata.get("url"), str) else None,
+        path=path if isinstance(path, str) else None,
     )
 
 
 def context_stats_payload(context_package: ContextPackage | None) -> ChatContextStats | None:
     if context_package is None:
         return None
+    intent_payload = context_package.metadata.get("intent") if hasattr(context_package, "metadata") else None
     return ChatContextStats(
         direct_count=len(context_package.direct_events),
         related_count=len(context_package.related_events),
@@ -336,6 +352,11 @@ def context_stats_payload(context_package: ContextPackage | None) -> ChatContext
         sources=[group.source for group in context_package.source_groups],
         token_estimate=context_package.token_estimate,
         warnings=context_package.warnings,
+        intent=intent_payload.get("intent") if isinstance(intent_payload, dict) else None,
+        retrieval_profile=intent_payload.get("retrieval_profile") if isinstance(intent_payload, dict) else None,
+        search_terms=intent_payload.get("search_terms", []) if isinstance(intent_payload, dict) else [],
+        preferred_sources=intent_payload.get("preferred_sources", []) if isinstance(intent_payload, dict) else [],
+        excluded_types=intent_payload.get("excluded_types", []) if isinstance(intent_payload, dict) else [],
     )
 
 
@@ -353,6 +374,24 @@ def prompt_for_answer_style(task_hint: str | None, answer_style: str) -> str:
         )
     elif answer_style == "summary":
         prompt += "\nThe user is asking for a summary. Use a clean markdown summary with sections and bullets.\n"
+    elif answer_style == "memory_lookup":
+        prompt += """
+The user is asking whether something exists in their local memory.
+Answer directly.
+
+If relevant memory is found:
+- Start with "Yes" or "I found..."
+- Name the exact memory item/page/file.
+- Include URL/path if available.
+- Keep answer concise.
+- Do not speculate beyond the provided memory.
+
+If no relevant memory is found:
+- Say you could not find it in local memory.
+- Suggest what source may need to be connected.
+
+Do not give generic explanations.
+"""
     if task_hint:
         prompt += (
             "\nThe user's message looks like a task request of type: "

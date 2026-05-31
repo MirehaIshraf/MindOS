@@ -12,6 +12,7 @@ node_modules/
 dist/
 .vite/
 *.vsix
+extensions/browser/*.zip
 
 # Environment
 .env

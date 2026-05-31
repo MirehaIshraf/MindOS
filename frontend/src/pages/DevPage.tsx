@@ -884,6 +884,7 @@ export function DevPage() {
                   <Badge>relationships: {contextResult.relationships.length}</Badge>
                   <Badge>tokens: ~{contextResult.token_estimate}</Badge>
                 </div>
+                <IntentDebug metadata={contextResult.metadata} />
                 <p className="text-app-muted">{contextResult.summary}</p>
                 {contextResult.source_groups.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -1067,6 +1068,29 @@ function Row({ label, value, tone = "default" }: { label: string; value: string;
     <div className="flex items-center justify-between gap-3">
       <span className="text-app-muted">{label}</span>
       <Badge variant={tone === "success" ? "success" : tone === "danger" ? "danger" : "default"}>{value}</Badge>
+    </div>
+  );
+}
+
+function IntentDebug({ metadata }: { metadata?: Record<string, unknown> }) {
+  const intent = metadata?.intent;
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
+    return null;
+  }
+  const details = intent as Record<string, unknown>;
+  const searchTerms = Array.isArray(details.search_terms) ? details.search_terms.map(String) : [];
+  const preferredSources = Array.isArray(details.preferred_sources) ? details.preferred_sources.map(String) : [];
+  const excludedTypes = Array.isArray(details.excluded_types) ? details.excluded_types.map(String) : [];
+  return (
+    <div className="space-y-2 rounded-md border border-app-border bg-black/20 p-3">
+      <div className="flex flex-wrap gap-2">
+        <Badge variant="info">intent: {String(details.intent ?? "-")}</Badge>
+        <Badge>profile: {String(details.retrieval_profile ?? "-")}</Badge>
+        <Badge>confidence: {Number(details.confidence ?? 0).toFixed(2)}</Badge>
+      </div>
+      {searchTerms.length > 0 ? <p className="text-xs text-app-muted">Search terms: {searchTerms.join(", ")}</p> : null}
+      {preferredSources.length > 0 ? <p className="text-xs text-app-muted">Preferred sources: {preferredSources.join(", ")}</p> : null}
+      {excludedTypes.length > 0 ? <p className="text-xs text-app-muted">Excluded types: {excludedTypes.join(", ")}</p> : null}
     </div>
   );
 }

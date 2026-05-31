@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from app.schemas.context import ContextBuildRequest, ContextPackage
+from app.schemas.context import ContextBuildRequest, ContextPackage, QueryIntent, QueryIntentRequest
 from app.services.context_builder_service import context_builder_service
+from app.services.query_intent_service import query_intent_service
 
 router = APIRouter(prefix="/context", tags=["context"])
 
@@ -14,12 +15,19 @@ def build_context(request: ContextBuildRequest) -> ContextPackage:
             limit=request.limit,
             related_per_event=request.related_per_event,
         )
+    intent = query_intent_service.classify(request.query)
     return context_builder_service.build_chat_context(
         query=request.query,
         limit=request.limit,
         related_per_event=request.related_per_event,
-        profile=request.profile,
+        profile=intent.retrieval_profile or request.profile,
+        intent=intent,
     )
+
+
+@router.post("/intent", response_model=QueryIntent)
+def detect_intent(request: QueryIntentRequest) -> QueryIntent:
+    return query_intent_service.classify(request.query)
 
 
 @router.get("/event/{event_id}", response_model=ContextPackage)

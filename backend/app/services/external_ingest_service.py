@@ -31,11 +31,9 @@ PREFERRED_EXTERNAL_EVENT_TYPES = {
         "editor_debug_stopped",
     ],
     "browser_extension": [
-        "browser_page_visited",
-        "browser_search",
-        "browser_tab_saved",
-        "browser_research_session",
-        "browser_bookmark_added",
+        "browser_page_saved",
+        "browser_selection_saved",
+        "browser_research_note",
     ],
     "activity_tracker": [
         "app_focus_changed",
@@ -94,10 +92,43 @@ class ExternalIngestService:
             current["events_count"] += 1
             if event.timestamp > current["last_seen_at"]:
                 current["last_seen_at"] = event.timestamp
+        self._merge_heartbeat_client(clients, "vscode_extension", "vscode", "VSCode Extension")
+        self._merge_heartbeat_client(clients, "browser_extension", "browser", "Browser Extension")
         return [
             CollectorClientResponse(**client)
             for client in sorted(clients.values(), key=lambda item: item["last_seen_at"] or datetime.min, reverse=True)
         ]
+
+    def _merge_heartbeat_client(
+        self,
+        clients: dict[tuple[str, str], dict[str, Any]],
+        source: str,
+        connector_id: str,
+        default_name: str,
+    ) -> None:
+        try:
+            heartbeat = connector_registry_service.heartbeat_metadata(connector_id)
+        except Exception:
+            return
+        seen_at = _parse_datetime(heartbeat.get("last_seen_at"))
+        if not seen_at:
+            return
+        client_id = str(heartbeat.get("client_id") or f"{source}-local")
+        key = (source, client_id)
+        current = clients.setdefault(
+            key,
+            {
+                "id": client_id,
+                "name": default_name,
+                "type": source,
+                "enabled": connector_registry_service.is_enabled(connector_id),
+                "last_seen_at": seen_at,
+                "events_count": 0,
+            },
+        )
+        current["enabled"] = connector_registry_service.is_enabled(connector_id)
+        if _aware(seen_at) > _aware(current["last_seen_at"]):
+            current["last_seen_at"] = seen_at
 
     def recent_external_events_count(self, hours: int = 24) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -206,6 +237,15 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 external_ingest_service = ExternalIngestService()
