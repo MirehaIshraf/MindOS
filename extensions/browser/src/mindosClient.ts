@@ -20,6 +20,14 @@ export class MindOSClient {
     return (await response.json()) as BrowserRuntime;
   }
 
+  async getRules(): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl()}/connectors/browser/rules`);
+    if (!response.ok) {
+      throw new Error(`Rules check failed with status ${response.status}`);
+    }
+    return (await response.json()) as Record<string, unknown>;
+  }
+
   async sendHeartbeat(payload: {
     client_id: string;
     extension_version: string;

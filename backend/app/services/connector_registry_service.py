@@ -10,6 +10,7 @@ from app.schemas.connectors import (
     BrowserConnectorRuntimeResponse,
     BrowserHeartbeatRequest,
     BrowserHeartbeatResponse,
+    BrowserRulesResponse,
     ConnectorConfigResponse,
     ConnectorListResponse,
     ConnectorStatusResponse,
@@ -39,12 +40,102 @@ BROWSER_ACCEPTED_EVENT_TYPES = [
     "browser_page_saved",
     "browser_selection_saved",
     "browser_research_note",
+    "browser_page_seen",
+    "browser_search_query",
+    "browser_page_captured",
+    "browser_page_summary",
 ]
 
 BROWSER_RUNTIME_DEFAULTS = {
     "capture_mode": "manual",
+    "capture_search_queries": True,
+    "capture_important_pages": False,
+    "capture_page_context": True,
+    "capture_full_page_text": False,
+    "max_page_text_chars": 6000,
+    "minimum_active_seconds": 8,
+    "ignored_domains": [],
+    "important_domains": [],
+    "history_retention_days": 30,
     "max_content_chars": 4000,
 }
+
+BROWSER_IMPORTANT_DOMAIN_PATTERNS = [
+    "github.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "stackoverflow.com",
+    "stackexchange.com",
+    "readthedocs.io",
+    "dev.to",
+    "arxiv.org",
+    "scholar.google.com",
+    "patents.google.com",
+    "lens.org",
+    "ieee.org",
+    "acm.org",
+    "springer.com",
+    "huggingface.co",
+    "ollama.com",
+    "platform.openai.com",
+    "docs.anthropic.com",
+    "cloud.google.com",
+    "aws.amazon.com",
+    "learn.microsoft.com",
+    "azure.microsoft.com",
+    "atlassian.net",
+    "linear.app",
+]
+BROWSER_NOISY_PRIVATE_DOMAIN_PATTERNS = [
+    "youtube.com",
+    "facebook.com",
+    "instagram.com",
+    "x.com",
+    "twitter.com",
+    "netflix.com",
+    "spotify.com",
+    "accounts.google.com",
+    "mail.google.com",
+    "web.whatsapp.com",
+    "paypal.com",
+    "stripe.com",
+]
+BROWSER_IMPORTANT_KEYWORDS = [
+    "api",
+    "docs",
+    "documentation",
+    "error",
+    "exception",
+    "stack trace",
+    "github",
+    "pull request",
+    "issue",
+    "commit",
+    "jira",
+    "ticket",
+    "patent",
+    "arxiv",
+    "paper",
+    "research",
+    "webrtc",
+    "kurento",
+    "mediasoup",
+    "spring",
+    "fastapi",
+    "chromadb",
+    "ollama",
+    "embedding",
+    "llm",
+    "ai",
+    "security",
+    "cve",
+    "auth",
+    "jwt",
+    "docker",
+    "kubernetes",
+    "aws",
+    "azure",
+]
 
 
 @dataclass(frozen=True)
@@ -300,7 +391,26 @@ class ConnectorRegistryService:
             status=connector.status,
             accepted_event_types=BROWSER_ACCEPTED_EVENT_TYPES,
             capture_mode=str(config.get("capture_mode") or "manual"),
-            max_content_chars=int(config.get("max_content_chars", 4000) or 4000),
+            capture_search_queries=bool(config.get("capture_search_queries", True)),
+            capture_important_pages=bool(config.get("capture_important_pages", False)),
+            capture_page_context=bool(config.get("capture_page_context", True)),
+            capture_full_page_text=bool(config.get("capture_full_page_text", False)),
+            max_page_text_chars=int(config.get("max_page_text_chars", 6000) or 6000),
+            minimum_active_seconds=int(config.get("minimum_active_seconds", 8) or 8),
+            ignored_domains=list_config(config.get("ignored_domains")),
+            important_domains=list_config(config.get("important_domains")),
+            history_retention_days=int(config.get("history_retention_days", 30) or 30),
+            max_content_chars=int(config.get("max_content_chars", config.get("max_page_text_chars", 4000)) or 4000),
+        )
+
+    def get_browser_rules(self) -> BrowserRulesResponse:
+        config = {**BROWSER_RUNTIME_DEFAULTS, **self.get_config_dict("browser")}
+        return BrowserRulesResponse(
+            important_domain_patterns=BROWSER_IMPORTANT_DOMAIN_PATTERNS,
+            noisy_private_domain_patterns=BROWSER_NOISY_PRIVATE_DOMAIN_PATTERNS,
+            important_keywords=BROWSER_IMPORTANT_KEYWORDS,
+            current_ignored_domains=list_config(config.get("ignored_domains")),
+            current_important_domains=list_config(config.get("important_domains")),
         )
 
     def record_browser_heartbeat(self, request: BrowserHeartbeatRequest) -> BrowserHeartbeatResponse:
@@ -430,6 +540,14 @@ def _latest_datetime(values: list[datetime | None]) -> datetime | None:
     if not available:
         return None
     return max(available)
+
+
+def list_config(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.splitlines() if item.strip()]
+    return []
 
 
 connector_registry_service = ConnectorRegistryService()

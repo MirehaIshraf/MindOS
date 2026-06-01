@@ -5,6 +5,7 @@ from app.schemas.connectors import (
     BrowserConnectorRuntimeResponse,
     BrowserHeartbeatRequest,
     BrowserHeartbeatResponse,
+    BrowserRulesResponse,
     ConnectorConfigResponse,
     ConnectorConfigUpdateRequest,
     ConnectorListResponse,
@@ -76,6 +77,11 @@ def get_browser_runtime() -> BrowserConnectorRuntimeResponse:
 @router.post("/browser/heartbeat", response_model=BrowserHeartbeatResponse)
 def record_browser_heartbeat(request: BrowserHeartbeatRequest) -> BrowserHeartbeatResponse:
     return connector_registry_service.record_browser_heartbeat(request)
+
+
+@router.get("/browser/rules", response_model=BrowserRulesResponse)
+def get_browser_rules() -> BrowserRulesResponse:
+    return connector_registry_service.get_browser_rules()
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

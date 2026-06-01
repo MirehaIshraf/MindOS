@@ -26,6 +26,7 @@ import {
   deleteConnectorSource,
   getApiErrorMessage,
   getConnectors,
+  getConnectorConfig,
   getConnectorSources,
   getImportRuns,
   importFiles,
@@ -36,6 +37,7 @@ import {
   previewLogImport,
   runConnectorSourceImport,
   toggleConnector,
+  updateConnectorConfig,
   updateConnectorSource,
 } from "../services/api";
 import type {
@@ -80,6 +82,32 @@ type LogForm = typeof emptyLogForm;
 type GitForm = typeof emptyGitForm;
 type SavedSourceForm = typeof emptySavedSourceForm;
 type PanelId = Connector["id"] | "save" | null;
+type BrowserCaptureMode = "manual" | "smart" | "off";
+type BrowserConfigForm = {
+  capture_mode: BrowserCaptureMode;
+  capture_search_queries: boolean;
+  capture_important_pages: boolean;
+  capture_page_context: boolean;
+  capture_full_page_text: boolean;
+  max_page_text_chars: number;
+  minimum_active_seconds: number;
+  ignored_domains: string;
+  important_domains: string;
+  history_retention_days: number;
+};
+
+const defaultBrowserConfigForm: BrowserConfigForm = {
+  capture_mode: "manual",
+  capture_search_queries: true,
+  capture_important_pages: false,
+  capture_page_context: true,
+  capture_full_page_text: false,
+  max_page_text_chars: 6000,
+  minimum_active_seconds: 8,
+  ignored_domains: "",
+  important_domains: "",
+  history_retention_days: 30,
+};
 
 export function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -585,6 +613,49 @@ function VSCodePanel({ connector, onToggle }: { connector: Connector; onToggle: 
 
 function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle: (enabled: boolean) => void }) {
   const [showInstall, setShowInstall] = useState(false);
+  const [config, setConfig] = useState<BrowserConfigForm>(defaultBrowserConfigForm);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadConfig() {
+      setLoadingConfig(true);
+      try {
+        const response = await getConnectorConfig("browser");
+        if (!cancelled) {
+          setConfig(browserConfigToForm(response.config));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessage(getApiErrorMessage(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingConfig(false);
+        }
+      }
+    }
+    void loadConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveConfig() {
+    setSavingConfig(true);
+    setMessage(null);
+    try {
+      await updateConnectorConfig("browser", browserFormToConfig(config));
+      setMessage("Browser capture settings saved.");
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
   return (
     <div className="mt-5 space-y-4">
       {connector.enabled && connector.status === "disconnected" ? (
@@ -592,14 +663,87 @@ function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle:
       ) : null}
       <div className="flex items-center justify-between rounded-md border border-app-border bg-zinc-950 px-4 py-3">
         <div>
-          <p className="text-sm font-medium text-app-text">Save browser research</p>
-          <p className="mt-1 text-xs text-app-muted">Install once. Use the extension popup to save pages manually.</p>
+          <p className="text-sm font-medium text-app-text">Browser collection</p>
+          <p className="mt-1 text-xs text-app-muted">Manual by default. Smart capture stores only work/research-like pages.</p>
         </div>
         <Toggle checked={connector.enabled} disabled={false} onChange={onToggle} />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <KeyValue label="Backend URL" value="http://localhost:8000" />
-        <KeyValue label="Capture mode" value="Manual" />
+        <KeyValue label="Capture mode" value={config.capture_mode === "smart" ? "Smart" : config.capture_mode === "off" ? "Off" : "Manual"} />
+      </div>
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="space-y-4">
+          <label className="block text-xs font-medium uppercase text-app-muted">
+            Capture mode
+            <select
+              className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+              value={config.capture_mode}
+              disabled={loadingConfig}
+              onChange={(event) => {
+                const mode = event.target.value as BrowserCaptureMode;
+                setConfig((current) => ({
+                  ...current,
+                  capture_mode: mode,
+                  capture_important_pages: mode === "smart" ? true : current.capture_important_pages,
+                  capture_page_context: mode === "smart" ? true : current.capture_page_context,
+                }));
+              }}
+            >
+              <option value="manual">Manual only</option>
+              <option value="smart">Smart capture</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <div className="space-y-2">
+            <Checkbox label="Capture search queries" checked={config.capture_search_queries} onChange={(checked) => setConfig((current) => ({ ...current, capture_search_queries: checked }))} />
+            <Checkbox label="Capture important pages" checked={config.capture_important_pages} onChange={(checked) => setConfig((current) => ({ ...current, capture_important_pages: checked }))} />
+            <Checkbox label="Capture page context" checked={config.capture_page_context} onChange={(checked) => setConfig((current) => ({ ...current, capture_page_context: checked }))} />
+            <Checkbox label="Capture readable page text" checked={config.capture_full_page_text} onChange={(checked) => setConfig((current) => ({ ...current, capture_full_page_text: checked }))} />
+          </div>
+          <p className="text-xs leading-5 text-app-muted">
+            Readable text stores trimmed visible page text for important pages. It does not store forms, passwords, or raw HTML.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <LabeledInput
+              label="Max context chars"
+              type="number"
+              value={String(config.max_page_text_chars)}
+              onChange={(value) => setConfig((current) => ({ ...current, max_page_text_chars: Number(value) }))}
+            />
+            <LabeledInput
+              label="Active seconds"
+              type="number"
+              value={String(config.minimum_active_seconds)}
+              onChange={(value) => setConfig((current) => ({ ...current, minimum_active_seconds: Number(value) }))}
+            />
+          </div>
+          <LabeledInput
+            label="History retention days"
+            type="number"
+            value={String(config.history_retention_days)}
+            onChange={(value) => setConfig((current) => ({ ...current, history_retention_days: Number(value) }))}
+          />
+          <LabeledTextarea
+            label="Ignored domains"
+            value={config.ignored_domains}
+            placeholder="youtube.com, facebook.com"
+            onChange={(value) => setConfig((current) => ({ ...current, ignored_domains: value }))}
+          />
+          <LabeledTextarea
+            label="Important domains"
+            value={config.important_domains}
+            placeholder="docs.example.com, internal.wiki"
+            onChange={(value) => setConfig((current) => ({ ...current, important_domains: value }))}
+          />
+          <p className="text-xs leading-5 text-app-muted">
+            Smart capture ignores private/login/payment pages and noisy domains by default. You can still manually save useful pages.
+          </p>
+          <Button className="w-full" variant="secondary" onClick={() => void saveConfig()} loading={savingConfig} disabled={loadingConfig}>
+            Save Browser Settings
+          </Button>
+          {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+        </div>
       </div>
       <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => setShowInstall(!showInstall)}>
         {showInstall ? "Hide install steps" : "Install extension manually"}
@@ -617,6 +761,63 @@ function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle:
       ) : null}
     </div>
   );
+}
+
+function browserConfigToForm(config: Record<string, unknown>): BrowserConfigForm {
+  return {
+    capture_mode: ["manual", "smart", "off"].includes(String(config.capture_mode)) ? (String(config.capture_mode) as BrowserCaptureMode) : "manual",
+    capture_search_queries: browserBooleanConfig(config.capture_search_queries, true),
+    capture_important_pages: browserBooleanConfig(config.capture_important_pages, false),
+    capture_page_context: browserBooleanConfig(config.capture_page_context, true),
+    capture_full_page_text: browserBooleanConfig(config.capture_full_page_text, false),
+    max_page_text_chars: browserNumberConfig(config.max_page_text_chars, 6000),
+    minimum_active_seconds: browserNumberConfig(config.minimum_active_seconds, 8),
+    ignored_domains: listConfig(config.ignored_domains).join(", "),
+    important_domains: listConfig(config.important_domains).join(", "),
+    history_retention_days: browserNumberConfig(config.history_retention_days, 30),
+  };
+}
+
+function browserFormToConfig(form: BrowserConfigForm): Record<string, unknown> {
+  return {
+    capture_mode: form.capture_mode,
+    capture_search_queries: form.capture_search_queries,
+    capture_important_pages: form.capture_important_pages,
+    capture_page_context: form.capture_page_context,
+    capture_full_page_text: form.capture_full_page_text,
+    max_page_text_chars: browserClampNumber(form.max_page_text_chars, 500, 20000, 6000),
+    minimum_active_seconds: browserClampNumber(form.minimum_active_seconds, 3, 120, 8),
+    ignored_domains: splitDomainList(form.ignored_domains),
+    important_domains: splitDomainList(form.important_domains),
+    history_retention_days: browserClampNumber(form.history_retention_days, 1, 365, 30),
+  };
+}
+
+function browserBooleanConfig(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function browserNumberConfig(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function listConfig(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function splitDomainList(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function browserClampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
@@ -1018,6 +1219,25 @@ function LabeledInput({ label, value, onChange, placeholder, type = "text" }: {
     <label className="block text-xs font-medium uppercase text-app-muted">
       {label}
       <Input className="mt-2" type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function LabeledTextarea({ label, value, onChange, placeholder }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block text-xs font-medium uppercase text-app-muted">
+      {label}
+      <textarea
+        className="mt-2 min-h-20 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text placeholder:text-app-muted"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }

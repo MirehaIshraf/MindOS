@@ -381,13 +381,13 @@ function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () 
         <DetailRow label="context eligible" value={event.is_context_eligible ? "yes" : "no"} />
         <div>
           <p className="text-xs uppercase text-app-muted">content</p>
-          <p className="mt-2 whitespace-pre-wrap rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">
+          <p className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">
             {event.content || "No content"}
           </p>
         </div>
         <div>
           <p className="text-xs uppercase text-app-muted">metadata</p>
-          <pre className="mt-2 overflow-auto rounded-md border border-app-border bg-zinc-950 p-3 text-xs leading-5 text-app-text">
+          <pre className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-xs leading-5 text-app-text">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
         </div>

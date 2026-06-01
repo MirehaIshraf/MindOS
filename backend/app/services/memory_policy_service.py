@@ -45,11 +45,34 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
         }
 
     if source_value == "browser_extension" and bool((metadata or {}).get("private")):
-        policy = _policy("captured_event", hidden=True)
-        return policy
+        return {
+            "memory_category": "browser_history",
+            "hidden_from_default": True,
+            "is_indexable": False,
+            "is_relationship_eligible": False,
+            "is_context_eligible": False,
+        }
 
     if source_value == "browser_extension":
         if event_type in {"browser_page_saved", "browser_selection_saved", "browser_research_note"}:
+            return _policy("captured_event", hidden=False)
+        if event_type == "browser_page_seen":
+            return {
+                "memory_category": "browser_history",
+                "hidden_from_default": True,
+                "is_indexable": False,
+                "is_relationship_eligible": False,
+                "is_context_eligible": False,
+            }
+        if event_type == "browser_search_query":
+            return {
+                "memory_category": "browser_history",
+                "hidden_from_default": True,
+                "is_indexable": True,
+                "is_relationship_eligible": False,
+                "is_context_eligible": False,
+            }
+        if event_type in {"browser_page_captured", "browser_page_summary"}:
             return _policy("captured_event", hidden=False)
         return _policy("captured_event", hidden=True)
 

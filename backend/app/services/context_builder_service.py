@@ -252,7 +252,7 @@ class ContextBuilderService:
             sources=preferred_sources,
             limit=min(limit, profile_config["direct_limit"]),
             include_hidden=include_hidden,
-            context_only=True,
+            context_only=profile != "precision_lookup",
             search_mode=str(profile_config.get("search_mode") or "auto"),
             excluded_sources=intent.excluded_sources if intent else None,
             excluded_types=intent.excluded_types if intent else None,
@@ -266,7 +266,7 @@ class ContextBuilderService:
 
         for result in search_response.results:
             event = self._event_repository.get_event_by_id(result.event_id)
-            if event is None or not event.is_context_eligible:
+            if event is None or (not event.is_context_eligible and not self._allow_lookup_evidence(event, intent)):
                 continue
             direct_ids.add(event.id)
             direct_events.append(
@@ -324,6 +324,14 @@ class ContextBuilderService:
         if intent and intent.search_terms:
             return intent.search_terms[0]
         return query
+
+    def _allow_lookup_evidence(self, event: Event, intent: QueryIntent | None) -> bool:
+        return bool(
+            intent
+            and intent.intent == "memory_lookup"
+            and event.source.value == "browser_extension"
+            and event.type in {"browser_page_seen", "browser_search_query"}
+        )
 
     def _package(
         self,
@@ -497,6 +505,12 @@ class ContextBuilderService:
         domain = metadata.get("domain")
         if isinstance(domain, str) and domain:
             lines.append(f"Domain: {domain}")
+        category = metadata.get("category")
+        if isinstance(category, str) and category:
+            lines.append(f"Category: {category}")
+        importance_reason = metadata.get("importance_reason")
+        if isinstance(importance_reason, str) and importance_reason:
+            lines.append(f"Importance: {importance_reason}")
         path = metadata.get("file_path") or metadata.get("path") or metadata.get("relative_path") or metadata.get("repo_path")
         if isinstance(path, str) and path:
             lines.append(f"Path: {path}")

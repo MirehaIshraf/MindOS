@@ -24,6 +24,18 @@
 
       <section id="warning" class="warning hidden"></section>
 
+      <section class="mode">
+        <div>
+          <span>Mode</span>
+          <strong id="mode">Checking...</strong>
+        </div>
+        <div>
+          <span>Page</span>
+          <strong id="classification">Checking...</strong>
+        </div>
+        <p id="classificationReason"></p>
+      </section>
+
       <section id="selectionBlock" class="selection hidden">
         <label>Selected text</label>
         <p id="selectionPreview"></p>
@@ -43,6 +55,8 @@
       </details>
 
       <button id="save" class="save" type="button">Save to MindOS</button>
+      <button id="capture" class="secondary" type="button">Capture this page</button>
+      <button id="openSettings" class="ghost" type="button">Open Connector Settings</button>
       <p id="message" class="message"></p>
     </main>
     <script type="module" src="../dist/popup.js"></script>

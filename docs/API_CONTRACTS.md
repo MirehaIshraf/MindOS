@@ -17,6 +17,22 @@ This document reflects the currently mounted route modules in `backend/app/api/r
 
 If the VSCode or Browser connector is disabled in MindOS, `POST /ingest/external` for `source=vscode_extension` or `source=browser_extension` returns `403` with a JSON detail message.
 
+Browser connector config fields include:
+
+- `capture_mode`: `manual`, `smart`, or `off`.
+- `capture_search_queries`: whether smart capture can store hidden search query evidence.
+- `capture_important_pages`: whether smart capture can store visible important page memory.
+- `capture_page_context`: whether safe page description/text excerpts may be included.
+- `capture_full_page_text`: off by default; do not enable broad full-text capture casually.
+- `max_page_text_chars`, `minimum_active_seconds`, `ignored_domains`, `important_domains`, `history_retention_days`.
+
+Preferred browser event types:
+
+- Hidden/lightweight: `browser_page_seen`, `browser_search_query`.
+- Visible/important: `browser_page_captured`, `browser_page_summary`, `browser_page_saved`, `browser_selection_saved`, `browser_research_note`.
+
+`browser_page_captured` content should preserve the readable page context sent by the extension. Expected content shape includes page title, URL, domain, optional meta description, headings, context excerpt, and selected text when present. Metadata should include `url`, `domain`, `page_title`, `category`, `importance_reason`, `text_excerpt_included`, `captured_text_chars`, and `capture_mode`.
+
 ## Memory / Events
 
 - `GET /events/recent`: list recent events with optional source/category/hidden filters.
@@ -67,6 +83,7 @@ If the VSCode or Browser connector is disabled in MindOS, `POST /ingest/external
 - `GET /connectors/vscode/runtime`: runtime settings for the installed VSCode extension to poll.
 - `POST /connectors/vscode/heartbeat`: updates VSCode connector last-seen status; does not create a memory event.
 - `GET /connectors/browser/runtime`: runtime settings for the browser extension popup/background script.
+- `GET /connectors/browser/rules`: browser smart-capture rule summary, including important patterns, noisy/private patterns, and current ignored/important domain config.
 - `POST /connectors/browser/heartbeat`: updates Browser connector last-seen status; does not create a memory event.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.

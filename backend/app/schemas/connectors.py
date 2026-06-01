@@ -98,6 +98,15 @@ class BrowserConnectorRuntimeResponse(BaseModel):
     status: str
     accepted_event_types: list[str]
     capture_mode: str = "manual"
+    capture_search_queries: bool = True
+    capture_important_pages: bool = False
+    capture_page_context: bool = True
+    capture_full_page_text: bool = False
+    max_page_text_chars: int = 6000
+    minimum_active_seconds: int = 8
+    ignored_domains: list[str] = Field(default_factory=list)
+    important_domains: list[str] = Field(default_factory=list)
+    history_retention_days: int = 30
     max_content_chars: int
 
 
@@ -111,6 +120,14 @@ class BrowserHeartbeatRequest(BaseModel):
 class BrowserHeartbeatResponse(BaseModel):
     status: str = "ok"
     connector_enabled: bool
+
+
+class BrowserRulesResponse(BaseModel):
+    important_domain_patterns: list[str]
+    noisy_private_domain_patterns: list[str]
+    important_keywords: list[str]
+    current_ignored_domains: list[str] = Field(default_factory=list)
+    current_important_domains: list[str] = Field(default_factory=list)
 
 
 class FilePreviewRequest(BaseModel):

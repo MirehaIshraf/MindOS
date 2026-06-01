@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
 
 ## Backend Status
 
@@ -30,7 +30,7 @@ Last updated: 2026-05-31
 | Saved sources | Working/Partial | Saved connector sources and import runs exist for file/log/git. |
 | External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors; disabled VSCode/Browser connectors reject their events. |
 | VSCode extension | Working | MVP exists in `extensions/vscode`; installable local VSIX flow with backend-controlled runtime polling. |
-| Browser extension | Working | MVP exists in `extensions/browser`; manual page/selection save flow controlled by MindOS Browser connector toggle. |
+| Browser extension | Working/Partial | MVP exists in `extensions/browser`; manual page/selection save plus privacy-first smart capture with readable page context controlled by MindOS Browser connector config. |
 | Model registry | Working/Partial | Local Ollama discovery, cloud provider config, FakeLLM fallback. |
 | Embedding registry | Working/Partial | Curated and discovered local embedding models; changing model requires reindex. |
 | Dev tools | Working/Partial | Useful but should not be treated as product UI. |
@@ -53,7 +53,7 @@ Last updated: 2026-05-31
 - Logs path import: working; clear log events exists.
 - Local Git path import: working and read-only; clear Git events exists.
 - VSCode extension MVP: working; packaged local install flow, polls MindOS runtime, sends workspace/file-save events after the MindOS VSCode connector toggle is enabled.
-- Browser extension MVP: working; manual popup save flow for pages, selected text, and notes after the MindOS Browser connector toggle is enabled.
+- Browser extension MVP: working; manual popup save flow for pages, selected text, and notes after the MindOS Browser connector toggle is enabled. Smart capture can record hidden search evidence and visible important work/research pages with readable context when enabled. Hugging Face model/dataset/docs pages are classified as important.
 - Saved connector sources: working/partial for file system, logs, and Git.
 - Import history: working/partial for saved source imports.
 - External ingestion API: working/partial; collector clients are derived from event metadata.
@@ -75,7 +75,7 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 - Model and embedding registries must not mix chat and embedding models.
 - Ollama must not auto-start from status checks.
 - VSCode extension MVP can be packaged with `npm run package` and installed into normal VSCode. F5/debug host is only needed for extension development.
-- Browser extension does not track browsing history automatically and should remain manual unless explicitly changed.
+- Browser extension does not request browser history permission or perform full unrestricted history tracking. Smart capture is limited to active-tab dwell events, search queries, and work/research page classification with private/noisy pages filtered. Page context extraction collects visible readable text only, not raw HTML or form/input values.
 - Chat retrieval now uses deterministic query intent routing, but retrieval quality still needs tuning with real memory data.
 - Activity tracker and local agent collector are not implemented yet; only the ingestion API exists for those sources.
 - Activity tracker summaries are intended to be indexable later, but current policy treats all `activity_tracker` source events as hidden/non-indexable.

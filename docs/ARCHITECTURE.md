@@ -67,9 +67,9 @@ The MindOS web app toggle is the collection source of truth. VSCode local settin
 
 ## Browser Extension Runtime Flow
 
-Installed browser extension -> popup checks `/connectors/browser/runtime` -> sends `/connectors/browser/heartbeat` -> user clicks Save to MindOS -> extension sends a `browser_extension` event through `/ingest/external`.
+Installed browser extension -> popup/background checks `/connectors/browser/runtime` -> sends `/connectors/browser/heartbeat` -> manual save or smart capture sends a `browser_extension` event through `/ingest/external`.
 
-The Browser MVP is manual-only. It does not read browser history, track tab changes, or send full page content automatically. Heartbeats update connector status but do not create memory events.
+Manual mode only sends events when the user clicks Save to MindOS. Smart mode observes the active tab without browser history permission, waits for dwell time, classifies pages with local deterministic rules, and sends only hidden search/history evidence or visible important work/research page events. Private/login/payment pages and noisy feeds are filtered. Heartbeats update connector status but do not create memory events.
 
 ## Semantic Search Flow
 

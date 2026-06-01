@@ -31,6 +31,10 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | browser_extension/browser_page_saved | Yes unless private | Yes | Yes | Yes | Manual browser popup save; no automatic history tracking. |
 | browser_extension/browser_selection_saved | Yes unless private | Yes | Yes | Yes | User-selected page text saved manually. |
 | browser_extension/browser_research_note | Yes unless private | Yes | Yes | Yes | User-authored browser research note. |
+| browser_extension/browser_page_seen | No | No | No | No | Lightweight smart history only; hidden from default memory and normal context. |
+| browser_extension/browser_search_query | No | Yes | No | No | Hidden search evidence for precise memory lookup; not normal chat context. |
+| browser_extension/browser_page_captured | Yes unless private | Yes | Yes | Yes | Smart-captured work/research page with readable context excerpt when extraction succeeds. |
+| browser_extension/browser_page_summary | Yes unless private | Yes | Yes | Yes | Future summarized browser memory. |
 | activity_tracker/app_focus_changed | No | No | No | No | Raw activity tracker events are noisy. |
 | activity_tracker/work_session_summary | No by current source-level policy | No by current source-level policy | No by current source-level policy | No by current source-level policy | Intended direction is summarized tracker events should become indexable; current code treats all activity_tracker events as hidden/non-indexable. |
 | mindos/chat_message | No | No | No | No | Stored for history and Chats category only. |
@@ -50,7 +54,8 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - Activity summaries are intended to become indexable, but the current source-level code treats all `activity_tracker` events as hidden/non-indexable.
 - File, log, Git, VSCode saved/workspace, manually saved browser extension events, and useful captured events are indexable/context eligible by default.
 - VSCode file-opened events are stored but hidden/non-indexable by default to avoid open-file noise.
-- Browser MVP does not create automatic page history events.
+- Browser manual saves are visible and indexable. Smart capture can create hidden `browser_page_seen` history, hidden/indexable `browser_search_query` lookup evidence, and visible/indexable `browser_page_captured` memory for important work/research pages. Captured page events should include readable page context when extraction succeeds.
+- Browser smart capture must not store private/login/payment pages, and full page text must remain off by default.
 - `task_completed` and `report_generated` are indexable/context eligible.
 
 ## Why This Exists

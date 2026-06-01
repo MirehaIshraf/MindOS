@@ -20,6 +20,7 @@ MEMORY_LOOKUP_PATTERNS = [
     "go through",
     "looked at",
     "visited",
+    "tell me about",
 ]
 MEMORY_LOOKUP_TERMS = [
     "did i",
@@ -37,6 +38,9 @@ MEMORY_LOOKUP_TERMS = [
     "page",
     "link",
     "anything about",
+    "tell me about",
+    "tell me",
+    "tell about",
 ]
 ROOT_CAUSE_TERMS = ["why", "root cause", "caused", "cause", "failed", "failure", "error", "exception", "bug", "incident", "broke", "not working"]
 SUMMARY_TERMS = ["summarize", "summary", "overview", "what did i work on", "report", "this week", "recent work"]
@@ -57,6 +61,7 @@ STOP_WORDS = {
     "into",
     "any",
     "some",
+    "tell",
 }
 PRECISION_EXCLUDED_TYPES = [
     "editor_workspace_opened",
@@ -169,6 +174,8 @@ class QueryIntentService:
         return deduped[:6]
 
     def _is_memory_lookup(self, text: str) -> bool:
+        if re.search(r"\btell me about\s+[a-z0-9+#._-]{3,}", text):
+            return True
         if any(pattern in text for pattern in MEMORY_LOOKUP_PATTERNS) and any(term in text for term in ["search", "save", "saved", "find", "went through", "gone through", "visited", "doc", "page"]):
             return True
         return bool(re.search(r"\b(did|have|has).{0,30}\b(search|save|saved|visit|visited|open|opened)\b", text))

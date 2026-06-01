@@ -41,7 +41,7 @@ Implemented or partially implemented:
 - Saved connector sources
 - Import history
 - VSCode extension MVP with local VSIX packaging and backend-controlled runtime polling
-- Browser extension MVP for manually saved pages, selected text, and research notes
+- Browser extension MVP for manually saved pages, selected text, research notes, and privacy-first smart capture
 - Chat sessions and raw chat memory events
 - Task lifecycle events
 - External ingestion endpoint
@@ -58,7 +58,7 @@ The Connectors page now uses a unified connector registry pattern: each connecto
 
 For VSCode, the MindOS connector toggle is the source of truth. The installed extension polls the local backend runtime endpoint and starts/stops collection without requiring an Extension Development Host.
 
-For Browser, the MVP is manual-only. The extension popup checks the local backend runtime state and sends a page/selection event only when the user clicks Save to MindOS.
+For Browser, the MVP supports manual save and smart capture modes. Manual save is explicit through the popup. Smart capture is developer/research oriented: it can record search queries and important work/research pages with readable context while avoiding private, login, payment, and noisy entertainment/social pages.
 
 ## Current Storage
 

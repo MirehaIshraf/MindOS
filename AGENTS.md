@@ -109,9 +109,12 @@ Before adding a new feature:
 - Do not put "upcoming" marketing text in product UI; unsupported connectors should appear as off or needing setup.
 - No automatic folder scanning.
 - No automatic browser tracking without extension/user permission.
-- Browser connector MVP is manual save only; do not add automatic browsing history collection.
+- Browser connector supports manual save and privacy-first smart capture. Do not add full browser history scraping.
 - Do not request browser history permission without explicit instruction.
-- Browser data must stay user-controlled and should only be sent after an explicit user action.
+- Browser data must stay user-controlled. Smart capture must avoid private/login/payment pages and noisy feeds.
+- Do not capture full browser page text automatically by default.
+- Browser smart capture must include readable context for important pages; do not store only URL/title unless extraction fails.
+- Raw `browser_page_seen` events should stay hidden and non-indexable.
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
