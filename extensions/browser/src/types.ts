@@ -79,7 +79,7 @@ export type PageExtractionResult = {
   textExcerpt: string;
   textChars: number;
   selectedText?: string | null;
-  extractor: "generic_visible_text";
+  extractor: "generic_visible_text" | "huggingface";
   diagnostics: {
     reason?: string;
     hardDomOk?: boolean;
@@ -95,6 +95,7 @@ export type PageExtractionResult = {
     selectedSelector?: string | null;
     candidateLengths?: Record<string, number>;
     headingsCount?: number;
+    isHuggingFace?: boolean;
     tabId?: number;
     url?: string;
     error?: string | null;

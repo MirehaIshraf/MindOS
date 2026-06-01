@@ -16,7 +16,7 @@ PROFILE_DEFAULTS = {
     "precision_lookup": {
         "direct_limit": 5,
         "related_per_event": 0,
-        "direct_chars": 900,
+        "direct_chars": 1600,
         "related_chars": 0,
         "max_total_chars": 4500,
         "allow_low_priority": False,
@@ -79,6 +79,17 @@ PROFILE_DEFAULTS = {
         "min_score": 0.45,
         "search_mode": "hybrid",
     },
+    "source_focused": {
+        "direct_limit": 3,
+        "related_per_event": 0,
+        "direct_chars": 2500,
+        "related_chars": 400,
+        "max_total_chars": 8000,
+        "allow_low_priority": False,
+        "expand_relationships": False,
+        "min_score": None,
+        "search_mode": "hybrid",
+    },
     "deep_analysis": {
         "direct_limit": 8,
         "related_per_event": 2,
@@ -134,6 +145,7 @@ class ContextBuilderService:
         include_hidden: bool = True,
         profile: str = "fast_chat",
         intent: QueryIntent | None = None,
+        source_event_ids: list[str] | None = None,
     ) -> ContextPackage:
         settings = get_settings()
         limit = limit or settings.chat_context_direct_limit
@@ -145,6 +157,7 @@ class ContextBuilderService:
             include_hidden=include_hidden,
             profile=profile,
             intent=intent,
+            source_event_ids=source_event_ids,
         )
 
     def build_task_context(self, instruction: str, limit: int = 5, related_per_event: int = 1) -> ContextPackage:
@@ -243,14 +256,53 @@ class ContextBuilderService:
         include_hidden: bool,
         profile: str,
         intent: QueryIntent | None = None,
+        source_event_ids: list[str] | None = None,
     ) -> ContextPackage:
         profile_config = self._profile_config(profile)
         search_query = self._search_query(query, intent)
         preferred_sources = intent.preferred_sources if intent and intent.preferred_sources else None
+        direct_events: list[ContextEvent] = []
+        related_events: list[ContextEvent] = []
+        relationships: list[ContextRelationship] = []
+        direct_ids: set[str] = set()
+        seen_related: set[str] = set()
+
+        for event_id in source_event_ids or []:
+            event = self._event_repository.get_event_by_id(event_id)
+            if event is None or event.id in direct_ids:
+                continue
+            if not event.is_context_eligible and not self._allow_lookup_evidence(event, intent):
+                continue
+            direct_ids.add(event.id)
+            direct_events.append(
+                self._to_context_event(
+                    event,
+                    score=1.0,
+                    match_reason="Primary source from previous chat turn",
+                    max_chars=profile_config["direct_chars"],
+                )
+            )
+
+        if profile == "source_focused" and direct_events:
+            package = self._package(
+                query=query,
+                direct_events=direct_events,
+                related_events=[],
+                relationships=[],
+                warnings=[],
+                metadata={
+                    "intent": intent.model_dump(mode="json") if intent else None,
+                    "search_query": search_query,
+                    "search_mode": "source_focused",
+                    "source_event_ids": source_event_ids or [],
+                },
+            )
+            return self._trim_package(package, profile_config=profile_config)
+
         search_response = self._search_service.search_events(
             query=search_query,
             sources=preferred_sources,
-            limit=min(limit, profile_config["direct_limit"]),
+            limit=max(0, min(limit, profile_config["direct_limit"]) - len(direct_events)),
             include_hidden=include_hidden,
             context_only=profile != "precision_lookup",
             search_mode=str(profile_config.get("search_mode") or "auto"),
@@ -258,15 +310,10 @@ class ContextBuilderService:
             excluded_types=intent.excluded_types if intent else None,
             min_score=profile_config.get("min_score") if isinstance(profile_config.get("min_score"), float) else None,
         )
-        direct_events: list[ContextEvent] = []
-        related_events: list[ContextEvent] = []
-        relationships: list[ContextRelationship] = []
-        direct_ids: set[str] = set()
-        seen_related: set[str] = set()
 
         for result in search_response.results:
             event = self._event_repository.get_event_by_id(result.event_id)
-            if event is None or (not event.is_context_eligible and not self._allow_lookup_evidence(event, intent)):
+            if event is None or event.id in direct_ids or (not event.is_context_eligible and not self._allow_lookup_evidence(event, intent)):
                 continue
             direct_ids.add(event.id)
             direct_events.append(
@@ -371,7 +418,7 @@ class ContextBuilderService:
     def _allow_lookup_evidence(self, event: Event, intent: QueryIntent | None) -> bool:
         return bool(
             intent
-            and intent.intent == "memory_lookup"
+            and intent.intent in {"memory_lookup", "entity_details", "source_summary", "follow_up", "follow_up_summary"}
             and event.source.value == "browser_extension"
             and event.type in {"browser_page_seen", "browser_search_query"}
         )
@@ -434,7 +481,7 @@ class ContextBuilderService:
         )
 
     def _to_context_event(self, event: Event, score: float | None, match_reason: str | None, max_chars: int) -> ContextEvent:
-        content = event.content[:max_chars]
+        content = self._context_content_for_event(event)[:max_chars]
         return ContextEvent(
             event_id=event.id,
             source=event.source.value,
@@ -449,6 +496,16 @@ class ContextBuilderService:
             memory_category=get_memory_category(event),
             hidden_from_default=is_hidden_from_default_memory(event),
         )
+
+    def _context_content_for_event(self, event: Event) -> str:
+        if event.source.value != "browser_extension" or event.type != "browser_page_captured":
+            return event.content
+        metadata = event.metadata or {}
+        if metadata.get("page_context_missing") is True:
+            return f"{event.content}\n\nNote: Page context is missing; only title, URL, and metadata are available."
+        if metadata.get("summary_status") == "pending":
+            return f"{event.content}\n\nNote: Summary is pending, but the captured readable excerpt above is available."
+        return event.content
 
     def _to_context_relationship(self, relationship: Relationship) -> ContextRelationship:
         return ContextRelationship(

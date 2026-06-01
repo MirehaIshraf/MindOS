@@ -1,6 +1,13 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.chat import ChatMessagesResponse, ChatRequest, ChatResponse, ChatSessionsResponse
+from app.schemas.chat import (
+    ChatMessagesResponse,
+    ChatRequest,
+    ChatResolveContextRequest,
+    ChatResolveContextResponse,
+    ChatResponse,
+    ChatSessionsResponse,
+)
 from app.services.chat_service import chat_service
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -14,6 +21,12 @@ def chat_ready() -> dict[str, str]:
 @router.post("", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
     return chat_service.chat(request)
+
+
+@router.post("/resolve-context", response_model=ChatResolveContextResponse)
+def resolve_chat_context(request: ChatResolveContextRequest) -> ChatResolveContextResponse:
+    resolved = chat_service.resolve_context(request.session_id, request.query)
+    return ChatResolveContextResponse(**resolved.model_dump())
 
 
 @router.get("/sessions", response_model=ChatSessionsResponse)

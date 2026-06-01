@@ -139,6 +139,8 @@ export function ChatPage() {
           warning: response.warning,
           answerStyle: response.answer_style,
           intent: response.intent,
+          isFollowUp: response.is_follow_up,
+          resolvedQuery: response.resolved_query,
         }),
       ]);
       await refreshSessions();
@@ -360,6 +362,8 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       warning: message.warning ?? undefined,
       answerStyle: message.answer_style ?? undefined,
       intent: message.intent ?? undefined,
+      isFollowUp: Boolean(message.is_follow_up ?? message.metadata?.is_follow_up),
+      resolvedQuery: message.resolved_query ?? (typeof message.metadata?.resolved_query === "string" ? message.metadata.resolved_query : undefined),
     };
   });
 }

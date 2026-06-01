@@ -49,6 +49,7 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 ## Rules
 
 - Raw `chat_message` and `chat_response` events are stored but not indexed, related, or context eligible.
+- Chat-session metadata can store recent source ids, URLs, titles, entities, and follow-up resolution hints. This is active conversation state only; it must not make raw chat messages indexable or relationship eligible.
 - `chat_summary` is indexable and context eligible.
 - Raw activity tracker events are hidden and non-indexable by default.
 - Activity summaries are intended to become indexable, but the current source-level code treats all `activity_tracker` events as hidden/non-indexable.
@@ -59,7 +60,8 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - Browser captured-page metadata includes extraction diagnostics such as `captured_text_chars`, `text_excerpt_included`, `page_context_missing`, and `extraction_diagnostics`.
 - `page_context_missing=true` means the event is title/URL memory only and should not be treated as content-rich. Placeholder phrases such as "No readable page text was extracted." do not count as captured content.
 - Title-only browser captures remain searchable by title, URL, domain, and metadata, but should not be summarized from page content.
-- Automatic browser summarization is not implemented in the current debugging-first flow.
+- Browser page summarization is manual and deterministic. Pending browser captures can be summarized from captured readable context, which updates the same `browser_page_captured` event with `summary_status=ready`, `summary_method=deterministic`, and `content_quality=summary`.
+- LLM summarization must not run automatically for every browser page capture.
 - Browser smart capture must not store private/login/payment pages, and full page text must remain off by default.
 - `task_completed` and `report_generated` are indexable/context eligible.
 

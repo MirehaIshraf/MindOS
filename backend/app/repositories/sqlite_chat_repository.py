@@ -54,6 +54,7 @@ class SQLiteChatRepository(ChatRepository):
             warning=metadata.get("warning"),
             answer_style=metadata.get("answer_style"),
             intent=metadata.get("intent"),
+            metadata=metadata,
         )
         with self._session_factory() as session:
             session_record = session.get(ChatSessionRecord, session_id)
@@ -136,5 +137,6 @@ class SQLiteChatRepository(ChatRepository):
             warning=metadata.get("warning"),
             answer_style=metadata.get("answer_style"),
             intent=metadata.get("intent"),
+            metadata=metadata,
             created_at=record.created_at,
         )

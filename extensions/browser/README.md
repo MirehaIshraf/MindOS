@@ -41,6 +41,10 @@ Important pages include developer docs, GitHub, patents/research pages, and Hugg
 
 Captured pages include meta description, headings, selected text, readable visible text excerpts, and extraction diagnostics when available. MindOS does not run an LLM automatically for browser pages.
 
+For Hugging Face model, dataset, space, and docs pages, the extractor prefers page-specific content areas and removes common Hugging Face navigation/menu lines before sending the readable excerpt.
+
+Captured pages may show `summary pending` in Memory. Click **Summarize** in the Memory detail panel to create a deterministic local summary and key points from the captured readable context. This does not call an LLM.
+
 If extraction fails, the event can still save the page title and URL, but MindOS marks it as `page_context_missing=true` and does not treat the placeholder message as captured page text or pending summary material.
 
 Use **Debug extraction** -> **Test DOM access** in the popup first. This runs a direct `chrome.scripting.executeScript` check against `document.body.innerText`. If `bodyTextLength` is `0` or an error is shown, reload the extension in `chrome://extensions`, check permissions, and confirm the page is not a restricted browser/internal URL.

@@ -6,7 +6,7 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
 import { Input } from "../components/shared/Input";
-import { getEventDetail, getRecentEvents, getRelatedEvents, getSearchStats, searchEvents } from "../services/api";
+import { getEventDetail, getRecentEvents, getRelatedEvents, getSearchStats, searchEvents, summarizeEvent } from "../services/api";
 import type { MemoryEvent, RelatedEvent, SearchResult, SearchStatsResponse } from "../types";
 
 const categories = [
@@ -345,7 +345,7 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   const source = isSearch ? item.result.source : item.event.source;
   const type = isSearch ? item.result.type : item.event.type;
   const title = isSearch ? item.result.title : item.event.title;
-  const preview = isSearch ? item.result.content_preview : item.event.content;
+  const rawPreview = isSearch ? item.result.content_preview : item.event.content;
   const timestamp = isSearch ? item.result.timestamp : item.event.timestamp;
   const embeddingStatus = isSearch ? item.result.embedding_status : item.event.embedding_status;
   const metadata = isSearch ? item.result.metadata : item.event.metadata;
@@ -358,6 +358,9 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   const summaryStatus = typeof metadata.summary_status === "string" ? metadata.summary_status : null;
   const visitCount = typeof metadata.visit_count === "number" ? metadata.visit_count : null;
   const pageContextMissing = metadata.page_context_missing === true;
+  const preview = source === "browser_extension" && type === "browser_page_captured"
+    ? browserContentPreview(rawPreview)
+    : rawPreview;
 
   return (
     <button
@@ -407,6 +410,8 @@ function EventDetailPanel({
 }) {
   const [related, setRelated] = useState<RelatedEvent[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoadingRelated(true);
@@ -423,6 +428,20 @@ function EventDetailPanel({
   const firstSeen = typeof event.metadata.first_seen_at === "string" ? event.metadata.first_seen_at : null;
   const lastSeen = typeof event.metadata.last_seen_at === "string" ? event.metadata.last_seen_at : null;
   const summaryStatus = typeof event.metadata.summary_status === "string" ? event.metadata.summary_status : null;
+  const pageContextMissing = event.metadata.page_context_missing === true;
+
+  async function handleSummarize() {
+    setSummarizing(true);
+    setSummarizeError(null);
+    try {
+      const updated = await summarizeEvent(event.id);
+      onEventUpdated(updated);
+    } catch {
+      setSummarizeError("Could not summarize this page.");
+    } finally {
+      setSummarizing(false);
+    }
+  }
 
   return (
     <Card className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-auto">
@@ -462,6 +481,20 @@ function EventDetailPanel({
         {firstSeen ? <DetailRow label="first seen" value={formatTimestamp(firstSeen)} /> : null}
         {lastSeen ? <DetailRow label="last seen" value={formatTimestamp(lastSeen)} /> : null}
         {summaryStatus ? <DetailRow label="summary status" value={summaryStatus} /> : null}
+        {summaryStatus === "ready" ? <Badge variant="success">summary ready</Badge> : null}
+        {summaryStatus === "pending" ? (
+          <div className="space-y-2">
+            <Button variant="secondary" onClick={() => void handleSummarize()} loading={summarizing}>
+              Summarize
+            </Button>
+            {summarizeError ? <p className="text-sm text-red-200">{summarizeError}</p> : null}
+          </div>
+        ) : null}
+        {pageContextMissing ? (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            Page context was not captured. Reopen the page and capture it again.
+          </p>
+        ) : null}
         <div>
           <p className="text-xs uppercase text-app-muted">content</p>
           <p className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">
@@ -542,6 +575,21 @@ function truncate(value: string, maxLength: number) {
     return value;
   }
   return `${value.slice(0, maxLength)}...`;
+}
+
+function browserContentPreview(content: string) {
+  for (const marker of ["Summary:", "Readable context excerpt:"]) {
+    const index = content.indexOf(marker);
+    if (index < 0) {
+      continue;
+    }
+    const tail = content.slice(index + marker.length).trim();
+    const firstLine = tail.split(/\n+/).map((line) => line.trim()).find((line) => line && !line.startsWith("-"));
+    if (firstLine) {
+      return firstLine;
+    }
+  }
+  return content;
 }
 
 function formatSourceLabel(source: string) {

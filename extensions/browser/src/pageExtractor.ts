@@ -124,15 +124,49 @@ export async function extractReadablePageContext(tabIdOrMaxChars: number | undef
         func: (limit: number, hardDomResult: HardDomExtractionResult) => {
           try {
             const normalizeText = (value: string): string => value.replace(/\s+/g, " ").trim();
+            const isHuggingFace = location.hostname.toLowerCase() === "huggingface.co";
+            const noisyLines = new Set([
+              "models",
+              "datasets",
+              "spaces",
+              "buckets",
+              "pricing",
+              "website",
+              "tasks",
+              "huggingchat",
+              "collections",
+              "organizations",
+              "community",
+              "blog",
+              "docs",
+              "log in",
+              "sign up",
+              "follow",
+              "like",
+            ]);
+            const cleanReadableText = (value: string): string => {
+              const lines = value
+                .split(/[\n\r]+|(?<=\.)\s+/)
+                .map((line) => normalizeText(line))
+                .filter((line) => line && !noisyLines.has(line.toLowerCase()));
+              const deduped: string[] = [];
+              for (const line of lines) {
+                if (deduped[deduped.length - 1]?.toLowerCase() === line.toLowerCase()) {
+                  continue;
+                }
+                deduped.push(line);
+              }
+              return deduped.join("\n").trim();
+            };
             const cloneText = (element: HTMLElement | null): string => {
               if (!element) {
                 return "";
               }
               const clone = element.cloneNode(true) as HTMLElement;
               clone
-                .querySelectorAll("script, style, noscript, svg, canvas, form, input, textarea, select, button")
+                .querySelectorAll("script, style, noscript, svg, canvas, form, input, textarea, select, button, nav, header, footer, aside")
                 .forEach((node) => node.remove());
-              return normalizeText(clone.innerText || clone.textContent || "");
+              return cleanReadableText(clone.innerText || clone.textContent || "");
             };
             const metaDescription =
               document.querySelector<HTMLMetaElement>('meta[name="description"]')?.content?.trim() ||
@@ -142,7 +176,25 @@ export async function extractReadablePageContext(tabIdOrMaxChars: number | undef
               .map((node) => normalizeText(node.textContent || ""))
               .filter(Boolean)
               .slice(0, 20);
-            const selectors = ["main", "article", '[role="main"]', ".prose", ".markdown-body", "body"];
+            const selectors = isHuggingFace
+              ? [
+                  "main article",
+                  "main .prose",
+                  'main [class*="prose"]',
+                  'main [class*="markdown"]',
+                  'main [class*="model-card"]',
+                  'main [class*="dataset-card"]',
+                  'main [class*="ModelCard"]',
+                  'main [class*="DatasetCard"]',
+                  'main [class*="readme"]',
+                  "main",
+                  "article",
+                  '[role="main"]',
+                  ".prose",
+                  ".markdown-body",
+                  "body",
+                ]
+              : ["main", "article", '[role="main"]', ".prose", ".markdown-body", "body"];
             const candidates = selectors.map((selector) => {
               const text = cloneText(document.querySelector<HTMLElement>(selector));
               return { selector, length: text.length, text };
@@ -169,7 +221,7 @@ export async function extractReadablePageContext(tabIdOrMaxChars: number | undef
               textExcerpt: ok ? textExcerpt : "",
               textChars: ok ? textExcerpt.length : 0,
               selectedText,
-              extractor: "generic_visible_text",
+              extractor: isHuggingFace ? "huggingface" : "generic_visible_text",
               diagnostics: {
                 reason: ok ? "generic_dom_text_extracted" : "no_meaningful_text_extracted",
                 hardDomOk: hardDomResult.ok,
@@ -185,6 +237,7 @@ export async function extractReadablePageContext(tabIdOrMaxChars: number | undef
                 articleTextLength: candidates.find((candidate) => candidate.selector === "article")?.length ?? 0,
                 selectedTextLength: selectedText?.length ?? 0,
                 headingsCount: headings.length,
+                isHuggingFace,
                 error: null,
               },
             };
@@ -359,7 +412,7 @@ function normalizeResult(result: PageExtractionResult): PageContext {
     textExcerpt,
     mainText: textExcerpt,
     textChars: result.ok ? result.textChars ?? textExcerpt.length : 0,
-    extractor: "generic_visible_text",
+    extractor: result.extractor ?? "generic_visible_text",
     diagnostics: result.diagnostics ?? { reason: "missing_diagnostics" },
   };
 }

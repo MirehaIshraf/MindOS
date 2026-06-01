@@ -279,6 +279,11 @@ export type ChatContextStats = {
   search_terms?: string[];
   preferred_sources?: string[];
   excluded_types?: string[];
+  is_follow_up?: boolean;
+  resolved_query?: string | null;
+  primary_source_event_id?: string | null;
+  primary_source_title?: string | null;
+  primary_source_url?: string | null;
 };
 
 export type ChatMessage = {
@@ -298,6 +303,8 @@ export type ChatMessage = {
   warning?: string | null;
   answerStyle?: string;
   intent?: string | null;
+  isFollowUp?: boolean;
+  resolvedQuery?: string | null;
 };
 
 export type ChatRequestPayload = {
@@ -322,6 +329,8 @@ export type ChatResponse = {
   context_stats?: ChatContextStats | null;
   answer_style: string;
   intent?: string | null;
+  is_follow_up?: boolean;
+  resolved_query?: string | null;
 };
 
 export type ChatSession = {
@@ -352,6 +361,9 @@ export type StoredChatMessage = {
   warning?: string | null;
   answer_style?: string | null;
   intent?: string | null;
+  is_follow_up?: boolean;
+  resolved_query?: string | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 

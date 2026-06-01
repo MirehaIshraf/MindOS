@@ -40,6 +40,7 @@ class MemoryChatRepository(ChatRepository):
             warning=metadata.get("warning"),
             answer_style=metadata.get("answer_style"),
             intent=metadata.get("intent"),
+            metadata=metadata,
         )
         self._messages.setdefault(session_id, []).append(message)
         title = session.title

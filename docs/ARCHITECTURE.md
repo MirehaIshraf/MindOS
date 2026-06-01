@@ -45,6 +45,8 @@ Chat context should use context-eligible events. Raw chat_message and chat_respo
 
 Memory lookup queries use a precision profile: purified search terms, preferred source filtering, no default relationship expansion, and noisy event types excluded. Root-cause and summary queries can use broader context.
 
+Conversation follow-ups run through `ConversationContextService` before intent classification. It reads recent messages from the active chat session, uses assistant response metadata to find the previous primary memory source, resolves references such as "this model" or "this patent", and lets ContextBuilder use the `source_focused` profile to fetch that source directly.
+
 ## Connector Flow
 
 User explicitly imports or collector sends event -> ExternalIngestService/IngestionService or connector import service -> EventRepository -> MemoryPolicyService -> EmbeddingIndexService if eligible -> RelationshipService if eligible
@@ -76,6 +78,10 @@ Manual mode only sends events when the user clicks Save to MindOS. Smart mode ob
 Browser extension -> classify page -> run visible-text extraction with diagnostics -> send `browser_page_captured` -> backend normalizes URL -> upsert one visible page memory per normalized URL -> index/retrieve clean browser memory.
 
 The browser extractor has a hard DOM access diagnostic followed by a generic visible-text path. Site-specific extractors should wait until basic DOM injection and readable text extraction are proven reliable.
+
+Hugging Face pages still use the same DOM extraction pipeline, but the extractor prefers page-specific model/dataset/card areas and filters common site navigation lines before sending readable context.
+
+Pending captured pages can be summarized manually from Memory through `POST /events/{event_id}/summarize`. This uses deterministic local text processing, updates the existing browser event with Summary/Key points, and reindexes that event when embeddings are enabled. It does not call an LLM automatically.
 
 `browser_page_seen` and `browser_search_query` are lightweight hidden history. They support lookup questions without becoming normal visible memory or relationship noise. Repeat captures should update visit metadata instead of creating duplicate relationships or duplicate vector entries.
 

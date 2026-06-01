@@ -38,6 +38,7 @@ Preferred browser event types:
 - `GET /events/recent`: list recent events with optional source/category/hidden filters. Supports `limit`, `offset`, `include_hidden`, `source`, and `category`; response includes `events`, `total`, `limit`, `offset`, and `has_more`.
 - `GET /events/{event_id}`: fetch event detail.
 - `GET /events/{event_id}/related`: fetch related memory for an event.
+- `POST /events/{event_id}/summarize`: summarize a `browser_page_captured` event with deterministic local logic. Request may include `{ "method": "deterministic" }`; LLM summarization is not implemented. Returns the updated event. Title-only captures return `400`.
 - `GET /search/event/{event_id}`: legacy/detail lookup through the search route.
 
 ## Search
@@ -55,6 +56,7 @@ Preferred browser event types:
 
 - `GET /chat`: placeholder readiness response.
 - `POST /chat`: chat with local memory context and selected model.
+- `POST /chat/resolve-context`: debug endpoint for resolving follow-up references in a chat session. Request includes `session_id` and `query`; response includes `is_follow_up`, `resolved_query`, source ids, source URLs, entities, and reason.
 - `GET /chat/sessions`: list chat sessions.
 - `GET /chat/sessions/{session_id}/messages`: list messages in a chat session.
 - `DELETE /chat/sessions/{session_id}`: delete one chat session.

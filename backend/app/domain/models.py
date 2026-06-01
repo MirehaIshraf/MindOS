@@ -69,6 +69,7 @@ class ChatStoredMessage(BaseModel):
     warning: str | None = None
     answer_style: str | None = None
     intent: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
 
 

@@ -215,6 +215,11 @@ export async function getEventDetail(eventId: string): Promise<MemoryEvent> {
   return response.data;
 }
 
+export async function summarizeEvent(eventId: string, method = "deterministic"): Promise<MemoryEvent> {
+  const response = await api.post<MemoryEvent>(`/events/${eventId}/summarize`, { method }, { timeout: 30000 });
+  return response.data;
+}
+
 export async function getRelatedEvents(eventId: string, limit = 10): Promise<RelatedEventsResponse> {
   const response = await api.get<RelatedEventsResponse>(`/events/${eventId}/related`, {
     params: { limit },

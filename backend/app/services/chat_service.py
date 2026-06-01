@@ -17,6 +17,7 @@ from app.schemas.chat import (
 )
 from app.schemas.context import ContextEvent, ContextPackage
 from app.services.context_builder_service import ContextBuilderService
+from app.services.conversation_context_service import ResolvedConversationContext, conversation_context_service
 from app.services.model_registry_service import model_registry_service
 from app.services.model_router_service import model_router_service
 from app.services.query_intent_service import query_intent_service
@@ -68,6 +69,16 @@ If context is insufficient, say:
 Then mention what data would help.
 """
 
+FOLLOW_UP_PROMPT = """
+The user is asking a follow-up question about the memory source discussed in the previous turn.
+Use the provided primary source first.
+If the source has a summary, use it.
+If it has readable context excerpt, summarize only that captured content.
+Include the source URL if available.
+Do not say you lack access to memory if a source is provided.
+If captured context is incomplete, say the summary is based on the captured excerpt.
+"""
+
 
 class ChatService:
     def __init__(
@@ -93,16 +104,24 @@ class ChatService:
             session = self._chat_repository.create_session(short_title(request.message))
 
         model_config = self._resolve_requested_model(request.model_id)
-        query_intent = query_intent_service.classify(request.message)
+        recent_messages = self._chat_repository.list_messages(session.id)
+        conversation_context = conversation_context_service.resolve_follow_up(
+            query=request.message,
+            recent_messages=recent_messages,
+        )
+        active_query = conversation_context.resolved_query if conversation_context.is_follow_up else request.message
+        query_intent = query_intent_service.classify(request.message, conversation_context)
         context_profile = query_intent.retrieval_profile or (model_config.default_context_profile if model_config else "fast_chat")
         context_package: ContextPackage | None = None
         if request.use_context or query_intent.needs_local_memory:
             context_package = self._context_builder.build_chat_context(
-                query=request.message,
+                query=active_query,
                 profile=context_profile,
                 include_hidden=True,
                 intent=query_intent,
+                source_event_ids=conversation_context.source_event_ids if conversation_context.is_follow_up else None,
             )
+            context_package.metadata["conversation_context"] = conversation_context.model_dump()
 
         # Search happens before storage so the current user message cannot retrieve itself.
         self._chat_repository.add_message(session.id, "user", request.message)
@@ -125,11 +144,20 @@ class ChatService:
             answer_style=answer_style,
             model_id=request.model_id,
             context_profile=context_profile,
+            conversation_context=conversation_context,
+            resolved_query=active_query,
         )
         reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
         context_stats = context_stats_payload(context_package)
         sources_payload = [source.model_dump(mode="json") for source in sources_used]
+        response_context_metadata = conversation_context_service.build_response_metadata(
+            intent=query_intent.intent,
+            resolved_query=active_query,
+            user_query=request.message,
+            sources=sources_payload,
+            conversation_context=conversation_context,
+        )
         search_mode = (
             str(context_package.metadata.get("search_mode"))
             if context_package and context_package.metadata.get("search_mode")
@@ -156,6 +184,7 @@ class ChatService:
                 "warning": warning,
                 "answer_style": answer_style,
                 "intent": query_intent.intent,
+                **response_context_metadata,
             },
         )
         self._record_chat_memory_event(
@@ -174,6 +203,7 @@ class ChatService:
                 "warning": warning,
                 "answer_style": answer_style,
                 "intent": query_intent.intent,
+                **response_context_metadata,
             },
         )
 
@@ -191,7 +221,13 @@ class ChatService:
             context_stats=context_stats,
             answer_style=answer_style,
             intent=query_intent.intent,
+            is_follow_up=conversation_context.is_follow_up,
+            resolved_query=active_query if active_query != request.message else None,
         )
+
+    def resolve_context(self, session_id: str, query: str) -> ResolvedConversationContext:
+        messages = self._chat_repository.list_messages(session_id)
+        return conversation_context_service.resolve_follow_up(query=query, recent_messages=messages)
 
     def list_sessions(self, limit: int = 20) -> ChatSessionsResponse:
         sessions = self._chat_repository.list_sessions(limit=limit)
@@ -245,10 +281,11 @@ class ChatService:
                 "content": content,
                 "metadata": event_metadata,
                 "timestamp": datetime.now(timezone.utc),
-                "embedding_status": EmbeddingStatus.not_required,
+            "embedding_status": EmbeddingStatus.not_required,
             }
         )
-        relationship_service.detect_relationships_for_event(event)
+        if event.is_relationship_eligible:
+            relationship_service.detect_relationships_for_event(event)
 
     def _generate_reply(
         self,
@@ -260,8 +297,12 @@ class ChatService:
         answer_style: str,
         model_id: str | None,
         context_profile: str,
+        conversation_context: ResolvedConversationContext | None = None,
+        resolved_query: str | None = None,
     ) -> tuple[str, str, str, str, str | None]:
         system_prompt = prompt_for_answer_style(task_hint, answer_style)
+        if conversation_context and conversation_context.is_follow_up:
+            system_prompt += FOLLOW_UP_PROMPT
         if self._llm is not None:
             return (
                 self._llm.generate_response(message=message, history=history, context=context_package, system_prompt=system_prompt),
@@ -279,6 +320,18 @@ class ChatService:
             for item in history[-history_limit:]
             if item.get("role") in {"user", "assistant"} and item.get("content")
         ]
+        if conversation_context and conversation_context.recent_history:
+            recent_history = conversation_context.recent_history[-min(4, history_limit or 4):]
+        resolved_reference = ""
+        if conversation_context and conversation_context.is_follow_up:
+            resolved_reference = (
+                "\n\nResolved reference:\n"
+                f"{conversation_context.reason}\n"
+                f"Primary source: {conversation_context.primary_source_title or conversation_context.primary_source_event_id}\n"
+                f"URL: {conversation_context.primary_source_url or ''}\n"
+                f"Entities: {', '.join(conversation_context.entities)}\n"
+                f"Resolved query: {resolved_query or message}"
+            )
         messages = [
             {"role": "system", "content": system_prompt},
             {
@@ -286,6 +339,7 @@ class ChatService:
                 "content": (
                     "Local memory context:\n\n"
                     + (formatted_context if formatted_context else "No local memory context was found for this request.")
+                    + resolved_reference
                 ),
             },
             *recent_history,
@@ -345,6 +399,8 @@ def context_stats_payload(context_package: ContextPackage | None) -> ChatContext
     if context_package is None:
         return None
     intent_payload = context_package.metadata.get("intent") if hasattr(context_package, "metadata") else None
+    conversation_payload = context_package.metadata.get("conversation_context") if hasattr(context_package, "metadata") else None
+    conversation_payload = conversation_payload if isinstance(conversation_payload, dict) else {}
     return ChatContextStats(
         direct_count=len(context_package.direct_events),
         related_count=len(context_package.related_events),
@@ -357,6 +413,11 @@ def context_stats_payload(context_package: ContextPackage | None) -> ChatContext
         search_terms=intent_payload.get("search_terms", []) if isinstance(intent_payload, dict) else [],
         preferred_sources=intent_payload.get("preferred_sources", []) if isinstance(intent_payload, dict) else [],
         excluded_types=intent_payload.get("excluded_types", []) if isinstance(intent_payload, dict) else [],
+        is_follow_up=bool(conversation_payload.get("is_follow_up")),
+        resolved_query=conversation_payload.get("resolved_query") if isinstance(conversation_payload.get("resolved_query"), str) else None,
+        primary_source_event_id=conversation_payload.get("primary_source_event_id") if isinstance(conversation_payload.get("primary_source_event_id"), str) else None,
+        primary_source_title=conversation_payload.get("primary_source_title") if isinstance(conversation_payload.get("primary_source_title"), str) else None,
+        primary_source_url=conversation_payload.get("primary_source_url") if isinstance(conversation_payload.get("primary_source_url"), str) else None,
     )
 
 
@@ -374,6 +435,14 @@ def prompt_for_answer_style(task_hint: str | None, answer_style: str) -> str:
         )
     elif answer_style == "summary":
         prompt += "\nThe user is asking for a summary. Use a clean markdown summary with sections and bullets.\n"
+    elif answer_style == "source_summary":
+        prompt += """
+The user is asking about a captured memory source. Use the provided captured source.
+If a summary is ready, summarize it. If only an excerpt is available, summarize only the excerpt.
+Include the URL when available.
+Do not say you lack access to memory if a source is provided.
+Do not treat this as root-cause analysis.
+"""
     elif answer_style == "memory_lookup":
         prompt += """
 The user is asking whether something exists in their local memory.

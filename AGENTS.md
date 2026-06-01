@@ -90,6 +90,7 @@ Before adding a new feature:
 - Activity tracker raw events are noisy and should be hidden/non-indexable by default.
 - Summaries are preferred over raw noisy streams.
 - Chat retrieval should route through query intent first; precision memory lookups should avoid weak relationship expansion and noisy event types.
+- Conversation follow-up resolution may use recent chat-session metadata, but raw chat messages must remain hidden, non-indexed, and relationship-ineligible.
 
 ## Model Rules
 
@@ -118,6 +119,8 @@ Before adding a new feature:
 - Debug browser extraction from the DOM pipeline first. Prove `chrome.scripting.executeScript` can read `document.body.innerText` before adding site-specific extractors.
 - Browser captured pages must be idempotent: repeat visits update/upsert one visible memory item by normalized URL instead of creating duplicate visible events.
 - Do not call an LLM automatically for every browser page. Browser capture should preserve readable text and diagnostics first; summarization is a later step.
+- Browser page summaries are deterministic/manual for now. Do not auto-run local or cloud LLM summarization on capture.
+- Model/page/patent/dataset detail questions should use captured source memory, not root-cause retrieval.
 - Raw `browser_page_seen` events should stay hidden and non-indexable.
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.

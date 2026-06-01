@@ -22,7 +22,7 @@ Last updated: 2026-06-01
 | Search | Working | Keyword plus semantic/hybrid when embeddings are enabled. |
 | Embeddings | Working/Partial | Uses Ollama + ChromaDB; optional systems fail over to keyword search. |
 | Relationships | Working/Partial | Stored in SQLite; quality and noise reduction need continued tuning. |
-| Chat | Working | Uses QueryIntentService, ContextBuilderService, and selected model through ModelRouter. |
+| Chat | Working | Uses ConversationContextService, QueryIntentService, ContextBuilderService, and selected model through ModelRouter. |
 | Tasks | Paused/Experimental | Backend and page still exist, but product priority is data collection. |
 | File connector | Working | Path-based folder import with clear events. |
 | Logs connector | Working | Path-based log import with clear events. |
@@ -30,7 +30,7 @@ Last updated: 2026-06-01
 | Saved sources | Working/Partial | Saved connector sources and import runs exist for file/log/git. |
 | External ingestion | Working/Partial | API exists for VSCode/browser/activity/local-agent collectors; disabled VSCode/Browser connectors reject their events. |
 | VSCode extension | Working | MVP exists in `extensions/vscode`; installable local VSIX flow with backend-controlled runtime polling. |
-| Browser extension | Working/Partial | MVP exists in `extensions/browser`; manual page/selection save plus privacy-first smart capture with hard DOM access diagnostics, generic visible-text extraction, backend content-quality validation, and normalized URL upsert. |
+| Browser extension | Working/Partial | MVP exists in `extensions/browser`; manual page/selection save plus privacy-first smart capture with hard DOM access diagnostics, Hugging Face cleanup in generic visible-text extraction, backend content-quality validation, normalized URL upsert, and manual deterministic summaries. |
 | Model registry | Working/Partial | Local Ollama discovery, cloud provider config, FakeLLM fallback. |
 | Embedding registry | Working/Partial | Curated and discovered local embedding models; changing model requires reindex. |
 | Dev tools | Working/Partial | Useful but should not be treated as product UI. |
@@ -78,6 +78,8 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 - Browser extension does not request browser history permission or perform full unrestricted history tracking. Smart capture is limited to active-tab dwell events, search queries, and work/research page classification with private/noisy pages filtered. Page context extraction collects visible readable text only, not raw HTML or form/input values.
 - Browser extension includes a hard DOM access diagnostic and generic visible-text extraction diagnostics. Backend validation prevents placeholder failure text from being counted as captured content. Site-specific extractors and automatic summarization are not the focus until basic DOM extraction is verified.
 - Chat retrieval now uses deterministic query intent routing, but retrieval quality still needs tuning with real memory data.
+- Chat follow-up resolution is implemented for active sessions. Assistant response metadata stores primary source ids/titles/URLs so prompts like "summarize this model" can reuse the previous memory source without indexing raw chat messages.
+- Entity/detail prompts such as "give me details of this model MiniCPM5-1B" route to source-focused memory lookup instead of root-cause retrieval.
 - Activity tracker and local agent collector are not implemented yet; only the ingestion API exists for those sources.
 - Activity tracker summaries are intended to be indexable later, but current policy treats all `activity_tracker` source events as hidden/non-indexable.
 

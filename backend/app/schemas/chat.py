@@ -54,6 +54,11 @@ class ChatContextStats(BaseModel):
     search_terms: list[str] = Field(default_factory=list)
     preferred_sources: list[str] = Field(default_factory=list)
     excluded_types: list[str] = Field(default_factory=list)
+    is_follow_up: bool = False
+    resolved_query: str | None = None
+    primary_source_event_id: str | None = None
+    primary_source_title: str | None = None
+    primary_source_url: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -70,6 +75,8 @@ class ChatResponse(BaseModel):
     context_stats: ChatContextStats | None = None
     answer_style: str = "normal"
     intent: str | None = None
+    is_follow_up: bool = False
+    resolved_query: str | None = None
 
 
 class ChatSessionResponse(BaseModel):
@@ -100,7 +107,25 @@ class ChatStoredMessageResponse(BaseModel):
     warning: str | None = None
     answer_style: str | None = None
     intent: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+
+class ChatResolveContextRequest(BaseModel):
+    session_id: str
+    query: str
+
+
+class ChatResolveContextResponse(BaseModel):
+    is_follow_up: bool
+    resolved_query: str
+    primary_source_event_id: str | None = None
+    primary_source_title: str | None = None
+    primary_source_url: str | None = None
+    source_event_ids: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class ChatMessagesResponse(BaseModel):

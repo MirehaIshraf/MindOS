@@ -95,6 +95,10 @@ Raw chat messages should not pollute the main memory graph:
 
 Small memory lookup questions should use precise retrieval. For example, "Did I search about happiness ever?" should search for `happiness`, prefer manually saved browser/file/log/git memory, avoid weak relationship expansion, and answer from exact local memory rather than generic model knowledge.
 
+Follow-up questions reuse active chat-session context. If a previous answer found a memory source, later prompts such as "summarize this model" or "what is this patent about?" should resolve "this" to the previous primary source without indexing raw chat messages into the main memory graph.
+
+Captured browser pages can be summarized manually with deterministic local logic. This updates the existing page memory item with a Summary and Key points section without calling an LLM automatically. Entity/detail questions about models, datasets, patents, pages, or documents should prefer captured browser memory and should not be routed as root-cause analysis unless failure/debug language is present.
+
 ## Future Task Vision
 
 Final task architecture:

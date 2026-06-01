@@ -9,6 +9,7 @@ from app.repositories.base import EventRepository, RelationshipRepository
 from app.services.browser_importance_service import browser_importance_service
 from app.services.browser_content_quality_service import content_quality_from_capture
 from app.services.embedding_index_service import embedding_index_service
+from app.services.page_summary_service import create_deterministic_page_summary, format_summarized_browser_capture_content
 from app.services.relationship_service import relationship_service
 from app.services.url_normalization_service import classify_url_page_type, normalize_url, url_hash
 
@@ -214,6 +215,43 @@ class BrowserMemoryService:
                 embedding_index_service.index_event(refreshed)
             updated += 1
         return {"updated": updated}
+
+    def summarize_browser_page(self, event_id: str, method: str = "deterministic") -> Event:
+        if method != "deterministic":
+            raise ValueError("LLM summarization is not implemented yet.")
+        event = self._event_repository.get_event_by_id(event_id)
+        if event is None:
+            raise LookupError("Event not found.")
+        if event.source.value != "browser_extension" or event.type != "browser_page_captured":
+            raise ValueError("Only browser_page_captured events can be summarized.")
+        quality = content_quality_from_capture(event.content, event.metadata)
+        if not quality.get("meaningful"):
+            raise ValueError("This page has no captured readable context.")
+        summary_result = create_deterministic_page_summary(event)
+        if summary_result.get("summary_status") != "ready":
+            raise ValueError("This page has no captured readable context.")
+        metadata = dict(event.metadata)
+        metadata.update(
+            {
+                "summary_status": "ready",
+                "summary_method": "deterministic",
+                "content_quality": "summary",
+                "summary": summary_result.get("summary"),
+                "summary_key_points": summary_result.get("key_points", []),
+            }
+        )
+        updated_content = format_summarized_browser_capture_content(event, summary_result)
+        updated = self._event_repository.update_event_content_and_metadata(
+            event.id,
+            updated_content,
+            metadata,
+            title=event.title,
+        )
+        if updated is None:
+            raise LookupError("Event not found.")
+        if updated.is_indexable:
+            embedding_index_service.index_event(updated)
+        return updated
 
     def _browser_metadata(self, metadata: dict[str, Any], content: str, config: dict[str, Any]) -> dict[str, Any]:
         metadata = self._url_identity(metadata)

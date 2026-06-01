@@ -96,7 +96,23 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
                   <div className="flex flex-wrap gap-2">
                     <Badge>intent: {contextStats.intent}</Badge>
                     {contextStats.retrieval_profile ? <Badge>profile: {contextStats.retrieval_profile}</Badge> : null}
+                    {contextStats.is_follow_up ? <Badge variant="info">follow-up</Badge> : null}
                   </div>
+                ) : null}
+                {contextStats.resolved_query ? (
+                  <p className="text-xs leading-5 text-app-muted">Resolved query: {contextStats.resolved_query}</p>
+                ) : null}
+                {contextStats.primary_source_title ? (
+                  <p className="text-xs leading-5 text-app-muted">
+                    Primary source:{" "}
+                    {contextStats.primary_source_url ? (
+                      <a className="text-violet-300 hover:text-violet-200" href={contextStats.primary_source_url} target="_blank" rel="noreferrer">
+                        {contextStats.primary_source_title}
+                      </a>
+                    ) : (
+                      contextStats.primary_source_title
+                    )}
+                  </p>
                 ) : null}
                 {contextStats.search_terms && contextStats.search_terms.length > 0 ? (
                   <p className="text-xs leading-5 text-app-muted">Search terms: {contextStats.search_terms.join(", ")}</p>
@@ -152,8 +168,14 @@ function AnswerStyleBadge({ message }: { message: ChatMessageRecord }) {
   if (message.taskHint) {
     return <Badge variant="warning">Task detected</Badge>;
   }
+  if (message.isFollowUp || message.intent === "follow_up_summary" || message.intent === "follow_up") {
+    return <Badge variant="info">Follow-up</Badge>;
+  }
   if (message.answerStyle === "root_cause") {
     return <Badge variant="info">Root-cause analysis</Badge>;
+  }
+  if (message.answerStyle === "source_summary" || message.intent === "entity_details" || message.intent === "source_summary") {
+    return <Badge variant="info">Source summary</Badge>;
   }
   if (message.answerStyle === "summary") {
     return <Badge variant="info">Summary</Badge>;
