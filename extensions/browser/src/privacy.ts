@@ -121,32 +121,33 @@ export function classifyPage(url: string, title: string, runtime?: {
   const text = `${url} ${title}`.toLowerCase();
   const lowerDomain = domain.toLowerCase();
   const search = extractSearchQuery(url);
+  const pageType = classifyPageType(url, title);
   if (isPrivateOrSensitiveUrl(url, domain)) {
-    return { importance: "private", reason: "Sensitive/login/payment page.", category: "private", shouldCaptureContext: false };
+    return { importance: "private", reason: "Sensitive/login/payment page.", category: "private", ...pageType, shouldCaptureContext: false };
   }
   if ((runtime?.ignored_domains ?? []).some((marker) => lowerDomain.includes(marker.toLowerCase()))) {
-    return { importance: "noisy", reason: "Domain is ignored in MindOS.", category: "unknown", shouldCaptureContext: false };
+    return { importance: "noisy", reason: "Domain is ignored in MindOS.", category: "unknown", ...pageType, shouldCaptureContext: false };
   }
   if (search.query) {
-    return { importance: "normal", reason: "Search query detected.", category: "search", shouldCaptureContext: false, searchQuery: search.query, searchEngine: search.engine };
+    return { importance: "normal", reason: "Search query detected.", category: "search", pageType: "search", pageTypeReason: "Search URL.", shouldCaptureContext: false, searchQuery: search.query, searchEngine: search.engine };
   }
   if (NOISY_DOMAINS.some((marker) => lowerDomain.includes(marker))) {
-    return { importance: "noisy", reason: "Noisy or entertainment domain.", category: "entertainment", shouldCaptureContext: false };
+    return { importance: "noisy", reason: "Noisy or entertainment domain.", category: "entertainment", ...pageType, shouldCaptureContext: false };
   }
   const huggingFaceCategory = huggingFacePageCategory(url, lowerDomain);
   if (huggingFaceCategory) {
-    return { importance: "important", reason: "Hugging Face AI/model/dataset page.", category: huggingFaceCategory, shouldCaptureContext: true };
+    return { importance: "important", reason: "Hugging Face AI/model/dataset page.", category: huggingFaceCategory, ...pageType, shouldCaptureContext: true };
   }
   if ((runtime?.important_domains ?? []).some((marker) => lowerDomain.includes(marker.toLowerCase()))) {
-    return { importance: "important", reason: "Domain is marked important in MindOS.", category: "research", shouldCaptureContext: true };
+    return { importance: "important", reason: "Domain is marked important in MindOS.", category: "research", ...pageType, shouldCaptureContext: true };
   }
   if (IMPORTANT_DOMAINS.some((marker) => lowerDomain.includes(marker)) || lowerDomain.startsWith("docs.") || lowerDomain.startsWith("developer.")) {
-    return { importance: "important", reason: "Developer/research domain.", category: categoryForDomain(lowerDomain), shouldCaptureContext: true };
+    return { importance: "important", reason: "Developer/research domain.", category: categoryForDomain(lowerDomain), ...pageType, shouldCaptureContext: true };
   }
   if (IMPORTANT_KEYWORDS.some((keyword) => text.includes(keyword))) {
-    return { importance: "important", reason: "Developer/research keyword.", category: "research", shouldCaptureContext: true };
+    return { importance: "important", reason: "Developer/research keyword.", category: "research", ...pageType, shouldCaptureContext: true };
   }
-  return { importance: "normal", reason: "No strong work/research signal.", category: "unknown", shouldCaptureContext: false };
+  return { importance: "normal", reason: "No strong work/research signal.", category: "unknown", ...pageType, shouldCaptureContext: false };
 }
 
 export function extractSearchQuery(url: string): { query?: string; engine?: string } {
@@ -191,5 +192,37 @@ function huggingFacePageCategory(url: string, domain: string): string | null {
     return "ai";
   } catch {
     return "ai";
+  }
+}
+
+function classifyPageType(url: string, title: string): Pick<PageClassification, "pageType" | "pageTypeReason"> {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase().replace(/\/+$/, "");
+    const domain = parsed.hostname.toLowerCase();
+    const text = `${path} ${title}`.toLowerCase();
+    if (!path || path === "") {
+      return { pageType: "homepage", pageTypeReason: "Root domain." };
+    }
+    if (extractSearchQuery(url).query) {
+      return { pageType: "search", pageTypeReason: "Search URL." };
+    }
+    if (domain.includes("huggingface.co") && /^\/(datasets|models|spaces|papers|docs)\/[^/]+\/[^/]+/.test(path)) {
+      return { pageType: "content", pageTypeReason: "Hugging Face content page." };
+    }
+    if (domain.includes("patents.google.com") && path.startsWith("/patent/")) {
+      return { pageType: "content", pageTypeReason: "Patent content page." };
+    }
+    if (domain.includes("github.com")) {
+      if (/\/(issues|pull)\/\d+/.test(path)) return { pageType: "action", pageTypeReason: "GitHub issue or pull request." };
+      if (/\/(issues|pulls|actions|projects)$/.test(path)) return { pageType: "listing", pageTypeReason: "GitHub listing page." };
+      if (path.split("/").filter(Boolean).length >= 2) return { pageType: "content", pageTypeReason: "GitHub repository/content page." };
+    }
+    if (text.includes("dashboard") || text.includes("feed") || text.includes("explore") || text.includes("browse")) {
+      return { pageType: "listing", pageTypeReason: "Listing/dashboard page." };
+    }
+    return { pageType: "content", pageTypeReason: "Readable page URL." };
+  } catch {
+    return { pageType: "unknown", pageTypeReason: "Could not parse URL." };
   }
 }

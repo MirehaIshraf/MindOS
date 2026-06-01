@@ -12,6 +12,8 @@ import {
   clearEvents,
   clearRelationships,
   clearTasks,
+  dedupeBrowserPages,
+  fixBrowserContentQuality,
   getErrorMessage,
   getDevState,
   getEmbeddingStatus,
@@ -328,6 +330,38 @@ export function DevPage() {
     try {
       const response = await cleanMemoryIndexes();
       setMessage(`Cleaned memory indexes. Policy updated: ${String(response.policy_updated ?? 0)}.`);
+      await refreshAll();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleDedupeBrowserPages() {
+    setLoadingAction("dedupeBrowserPages");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await dedupeBrowserPages();
+      setMessage(
+        `Deduplicated browser pages. Groups: ${response.groups_found}, deleted: ${response.events_deleted}, updated: ${response.events_updated}.`,
+      );
+      await refreshAll();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
+  async function handleFixBrowserContentQuality() {
+    setLoadingAction("fixBrowserContentQuality");
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fixBrowserContentQuality();
+      setMessage(`Fixed browser content quality metadata for ${response.updated} events.`);
       await refreshAll();
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
@@ -816,6 +850,21 @@ export function DevPage() {
             </Button>
             <Button variant="primary" onClick={handleCleanMemoryIndexes} loading={loadingAction === "cleanMemoryIndexes"}>
               Clean Memory Indexes
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <SectionHeader icon={<DatabaseZap size={18} />} title="Browser Memory Cleanup" />
+          <p className="mt-3 text-sm leading-6 text-app-muted">
+            Tools for keeping smart-captured browser pages idempotent while extraction diagnostics are tuned.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary" onClick={handleDedupeBrowserPages} loading={loadingAction === "dedupeBrowserPages"}>
+              Deduplicate Browser Pages
+            </Button>
+            <Button variant="secondary" onClick={handleFixBrowserContentQuality} loading={loadingAction === "fixBrowserContentQuality"}>
+              Fix Browser Content Quality
             </Button>
           </div>
         </Card>

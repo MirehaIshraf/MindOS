@@ -62,20 +62,62 @@ export type PageClassification = {
   importance: "important" | "normal" | "noisy" | "private";
   reason: string;
   category: string;
+  pageType: "homepage" | "search" | "listing" | "content" | "action" | "unknown";
+  pageTypeReason: string;
   shouldCaptureContext: boolean;
   searchQuery?: string;
   searchEngine?: string;
 };
 
-export type PageContext = {
+export type PageExtractionResult = {
+  ok: boolean;
   title: string;
   url: string;
   domain: string;
-  metaDescription: string | null;
+  metaDescription?: string | null;
   headings: string[];
-  selectedText: string | null;
-  mainText: string;
+  textExcerpt: string;
   textChars: number;
+  selectedText?: string | null;
+  extractor: "generic_visible_text";
+  diagnostics: {
+    reason?: string;
+    hardDomOk?: boolean;
+    bodyTextLength?: number;
+    documentElementTextLength?: number;
+    hasBody?: boolean;
+    readyState?: string;
+    bodyPreview?: string;
+    mainTextLength?: number;
+    articleTextLength?: number;
+    selectedTextLength?: number;
+    usedSelector?: string | null;
+    selectedSelector?: string | null;
+    candidateLengths?: Record<string, number>;
+    headingsCount?: number;
+    tabId?: number;
+    url?: string;
+    error?: string | null;
+  };
+};
+
+export type HardDomExtractionResult = {
+  ok: boolean;
+  title: string;
+  url: string;
+  readyState: string;
+  bodyTextLength: number;
+  bodyPreview: string;
+  documentElementTextLength: number;
+  hasBody: boolean;
+  error: string | null;
+  tabId?: number;
+};
+
+export type PageContext = PageExtractionResult & {
+  mainText: string;
+  metaDescription: string | null;
+  selectedText: string | null;
 };
 
 export type ChromeScriptingResult<T> = {

@@ -33,8 +33,8 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | browser_extension/browser_research_note | Yes unless private | Yes | Yes | Yes | User-authored browser research note. |
 | browser_extension/browser_page_seen | No | No | No | No | Lightweight smart history only; hidden from default memory and normal context. |
 | browser_extension/browser_search_query | No | Yes | No | No | Hidden search evidence for precise memory lookup; not normal chat context. |
-| browser_extension/browser_page_captured | Yes unless private | Yes | Yes | Yes | Smart-captured work/research page with readable context excerpt when extraction succeeds. |
-| browser_extension/browser_page_summary | Yes unless private | Yes | Yes | Yes | Future summarized browser memory. |
+| browser_extension/browser_page_captured | Yes unless private | Yes | Yes | Yes | Smart-captured work/research page with readable context excerpt; one visible memory item per normalized URL. |
+| browser_extension/browser_page_summary | Yes unless private | Yes | Yes | Yes | Future summarized browser memory; not generated automatically today. |
 | activity_tracker/app_focus_changed | No | No | No | No | Raw activity tracker events are noisy. |
 | activity_tracker/work_session_summary | No by current source-level policy | No by current source-level policy | No by current source-level policy | No by current source-level policy | Intended direction is summarized tracker events should become indexable; current code treats all activity_tracker events as hidden/non-indexable. |
 | mindos/chat_message | No | No | No | No | Stored for history and Chats category only. |
@@ -55,6 +55,11 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - File, log, Git, VSCode saved/workspace, manually saved browser extension events, and useful captured events are indexable/context eligible by default.
 - VSCode file-opened events are stored but hidden/non-indexable by default to avoid open-file noise.
 - Browser manual saves are visible and indexable. Smart capture can create hidden `browser_page_seen` history, hidden/indexable `browser_search_query` lookup evidence, and visible/indexable `browser_page_captured` memory for important work/research pages. Captured page events should include readable page context when extraction succeeds.
+- `browser_page_captured` events are upserted by normalized URL. Repeat visits increment `visit_count` and update `last_seen_at` instead of creating duplicate visible memory.
+- Browser captured-page metadata includes extraction diagnostics such as `captured_text_chars`, `text_excerpt_included`, `page_context_missing`, and `extraction_diagnostics`.
+- `page_context_missing=true` means the event is title/URL memory only and should not be treated as content-rich. Placeholder phrases such as "No readable page text was extracted." do not count as captured content.
+- Title-only browser captures remain searchable by title, URL, domain, and metadata, but should not be summarized from page content.
+- Automatic browser summarization is not implemented in the current debugging-first flow.
 - Browser smart capture must not store private/login/payment pages, and full page text must remain off by default.
 - `task_completed` and `report_generated` are indexable/context eligible.
 

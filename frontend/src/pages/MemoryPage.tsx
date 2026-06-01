@@ -40,6 +40,8 @@ const searchModes = [
   { label: "Hybrid", value: "hybrid" },
 ] as const;
 
+const RECENT_LIMIT = 20;
+
 type CategoryFilter = (typeof categories)[number];
 type SourceFilter = (typeof sources)[number];
 type SearchModeFilter = (typeof searchModes)[number];
@@ -59,6 +61,8 @@ export function MemoryPage() {
   const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>(categories[0]);
   const [selectedSource, setSelectedSource] = useState<SourceFilter>(sources[0]);
   const [recentEvents, setRecentEvents] = useState<MemoryEvent[]>([]);
+  const [recentTotal, setRecentTotal] = useState(0);
+  const [hasMoreRecent, setHasMoreRecent] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [stats, setStats] = useState<SearchStatsResponse | null>(null);
   const [selectedSearchMode, setSelectedSearchMode] = useState<SearchModeFilter>(searchModes[0]);
@@ -67,22 +71,30 @@ export function MemoryPage() {
   const [selectedEvent, setSelectedEvent] = useState<MemoryEvent | null>(null);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadRecent();
   }, []);
 
-  async function loadRecent(category = selectedCategory, source = selectedSource) {
-    setLoading(true);
+  async function loadRecent(category = selectedCategory, source = selectedSource, append = false) {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
       const includeHidden = category.value === "chat";
+      const offset = append ? recentEvents.length : 0;
       const [recentResponse, statsResponse] = await Promise.all([
-        getRecentEvents(source.value, 30, category.value, includeHidden),
+        getRecentEvents(source.value, RECENT_LIMIT, category.value, includeHidden, offset),
         getSearchStats(),
       ]);
-      setRecentEvents(recentResponse.events);
+      setRecentEvents((current) => (append ? [...current, ...recentResponse.events] : recentResponse.events));
+      setRecentTotal(recentResponse.total);
+      setHasMoreRecent(recentResponse.has_more);
       setStats(statsResponse);
       setSearchResults([]);
       setSearchModeUsed("keyword");
@@ -91,9 +103,15 @@ export function MemoryPage() {
     } catch {
       setError("Could not load memory. Backend may be offline.");
       setRecentEvents([]);
+      setRecentTotal(0);
+      setHasMoreRecent(false);
       setStats(null);
     } finally {
-      setLoading(false);
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
     }
   }
 
@@ -160,6 +178,10 @@ export function MemoryPage() {
     } catch {
       setError("Could not load event detail.");
     }
+  }
+
+  async function handleLoadMore() {
+    await loadRecent(selectedCategory, selectedSource, true);
   }
 
   const displayItems: DisplayItem[] = useMemo(() => {
@@ -238,7 +260,10 @@ export function MemoryPage() {
             <h2 className="text-base font-semibold text-app-text">
               {isSearchMode ? `Search Results (${searchResults.length})` : "Unified Timeline"}
             </h2>
-            <Badge variant="info">Search mode: {isSearchMode ? searchModeUsed : "timeline"}</Badge>
+            <div className="flex items-center gap-2">
+              {!isSearchMode ? <span className="text-xs text-app-muted">Showing {recentEvents.length} of {recentTotal}</span> : null}
+              <Badge variant="info">Search mode: {isSearchMode ? searchModeUsed : "timeline"}</Badge>
+            </div>
           </div>
           <div className="mt-4 space-y-3">
             {loading ? (
@@ -254,10 +279,26 @@ export function MemoryPage() {
                 />
               ))
             )}
+            {!isSearchMode && hasMoreRecent && displayItems.length > 0 ? (
+              <div className="pt-2">
+                <Button variant="secondary" onClick={() => void handleLoadMore()} loading={loadingMore}>
+                  Load more
+                </Button>
+              </div>
+            ) : null}
           </div>
         </Card>
 
-        {selectedEvent ? <EventDetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} /> : null}
+        {selectedEvent ? (
+          <EventDetailPanel
+            event={selectedEvent}
+            onClose={() => setSelectedEvent(null)}
+            onEventUpdated={(event) => {
+              setSelectedEvent(event);
+              setRecentEvents((current) => current.map((item) => (item.id === event.id ? event : item)));
+            }}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -312,6 +353,11 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   const hiddenFromDefault = isSearch ? item.result.hidden_from_default : item.event.hidden_from_default;
   const relatedCount = isSearch ? item.result.related_count : item.event.related_count;
   const taskType = typeof metadata.task_type === "string" ? metadata.task_type : null;
+  const url = typeof metadata.url === "string" ? metadata.url : null;
+  const domain = typeof metadata.domain === "string" ? metadata.domain : null;
+  const summaryStatus = typeof metadata.summary_status === "string" ? metadata.summary_status : null;
+  const visitCount = typeof metadata.visit_count === "number" ? metadata.visit_count : null;
+  const pageContextMissing = metadata.page_context_missing === true;
 
   return (
     <button
@@ -328,10 +374,17 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
         {taskType ? <Badge variant="info">{taskType}</Badge> : null}
         {hiddenFromDefault ? <Badge variant="default">hidden by default</Badge> : null}
         {relatedCount ? <Badge variant="info">{relatedCount} related</Badge> : null}
+        {summaryStatus === "pending" ? <Badge variant="warning">summary pending</Badge> : null}
+        {pageContextMissing ? <Badge variant="warning">context missing</Badge> : null}
+        {metadata.text_excerpt_included === true ? <Badge variant="success">context captured</Badge> : null}
+        {visitCount && visitCount > 1 ? <Badge variant="info">visited {visitCount} times</Badge> : null}
         <Badge>{embeddingStatus}</Badge>
         <span className="ml-auto text-xs text-app-muted">{formatTimestamp(timestamp)}</span>
       </div>
       <h3 className="mt-3 text-sm font-semibold text-app-text">{title}</h3>
+      {url || domain ? (
+        <p className="mt-2 truncate text-xs text-violet-200">{url ?? domain}</p>
+      ) : null}
       {preview ? <p className="mt-2 text-sm leading-6 text-app-muted">{truncate(preview, 180)}</p> : null}
       {isSearch ? (
         <div className="mt-3 flex items-center gap-2 text-xs text-app-muted">
@@ -343,7 +396,15 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   );
 }
 
-function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () => void }) {
+function EventDetailPanel({
+  event,
+  onClose,
+  onEventUpdated,
+}: {
+  event: MemoryEvent;
+  onClose: () => void;
+  onEventUpdated: (event: MemoryEvent) => void;
+}) {
   const [related, setRelated] = useState<RelatedEvent[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
 
@@ -354,6 +415,14 @@ function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () 
       .catch(() => setRelated([]))
       .finally(() => setLoadingRelated(false));
   }, [event.id]);
+
+  const url = typeof event.metadata.url === "string" ? event.metadata.url : null;
+  const pageType = typeof event.metadata.page_type === "string" ? event.metadata.page_type : null;
+  const category = typeof event.metadata.category === "string" ? event.metadata.category : null;
+  const visitCount = typeof event.metadata.visit_count === "number" ? event.metadata.visit_count : null;
+  const firstSeen = typeof event.metadata.first_seen_at === "string" ? event.metadata.first_seen_at : null;
+  const lastSeen = typeof event.metadata.last_seen_at === "string" ? event.metadata.last_seen_at : null;
+  const summaryStatus = typeof event.metadata.summary_status === "string" ? event.metadata.summary_status : null;
 
   return (
     <Card className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-auto">
@@ -379,6 +448,20 @@ function EventDetailPanel({ event, onClose }: { event: MemoryEvent; onClose: () 
         <DetailRow label="indexable" value={event.is_indexable ? "yes" : "no"} />
         <DetailRow label="relationship eligible" value={event.is_relationship_eligible ? "yes" : "no"} />
         <DetailRow label="context eligible" value={event.is_context_eligible ? "yes" : "no"} />
+        {url ? (
+          <div className="text-sm">
+            <p className="text-xs uppercase text-app-muted">url</p>
+            <a href={url} target="_blank" rel="noreferrer" className="mt-2 block break-words text-violet-200 hover:text-violet-100">
+              {url}
+            </a>
+          </div>
+        ) : null}
+        {pageType ? <DetailRow label="page type" value={pageType} /> : null}
+        {category ? <DetailRow label="category" value={category} /> : null}
+        {visitCount ? <DetailRow label="visit count" value={String(visitCount)} /> : null}
+        {firstSeen ? <DetailRow label="first seen" value={formatTimestamp(firstSeen)} /> : null}
+        {lastSeen ? <DetailRow label="last seen" value={formatTimestamp(lastSeen)} /> : null}
+        {summaryStatus ? <DetailRow label="summary status" value={summaryStatus} /> : null}
         <div>
           <p className="text-xs uppercase text-app-muted">content</p>
           <p className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">

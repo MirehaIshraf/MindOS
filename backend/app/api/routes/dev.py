@@ -15,6 +15,7 @@ from app.services.relationship_service import relationship_service
 from app.services.embedding_index_service import embedding_index_service
 from app.services.connector_source_service import connector_source_service
 from app.services.memory_policy_service import get_memory_policy_for_event
+from app.services.browser_memory_service import browser_memory_service
 
 router = APIRouter(prefix="/dev", tags=["dev"])
 ingestion_service = IngestionService()
@@ -106,6 +107,16 @@ def clean_memory_indexes() -> dict[str, object]:
         "relationships_by_type": relationships["by_type"],
         "embeddings_reindexed": embeddings,
     }
+
+
+@router.post("/dedupe-browser-pages")
+def dedupe_browser_pages() -> dict[str, object]:
+    return browser_memory_service.dedupe_browser_pages()
+
+
+@router.post("/fix-browser-content-quality")
+def fix_browser_content_quality() -> dict[str, object]:
+    return browser_memory_service.fix_browser_content_quality()
 
 
 @router.delete("/clear-all")

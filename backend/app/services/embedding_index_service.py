@@ -102,6 +102,13 @@ class EmbeddingIndexService:
             embedding_model_registry_service.mark_index_stale()
         return {"status": "cleared", "updated_events": len(events)}
 
+    def delete_event_vector(self, event_id: str) -> bool:
+        try:
+            self._vector_store.delete_event(event_id)
+            return True
+        except Exception:
+            return False
+
     def get_embedding_status_summary(self) -> dict[str, int]:
         counts = {status.value: 0 for status in EmbeddingStatus}
         counts.update(self._event_repository.count_by_embedding_status())

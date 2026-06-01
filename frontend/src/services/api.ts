@@ -4,6 +4,7 @@ import type { AxiosError } from "axios";
 import type {
   BackendHealth,
   BackendStatus,
+  BrowserDedupeResponse,
   ChatMessagesResponse,
   ChatModelsResponse,
   ChatRequestPayload,
@@ -112,11 +113,13 @@ export async function getRecentEvents(
   limit = 20,
   category?: string,
   includeHidden = false,
+  offset = 0,
 ): Promise<RecentEventsResponse> {
   const response = await api.get<RecentEventsResponse>("/events/recent", {
     params: {
       source: source || undefined,
       limit,
+      offset,
       category: category || undefined,
       include_hidden: includeHidden,
     },
@@ -236,6 +239,16 @@ export async function applyMemoryPolicy(): Promise<{ status: string; updated: nu
 
 export async function cleanMemoryIndexes(): Promise<Record<string, unknown>> {
   const response = await api.post<Record<string, unknown>>("/dev/clean-memory-indexes", {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function dedupeBrowserPages(): Promise<BrowserDedupeResponse> {
+  const response = await api.post<BrowserDedupeResponse>("/dev/dedupe-browser-pages", {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function fixBrowserContentQuality(): Promise<{ updated: number }> {
+  const response = await api.post<{ updated: number }>("/dev/fix-browser-content-quality", {}, { timeout: 130000 });
   return response.data;
 }
 

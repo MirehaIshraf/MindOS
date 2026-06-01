@@ -17,6 +17,21 @@ class EventRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def find_event_by_metadata(self, source: str, event_type: str, key: str, value: str) -> Event | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_event_content_and_metadata(
+        self,
+        event_id: str,
+        content: str,
+        metadata: dict,
+        title: str | None = None,
+        timestamp=None,
+    ) -> Event | None:
+        raise NotImplementedError
+
+    @abstractmethod
     def list_recent_events(
         self,
         source: str | None = None,

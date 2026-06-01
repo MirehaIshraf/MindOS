@@ -31,11 +31,11 @@ Preferred browser event types:
 - Hidden/lightweight: `browser_page_seen`, `browser_search_query`.
 - Visible/important: `browser_page_captured`, `browser_page_summary`, `browser_page_saved`, `browser_selection_saved`, `browser_research_note`.
 
-`browser_page_captured` content should preserve the readable page context sent by the extension. Expected content shape includes page title, URL, domain, optional meta description, headings, context excerpt, and selected text when present. Metadata should include `url`, `domain`, `page_title`, `category`, `importance_reason`, `text_excerpt_included`, `captured_text_chars`, and `capture_mode`.
+`browser_page_captured` content should preserve the readable page context sent by the extension. Expected content shape includes page title, URL, domain, optional description, headings, readable context excerpt, and selected text when present. Metadata should include `url`, `normalized_url`, `normalized_url_hash`, `domain`, `page_title`, `page_type`, `category`, `importance_reason`, `text_excerpt_included`, `captured_text_chars`, `page_context_missing`, `extractor`, `extraction_diagnostics`, `capture_mode`, `visit_count`, `first_seen_at`, and `last_seen_at`. Extraction diagnostics should include hard DOM access fields such as `hardDomOk`, `bodyTextLength`, `documentElementTextLength`, `readyState`, `usedSelector`, `candidateLengths`, and `error` when available. Repeat captured pages are upserted by normalized URL hash. Placeholder failure text such as `No readable page text was extracted.` must not count as captured context; the backend validates this and marks the event as `page_context_missing=true`.
 
 ## Memory / Events
 
-- `GET /events/recent`: list recent events with optional source/category/hidden filters.
+- `GET /events/recent`: list recent events with optional source/category/hidden filters. Supports `limit`, `offset`, `include_hidden`, `source`, and `category`; response includes `events`, `total`, `limit`, `offset`, and `has_more`.
 - `GET /events/{event_id}`: fetch event detail.
 - `GET /events/{event_id}/related`: fetch related memory for an event.
 - `GET /search/event/{event_id}`: legacy/detail lookup through the search route.
@@ -138,6 +138,8 @@ Do not prioritize Tasks unless explicitly requested.
 - `DELETE /dev/clear-all`
 - `POST /dev/test-llm`
 - `GET /dev/state`
+- `POST /dev/dedupe-browser-pages`: merge duplicate visible browser page captures by normalized URL hash and remove duplicate relationships/vectors.
+- `POST /dev/fix-browser-content-quality`: correct existing browser captured-page metadata when placeholder extraction failure text was previously counted as real context.
 
 ## Error Rule
 

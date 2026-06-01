@@ -114,6 +114,10 @@ Before adding a new feature:
 - Browser data must stay user-controlled. Smart capture must avoid private/login/payment pages and noisy feeds.
 - Do not capture full browser page text automatically by default.
 - Browser smart capture must include readable context for important pages; do not store only URL/title unless extraction fails.
+- Browser extraction failure placeholders must not be counted as captured context. If readable text is missing, mark page context as missing instead of claiming an excerpt exists.
+- Debug browser extraction from the DOM pipeline first. Prove `chrome.scripting.executeScript` can read `document.body.innerText` before adding site-specific extractors.
+- Browser captured pages must be idempotent: repeat visits update/upsert one visible memory item by normalized URL instead of creating duplicate visible events.
+- Do not call an LLM automatically for every browser page. Browser capture should preserve readable text and diagnostics first; summarization is a later step.
 - Raw `browser_page_seen` events should stay hidden and non-indexable.
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.

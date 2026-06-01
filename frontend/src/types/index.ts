@@ -102,6 +102,9 @@ export type MemoryEvent = {
 export type RecentEventsResponse = {
   events: MemoryEvent[];
   total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 };
 
 export type IngestEventRequest = {
@@ -683,6 +686,12 @@ export type ClearAllDevDataResponse = {
   saved_sources_deleted: number;
   model_settings_cleared: boolean;
   warnings?: string[];
+};
+
+export type BrowserDedupeResponse = {
+  groups_found: number;
+  events_deleted: number;
+  events_updated: number;
 };
 
 export type GitImportPayload = {

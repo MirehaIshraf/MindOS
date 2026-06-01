@@ -306,6 +306,13 @@ class ContextBuilderService:
                 )
                 relationships.append(self._to_context_relationship(relationship))
 
+        direct_events = self._dedupe_browser_context_events(direct_events)
+        related_events = self._dedupe_browser_context_events(related_events, exclude_ids={event.event_id for event in direct_events})
+        relationships = [
+            relationship
+            for relationship in relationships
+            if any(event.event_id in {relationship.from_event_id, relationship.to_event_id} for event in related_events)
+        ]
         package = self._package(
             query=query,
             direct_events=direct_events,
@@ -319,6 +326,42 @@ class ContextBuilderService:
             },
         )
         return self._trim_package(package, profile_config=profile_config)
+
+    def _dedupe_browser_context_events(
+        self,
+        events: list[ContextEvent],
+        exclude_ids: set[str] | None = None,
+    ) -> list[ContextEvent]:
+        exclude_ids = exclude_ids or set()
+        selected: dict[str, ContextEvent] = {}
+        output: list[ContextEvent] = []
+        for event in events:
+            if event.event_id in exclude_ids:
+                continue
+            normalized_hash = event.metadata.get("normalized_url_hash") if event.source == "browser_extension" else None
+            if not isinstance(normalized_hash, str) or not normalized_hash:
+                output.append(event)
+                continue
+            current = selected.get(normalized_hash)
+            if current is None or self._context_event_rank(event) > self._context_event_rank(current):
+                selected[normalized_hash] = event
+        seen_hashes: set[str] = set()
+        deduped: list[ContextEvent] = []
+        for event in events:
+            normalized_hash = event.metadata.get("normalized_url_hash") if event.source == "browser_extension" else None
+            if not isinstance(normalized_hash, str) or not normalized_hash:
+                if event.event_id not in exclude_ids:
+                    deduped.append(event)
+                continue
+            if normalized_hash in seen_hashes or selected[normalized_hash].event_id != event.event_id:
+                continue
+            seen_hashes.add(normalized_hash)
+            deduped.append(event)
+        return deduped
+
+    def _context_event_rank(self, event: ContextEvent) -> tuple[int, int, str]:
+        summary_ready = 1 if event.metadata.get("summary_status") == "ready" else 0
+        return (summary_ready, len(event.content), event.timestamp.isoformat())
 
     def _search_query(self, query: str, intent: QueryIntent | None) -> str:
         if intent and intent.search_terms:
@@ -511,6 +554,12 @@ class ContextBuilderService:
         importance_reason = metadata.get("importance_reason")
         if isinstance(importance_reason, str) and importance_reason:
             lines.append(f"Importance: {importance_reason}")
+        page_type = metadata.get("page_type")
+        if isinstance(page_type, str) and page_type:
+            lines.append(f"Page type: {page_type}")
+        summary_status = metadata.get("summary_status")
+        if isinstance(summary_status, str) and summary_status:
+            lines.append(f"Summary status: {summary_status}")
         path = metadata.get("file_path") or metadata.get("path") or metadata.get("relative_path") or metadata.get("repo_path")
         if isinstance(path, str) and path:
             lines.append(f"Path: {path}")

@@ -1,7 +1,8 @@
 import { MindOSClient } from "./mindosClient.js";
-import { extractReadablePageContext, fallbackPageContext, formatCapturedPageContent } from "./pageExtractor.js";
+import { buildBrowserCapturedPageEvent } from "./eventBuilder.js";
+import { extractReadablePageContext, fallbackPageContext } from "./pageExtractor.js";
 import { classifyPage, domainFromUrl, isBlockedUrl, isPrivateOrSensitiveUrl } from "./privacy.js";
-import type { BrowserRuntime, BrowserSettings, ChromeTab, MindOSBrowserEvent, PageClassification, PageContext } from "./types";
+import type { BrowserRuntime, BrowserSettings, ChromeTab, MindOSBrowserEvent, PageClassification } from "./types";
 
 const EXTENSION_VERSION = "0.1.0";
 const SESSION_ID = crypto.randomUUID();
@@ -10,6 +11,7 @@ const RUNTIME_POLL_MS = 15_000;
 const HEARTBEAT_MS = 30_000;
 const CAPTURE_DUPLICATE_MS = 30 * 60_000;
 const SEARCH_DUPLICATE_MS = 10 * 60_000;
+const SEEN_DUPLICATE_MS = 5 * 60_000;
 let currentRuntime: BrowserRuntime | null = null;
 let runtimeCheckedAt = 0;
 let heartbeatAt = 0;
@@ -116,8 +118,16 @@ async function evaluateLiveTab(
       await sendSearchEventIfNeeded(client, settings, tab.url, classification);
       return;
     }
-    if (classification.importance === "important" && runtime.capture_important_pages) {
+    if (
+      classification.importance === "important" &&
+      runtime.capture_important_pages &&
+      ["content", "action"].includes(classification.pageType)
+    ) {
       await sendCapturedEventIfNeeded(client, settings, runtime, tab, classification);
+      return;
+    }
+    if (["homepage", "listing", "content", "action", "unknown"].includes(classification.pageType)) {
+      await sendSeenEventIfNeeded(client, settings, tab.url, tab.title ?? title, classification);
       return;
     }
     debug("Skip: page is not important enough for visible capture");
@@ -143,6 +153,23 @@ async function sendSearchEventIfNeeded(
   debug("Smart capture sent search query", query);
 }
 
+async function sendSeenEventIfNeeded(
+  client: MindOSClient,
+  settings: BrowserSettings,
+  url: string,
+  title: string,
+  classification: PageClassification,
+): Promise<void> {
+  const key = `browser_page_seen:${normalizeUrl(url)}`;
+  if (await wasRecentlySent(key, SEEN_DUPLICATE_MS)) {
+    debug("Skip duplicate page seen", url);
+    return;
+  }
+  await client.savePageEvent(buildSeenEvent(url, domainFromUrl(url), title, classification, settings));
+  await markSent(key);
+  debug("Smart capture sent hidden page seen", url);
+}
+
 async function sendCapturedEventIfNeeded(
   client: MindOSClient,
   settings: BrowserSettings,
@@ -162,7 +189,28 @@ async function sendCapturedEventIfNeeded(
   const context = runtime.capture_page_context
     ? await extractReadablePageContext(tab.id, maxChars)
     : fallbackPageContext(tab.title ?? domainFromUrl(tab.url), tab.url);
-  const event = buildCapturedEvent(tab.url, domainFromUrl(tab.url), tab.title ?? context.title, classification, context, settings, runtime);
+  debug("MindOS smart capture extraction:", {
+    url: tab.url,
+    ok: context.ok,
+    textChars: context.textChars,
+    usedSelector: context.diagnostics.usedSelector,
+    reason: context.diagnostics.reason,
+  });
+  const event = buildBrowserCapturedPageEvent({
+    info: {
+      url: tab.url,
+      domain: domainFromUrl(tab.url),
+      title: tab.title ?? context.title,
+    },
+    context,
+    settings,
+    sessionId: SESSION_ID,
+    captureMode: "smart",
+    classification,
+    runtime,
+    manualCapture: false,
+    eventType: "browser_page_captured",
+  });
   await client.savePageEvent(event);
   await markSent(key);
   debug("Smart capture sent captured page", { url: tab.url, textChars: context.textChars });
@@ -183,6 +231,8 @@ function buildSearchEvent(url: string, domain: string, classification: PageClass
       capture_mode: "smart",
       importance_reason: classification.reason,
       category: "search",
+      page_type: "search",
+      page_type_reason: classification.pageTypeReason,
     },
     timestamp: null,
     client_id: settings.clientId,
@@ -190,31 +240,27 @@ function buildSearchEvent(url: string, domain: string, classification: PageClass
   };
 }
 
-function buildCapturedEvent(
+function buildSeenEvent(
   url: string,
   domain: string,
   title: string,
   classification: PageClassification,
-  context: PageContext,
   settings: BrowserSettings,
-  runtime: BrowserRuntime,
 ): MindOSBrowserEvent {
   return {
     source: "browser_extension",
-    type: "browser_page_captured",
-    title: `Captured page: ${context.title || title || domain}`,
-    content: formatCapturedPageContent(context, { title, url, domain }),
+    type: "browser_page_seen",
+    title: `Visited page: ${title || domain || url}`,
+    content: `Visited page: ${title || url}`,
     metadata: {
       url,
       domain,
-      page_title: context.title || title,
+      page_title: title,
       capture_mode: "smart",
       importance_reason: classification.reason,
       category: classification.category,
-      text_excerpt_included: Boolean(context.mainText),
-      captured_text_chars: context.textChars,
-      capture_full_page_text: runtime.capture_full_page_text,
-      summary_status: "pending",
+      page_type: classification.pageType,
+      page_type_reason: classification.pageTypeReason,
     },
     timestamp: null,
     client_id: settings.clientId,

@@ -22,6 +22,32 @@ class MemoryEventRepository(EventRepository):
     def get_event_by_id(self, event_id: str) -> Event | None:
         return self._events.get(event_id)
 
+    def find_event_by_metadata(self, source: str, event_type: str, key: str, value: str) -> Event | None:
+        for event in self._events.values():
+            if event.source.value == source and event.type == event_type and str(event.metadata.get(key) or "") == value:
+                return event
+        return None
+
+    def update_event_content_and_metadata(
+        self,
+        event_id: str,
+        content: str,
+        metadata: dict,
+        title: str | None = None,
+        timestamp=None,
+    ) -> Event | None:
+        event = self._events.get(event_id)
+        if event is None:
+            return None
+        updates = {"content": content, "metadata": metadata}
+        if title is not None:
+            updates["title"] = title
+        if timestamp is not None:
+            updates["timestamp"] = timestamp
+        updated = event.model_copy(update=updates)
+        self._events[event_id] = updated
+        return updated
+
     def list_recent_events(
         self,
         source: str | None = None,

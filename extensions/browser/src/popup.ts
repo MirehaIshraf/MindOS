@@ -1,7 +1,8 @@
 import { MindOSClient } from "./mindosClient.js";
-import { extractReadablePageContext, fallbackPageContext, formatCapturedPageContent } from "./pageExtractor.js";
+import { buildBrowserCapturedPageEvent } from "./eventBuilder.js";
+import { extractReadablePageContext, fallbackPageContext, runHardDomExtractionTest } from "./pageExtractor.js";
 import { classifyPage, domainFromUrl, isBlockedUrl, normalizeSelection, shouldWarnForDomain } from "./privacy.js";
-import type { BrowserPageInfo, BrowserRuntime, BrowserSettings, ChromeTab, MindOSBrowserEvent, PageClassification, PageContext } from "./types";
+import type { BrowserPageInfo, BrowserRuntime, BrowserSettings, ChromeTab, PageClassification, PageContext } from "./types";
 
 const EXTENSION_VERSION = "0.1.0";
 const SESSION_ID = crypto.randomUUID();
@@ -20,6 +21,9 @@ const elements = {
   selectionPreview: byId("selectionPreview"),
   note: byId<HTMLTextAreaElement>("note"),
   backendUrl: byId<HTMLInputElement>("backendUrl"),
+  testExtraction: byId<HTMLButtonElement>("testExtraction"),
+  testDom: byId<HTMLButtonElement>("testDom"),
+  extractionResult: byId("extractionResult"),
   save: byId<HTMLButtonElement>("save"),
   capture: byId<HTMLButtonElement>("capture"),
   openSettings: byId<HTMLButtonElement>("openSettings"),
@@ -39,6 +43,8 @@ async function initialize(): Promise<void> {
   elements.backendUrl.value = settings.backendUrl;
   elements.backendUrl.addEventListener("change", () => void saveSettings());
   elements.testConnection.addEventListener("click", () => void testConnection(true));
+  elements.testDom.addEventListener("click", () => void testDomAccess());
+  elements.testExtraction.addEventListener("click", () => void testExtraction());
   elements.save.addEventListener("click", () => void saveCurrentPage());
   elements.capture.addEventListener("click", () => void captureCurrentPage());
   elements.openSettings.addEventListener("click", () => chrome.tabs.create({ url: "http://localhost:5173/connectors" }));
@@ -100,9 +106,26 @@ async function saveCurrentPage(): Promise<void> {
     const note = elements.note.value.trim();
     const selection = settings.includeSelection ? normalizeSelection(selectedText, runtime.max_content_chars) : "";
     const context = await extractCurrentPageContext(runtime, selection);
-    const event = buildEvent(pageInfo, note, selection, context);
+    console.log("MindOS capture extraction result:", {
+      ok: context.ok,
+      textChars: context.textChars,
+      extractor: context.extractor,
+      diagnostics: context.diagnostics,
+    });
+    const event = buildBrowserCapturedPageEvent({
+      info: pageInfo,
+      context,
+      settings,
+      sessionId: SESSION_ID,
+      captureMode: "manual",
+      classification: pageClassification,
+      runtime,
+      note,
+      selectedText: selection,
+      manualCapture: true,
+    });
     const eventId = await new MindOSClient(settings.backendUrl).savePageEvent(event);
-    if (!context.mainText && runtime.capture_page_context) {
+    if (!context.ok && runtime.capture_page_context) {
       showMessage(`Saved to MindOS (${eventId.slice(0, 8)}). Could not extract page text.`, "success");
       elements.note.value = "";
       return;
@@ -146,9 +169,27 @@ async function captureCurrentPage(): Promise<void> {
     const note = elements.note.value.trim();
     const selection = settings.includeSelection ? normalizeSelection(selectedText, runtime.max_content_chars) : "";
     const context = await extractCurrentPageContext(runtime, selection);
-    const event = buildCapturedEvent(pageInfo, note, selection, classification, context);
+    console.log("MindOS capture extraction result:", {
+      ok: context.ok,
+      textChars: context.textChars,
+      extractor: context.extractor,
+      diagnostics: context.diagnostics,
+    });
+    const event = buildBrowserCapturedPageEvent({
+      info: pageInfo,
+      context,
+      settings,
+      sessionId: SESSION_ID,
+      captureMode: "smart",
+      classification,
+      runtime,
+      note,
+      selectedText: selection,
+      manualCapture: true,
+      eventType: "browser_page_captured",
+    });
     const eventId = await new MindOSClient(settings.backendUrl).savePageEvent(event);
-    if (!context.mainText && runtime.capture_page_context) {
+    if (!context.ok && runtime.capture_page_context) {
       showMessage(`Captured in MindOS (${eventId.slice(0, 8)}). Could not extract page text.`, "success");
       elements.note.value = "";
       return;
@@ -162,58 +203,64 @@ async function captureCurrentPage(): Promise<void> {
   }
 }
 
-function buildEvent(info: BrowserPageInfo, note: string, selection: string, context: PageContext): MindOSBrowserEvent {
-  const hasSelection = Boolean(selection);
-  const content = formatCapturedPageContent(context, info, note);
-
-  return {
-    source: "browser_extension",
-    type: hasSelection ? "browser_selection_saved" : "browser_page_saved",
-    title: `Saved page: ${info.title || info.domain || info.url}`,
-    content,
-    metadata: {
-      url: info.url,
-      domain: info.domain,
-      page_title: info.title,
-      browser: browserName(),
-      selected_text_included: hasSelection,
-      user_note_included: Boolean(note),
-      capture_mode: "manual",
-      text_excerpt_included: Boolean(context.mainText),
-      captured_text_chars: context.textChars,
-    },
-    timestamp: null,
-    client_id: settings.clientId,
-    session_id: SESSION_ID,
-  };
+async function testExtraction(): Promise<void> {
+  elements.extractionResult.textContent = "Running extraction...";
+  try {
+    const tabId = await currentTabId();
+    const maxChars = runtime?.max_page_text_chars ?? settings.maxContentChars;
+    const context = await extractReadablePageContext(tabId, maxChars);
+    elements.extractionResult.textContent = JSON.stringify(
+      {
+        ok: context.ok,
+        extractor: context.extractor,
+        textChars: context.textChars,
+        headings: context.headings.length,
+        selectedSelector: context.diagnostics.selectedSelector ?? context.diagnostics.usedSelector,
+        hardDomOk: context.diagnostics.hardDomOk,
+        bodyTextLength: context.diagnostics.bodyTextLength,
+        documentElementTextLength: context.diagnostics.documentElementTextLength,
+        hasBody: context.diagnostics.hasBody,
+        readyState: context.diagnostics.readyState,
+        mainTextLength: context.diagnostics.mainTextLength,
+        candidateLengths: context.diagnostics.candidateLengths,
+        error: context.diagnostics.error,
+        reason: context.diagnostics.reason,
+        preview: context.mainText.slice(0, 300),
+      },
+      null,
+      2,
+    );
+  } catch (error) {
+    elements.extractionResult.textContent = error instanceof Error ? error.message : "Extraction failed.";
+  }
 }
 
-function buildCapturedEvent(info: BrowserPageInfo, note: string, selection: string, classification: PageClassification, context: PageContext): MindOSBrowserEvent {
-  const content = formatCapturedPageContent(context, info, note);
-
-  return {
-    source: "browser_extension",
-    type: "browser_page_captured",
-    title: `Captured page: ${info.title || info.domain || info.url}`,
-    content,
-    metadata: {
-      url: info.url,
-      domain: info.domain,
-      page_title: info.title,
-      browser: browserName(),
-      selected_text_included: Boolean(selection),
-      user_note_included: Boolean(note),
-      capture_mode: "smart",
-      importance_reason: classification.reason,
-      category: classification.category,
-      text_excerpt_included: Boolean(context.mainText),
-      captured_text_chars: context.textChars,
-      summary_status: "pending",
-    },
-    timestamp: null,
-    client_id: settings.clientId,
-    session_id: SESSION_ID,
-  };
+async function testDomAccess(): Promise<void> {
+  elements.extractionResult.textContent = "Testing DOM access...";
+  try {
+    const tabId = await currentTabId();
+    if (!tabId) {
+      elements.extractionResult.textContent = "DOM access failed.\nNo active tab id.";
+      return;
+    }
+    const result = await runHardDomExtractionTest(tabId);
+    const label = result.ok && result.bodyTextLength > 0 ? "DOM access works." : "DOM access failed.";
+    elements.extractionResult.textContent = `${label}\n${JSON.stringify(
+      {
+        ok: result.ok,
+        readyState: result.readyState,
+        bodyTextLength: result.bodyTextLength,
+        documentElementTextLength: result.documentElementTextLength,
+        hasBody: result.hasBody,
+        error: result.error,
+        preview: result.bodyPreview,
+      },
+      null,
+      2,
+    )}`;
+  } catch (error) {
+    elements.extractionResult.textContent = `DOM access failed.\n${error instanceof Error ? error.message : "Unknown error."}`;
+  }
 }
 
 async function extractCurrentPageContext(runtime: BrowserRuntime, selection: string): Promise<PageContext> {
@@ -334,8 +381,8 @@ function renderClassification(): void {
     elements.classificationReason.textContent = "Connect to MindOS to classify the current page.";
     return;
   }
-  elements.classification.textContent = pageClassification.importance.charAt(0).toUpperCase() + pageClassification.importance.slice(1);
-  elements.classificationReason.textContent = pageClassification.reason;
+  elements.classification.textContent = `${pageClassification.importance.charAt(0).toUpperCase()}${pageClassification.importance.slice(1)} / ${pageClassification.pageType}`;
+  elements.classificationReason.textContent = `${pageClassification.reason} ${pageClassification.pageTypeReason}`;
 }
 
 function renderSelection(selection: string): void {

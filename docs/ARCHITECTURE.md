@@ -71,6 +71,14 @@ Installed browser extension -> popup/background checks `/connectors/browser/runt
 
 Manual mode only sends events when the user clicks Save to MindOS. Smart mode observes the active tab without browser history permission, waits for dwell time, classifies pages with local deterministic rules, and sends only hidden search/history evidence or visible important work/research page events. Private/login/payment pages and noisy feeds are filtered. Heartbeats update connector status but do not create memory events.
 
+## Browser Memory Flow
+
+Browser extension -> classify page -> run visible-text extraction with diagnostics -> send `browser_page_captured` -> backend normalizes URL -> upsert one visible page memory per normalized URL -> index/retrieve clean browser memory.
+
+The browser extractor has a hard DOM access diagnostic followed by a generic visible-text path. Site-specific extractors should wait until basic DOM injection and readable text extraction are proven reliable.
+
+`browser_page_seen` and `browser_search_query` are lightweight hidden history. They support lookup questions without becoming normal visible memory or relationship noise. Repeat captures should update visit metadata instead of creating duplicate relationships or duplicate vector entries.
+
 ## Semantic Search Flow
 
 SQLite event -> embedding text builder -> Ollama embedding model -> ChromaDB vector index -> search query embedding -> vector results -> full event fetch from SQLite

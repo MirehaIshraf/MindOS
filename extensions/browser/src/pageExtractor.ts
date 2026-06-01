@@ -1,23 +1,269 @@
 import { domainFromUrl } from "./privacy.js";
-import type { PageContext } from "./types";
+import type { ChromeTab, HardDomExtractionResult, PageContext, PageExtractionResult } from "./types";
 
-export async function extractReadablePageContext(tabId: number | undefined, maxChars: number): Promise<PageContext> {
-  if (!tabId) {
-    return emptyContext();
+const RESTRICTED_URL_PREFIXES = ["chrome://", "edge://", "about:", "file:", "chrome-extension://"];
+
+export async function runHardDomExtractionTest(tabId: number): Promise<HardDomExtractionResult> {
+  const tab = await getTab(tabId);
+  const tabUrl = tab?.url ?? "";
+  if (isRestrictedUrl(tabUrl)) {
+    return {
+      ok: false,
+      title: tab?.title ?? "",
+      url: tabUrl,
+      readyState: "",
+      bodyTextLength: 0,
+      bodyPreview: "",
+      documentElementTextLength: 0,
+      hasBody: false,
+      error: "restricted_url",
+      tabId,
+    };
   }
+
   return new Promise((resolve) => {
-    chrome.scripting.executeScript<PageContext>(
+    chrome.scripting.executeScript<HardDomExtractionResult>(
       {
         target: { tabId },
-        func: extractInPage,
-        args: [Math.max(0, maxChars)],
+        func: () => {
+          try {
+            const bodyText = document.body?.innerText || "";
+            return {
+              ok: bodyText.length > 0,
+              title: document.title || "",
+              url: location.href || "",
+              readyState: document.readyState,
+              bodyTextLength: bodyText.length,
+              bodyPreview: bodyText.slice(0, 500),
+              documentElementTextLength: document.documentElement?.innerText?.length || 0,
+              hasBody: !!document.body,
+              error: null,
+            };
+          } catch (err) {
+            return {
+              ok: false,
+              title: "",
+              url: location.href || "",
+              readyState: document.readyState,
+              bodyTextLength: 0,
+              bodyPreview: "",
+              documentElementTextLength: 0,
+              hasBody: !!document.body,
+              error: String(err),
+            };
+          }
+        },
       },
-      (results) => {
-        if (chrome.runtime?.lastError) {
-          resolve(emptyContext());
+      (injectionResults) => {
+        const lastError = chrome.runtime?.lastError?.message;
+        if (lastError) {
+          resolve({
+            ok: false,
+            title: tab?.title ?? "",
+            url: tabUrl,
+            readyState: "",
+            bodyTextLength: 0,
+            bodyPreview: "",
+            documentElementTextLength: 0,
+            hasBody: false,
+            error: lastError,
+            tabId,
+          });
           return;
         }
-        resolve(results?.[0]?.result ?? emptyContext());
+        resolve({
+          ...(injectionResults?.[0]?.result ?? emptyHardDomResult(tabId, tabUrl)),
+          tabId,
+        });
+      },
+    );
+  });
+}
+
+export async function extractReadablePageContext(tabIdOrMaxChars: number | undefined, maybeMaxChars?: number): Promise<PageContext> {
+  const tabId = maybeMaxChars === undefined ? await activeTabId() : tabIdOrMaxChars;
+  const maxChars = maybeMaxChars === undefined ? Number(tabIdOrMaxChars ?? 4000) : maybeMaxChars;
+  console.debug("[MindOS] extraction started");
+
+  if (!tabId) {
+    return normalizeResult({
+      ...emptyResult(),
+      diagnostics: { error: "No active tab id.", reason: "missing_tab_id" },
+    });
+  }
+
+  const hardDom = await runHardDomExtractionTest(tabId);
+  if (!hardDom.ok || hardDom.bodyTextLength <= 0) {
+    const result = normalizeResult({
+      ...emptyResult(),
+      title: hardDom.title,
+      url: hardDom.url,
+      domain: domainFromUrl(hardDom.url),
+      diagnostics: {
+        reason: hardDom.error === "restricted_url" ? "restricted_url" : "hard_dom_access_failed",
+        hardDomOk: hardDom.ok,
+        bodyTextLength: hardDom.bodyTextLength,
+        documentElementTextLength: hardDom.documentElementTextLength,
+        hasBody: hardDom.hasBody,
+        readyState: hardDom.readyState,
+        bodyPreview: hardDom.bodyPreview,
+        error: hardDom.error,
+        tabId,
+        url: hardDom.url,
+      },
+    });
+    console.debug("[MindOS] extraction failed hard DOM test", result.diagnostics);
+    return result;
+  }
+
+  return new Promise((resolve) => {
+    chrome.scripting.executeScript<PageExtractionResult>(
+      {
+        target: { tabId },
+        args: [Math.max(0, maxChars), hardDom],
+        func: (limit: number, hardDomResult: HardDomExtractionResult) => {
+          try {
+            const normalizeText = (value: string): string => value.replace(/\s+/g, " ").trim();
+            const cloneText = (element: HTMLElement | null): string => {
+              if (!element) {
+                return "";
+              }
+              const clone = element.cloneNode(true) as HTMLElement;
+              clone
+                .querySelectorAll("script, style, noscript, svg, canvas, form, input, textarea, select, button")
+                .forEach((node) => node.remove());
+              return normalizeText(clone.innerText || clone.textContent || "");
+            };
+            const metaDescription =
+              document.querySelector<HTMLMetaElement>('meta[name="description"]')?.content?.trim() ||
+              document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.content?.trim() ||
+              null;
+            const headings = Array.from(document.querySelectorAll("h1, h2, h3"))
+              .map((node) => normalizeText(node.textContent || ""))
+              .filter(Boolean)
+              .slice(0, 20);
+            const selectors = ["main", "article", '[role="main"]', ".prose", ".markdown-body", "body"];
+            const candidates = selectors.map((selector) => {
+              const text = cloneText(document.querySelector<HTMLElement>(selector));
+              return { selector, length: text.length, text };
+            });
+            const candidateLengths = candidates.reduce<Record<string, number>>((lengths, candidate) => {
+              lengths[candidate.selector] = candidate.length;
+              return lengths;
+            }, {});
+            const best = candidates.reduce(
+              (current, candidate) => (candidate.length > current.length ? candidate : current),
+              { selector: null as string | null, length: 0, text: "" },
+            );
+            const selectedText = normalizeText(window.getSelection?.()?.toString() || "").slice(0, Math.max(0, Math.floor(limit / 2))) || null;
+            const textExcerpt = best.text.slice(0, limit);
+            const meaningfulLines = textExcerpt.split(/[.!?]\s+|\n+/).filter((line) => normalizeText(line).length > 20);
+            const ok = textExcerpt.length >= 120 || meaningfulLines.length >= 3;
+            return {
+              ok,
+              title: document.title || "",
+              url: location.href || "",
+              domain: location.hostname || "",
+              metaDescription,
+              headings,
+              textExcerpt: ok ? textExcerpt : "",
+              textChars: ok ? textExcerpt.length : 0,
+              selectedText,
+              extractor: "generic_visible_text",
+              diagnostics: {
+                reason: ok ? "generic_dom_text_extracted" : "no_meaningful_text_extracted",
+                hardDomOk: hardDomResult.ok,
+                bodyTextLength: hardDomResult.bodyTextLength,
+                documentElementTextLength: hardDomResult.documentElementTextLength,
+                hasBody: hardDomResult.hasBody,
+                readyState: hardDomResult.readyState,
+                bodyPreview: hardDomResult.bodyPreview,
+                usedSelector: best.selector,
+                selectedSelector: best.selector,
+                candidateLengths,
+                mainTextLength: candidates.find((candidate) => candidate.selector === "main")?.length ?? 0,
+                articleTextLength: candidates.find((candidate) => candidate.selector === "article")?.length ?? 0,
+                selectedTextLength: selectedText?.length ?? 0,
+                headingsCount: headings.length,
+                error: null,
+              },
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              title: document.title || "",
+              url: location.href || "",
+              domain: location.hostname || "",
+              metaDescription: null,
+              headings: [],
+              textExcerpt: "",
+              textChars: 0,
+              selectedText: null,
+              extractor: "generic_visible_text",
+              diagnostics: {
+                reason: "generic_extraction_error",
+                hardDomOk: hardDomResult.ok,
+                bodyTextLength: hardDomResult.bodyTextLength,
+                documentElementTextLength: hardDomResult.documentElementTextLength,
+                hasBody: hardDomResult.hasBody,
+                readyState: hardDomResult.readyState,
+                bodyPreview: hardDomResult.bodyPreview,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            };
+          }
+        },
+      },
+      (injectionResults) => {
+        const lastError = chrome.runtime?.lastError?.message;
+        if (lastError) {
+          const result = normalizeResult({
+            ...emptyResult(),
+            title: hardDom.title,
+            url: hardDom.url,
+            domain: domainFromUrl(hardDom.url),
+            diagnostics: {
+              reason: "execute_script_failed",
+              hardDomOk: hardDom.ok,
+              bodyTextLength: hardDom.bodyTextLength,
+              documentElementTextLength: hardDom.documentElementTextLength,
+              hasBody: hardDom.hasBody,
+              readyState: hardDom.readyState,
+              bodyPreview: hardDom.bodyPreview,
+              error: lastError,
+              tabId,
+              url: hardDom.url,
+            },
+          });
+          console.debug("[MindOS] extraction executeScript failed", result.diagnostics);
+          resolve(result);
+          return;
+        }
+
+        const result = normalizeResult(
+          injectionResults?.[0]?.result ?? {
+            ...emptyResult(),
+            diagnostics: {
+              reason: "missing_execute_script_result",
+              hardDomOk: hardDom.ok,
+              bodyTextLength: hardDom.bodyTextLength,
+              documentElementTextLength: hardDom.documentElementTextLength,
+              hasBody: hardDom.hasBody,
+              readyState: hardDom.readyState,
+              bodyPreview: hardDom.bodyPreview,
+              error: "missing_execute_script_result",
+              tabId,
+              url: hardDom.url,
+            },
+          },
+        );
+        console.debug("[MindOS] extraction complete", {
+          ok: result.ok,
+          textChars: result.textChars,
+          usedSelector: result.diagnostics.usedSelector,
+          error: result.diagnostics.error,
+        });
+        resolve(result);
       },
     );
   });
@@ -34,117 +280,86 @@ export function formatCapturedPageContent(context: PageContext, fallback: { titl
     note ? `Note:\n${note}` : "",
     context.metaDescription ? `Description:\n${context.metaDescription}` : "",
     context.headings.length ? `Headings:\n${context.headings.map((heading) => `- ${heading}`).join("\n")}` : "",
-    context.mainText ? `Context excerpt:\n${context.mainText}` : "",
+    context.ok && context.mainText ? `Readable context excerpt:\n${context.mainText}` : "Readable context excerpt:\nNo readable page text was extracted.",
     context.selectedText ? `Selected text:\n${context.selectedText}` : "",
   ];
   return parts.filter(Boolean).join("\n\n");
 }
 
-function emptyContext(): PageContext {
+export function fallbackPageContext(title: string, url: string): PageContext {
+  const domain = domainFromUrl(url);
+  return normalizeResult({
+    ...emptyResult(),
+    title,
+    url,
+    domain,
+    diagnostics: { reason: "capture_page_context_disabled_or_unavailable", usedSelector: null },
+  });
+}
+
+function activeTabId(): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0]?.id));
+  });
+}
+
+function getTab(tabId: number): Promise<ChromeTab | null> {
+  return new Promise((resolve) => {
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime?.lastError) {
+        resolve(null);
+        return;
+      }
+      resolve(tab ?? null);
+    });
+  });
+}
+
+function isRestrictedUrl(url: string): boolean {
+  return RESTRICTED_URL_PREFIXES.some((prefix) => url.toLowerCase().startsWith(prefix));
+}
+
+function emptyHardDomResult(tabId: number, url: string): HardDomExtractionResult {
   return {
+    ok: false,
+    title: "",
+    url,
+    readyState: "",
+    bodyTextLength: 0,
+    bodyPreview: "",
+    documentElementTextLength: 0,
+    hasBody: false,
+    error: "missing_injection_result",
+    tabId,
+  };
+}
+
+function emptyResult(): PageExtractionResult {
+  return {
+    ok: false,
     title: "",
     url: "",
     domain: "",
     metaDescription: null,
     headings: [],
-    selectedText: null,
-    mainText: "",
+    textExcerpt: "",
     textChars: 0,
+    selectedText: null,
+    extractor: "generic_visible_text",
+    diagnostics: { reason: "empty_result" },
   };
 }
 
-function extractInPage(limit: number): PageContext {
-  const clone = document.body?.cloneNode(true) as HTMLElement | null;
-  const title = document.title || "";
-  const url = window.location.href;
-  const domain = new URL(url).hostname;
-  const metaDescription = document.querySelector<HTMLMetaElement>('meta[name="description"], meta[property="og:description"]')?.content?.trim() || null;
-  const selection = window.getSelection?.();
-  const selectedText = normalizeText(selection?.toString() || "").slice(0, Math.min(limit, 2000)) || null;
-
-  if (!clone) {
-    return { title, url, domain, metaDescription, headings: [], selectedText, mainText: "", textChars: 0 };
-  }
-
-  clone.querySelectorAll("script, style, noscript, svg, canvas, nav, footer, aside, header, form, input, textarea, select, button").forEach((node) => node.remove());
-
-  const root =
-    firstUsefulElement(clone, [
-      "main",
-      "article",
-      '[role="main"]',
-      ".prose",
-      '[data-testid*="readme" i]',
-      '[data-testid*="dataset" i]',
-      '[data-testid*="model" i]',
-      'div[class*="markdown" i]',
-      'div[class*="prose" i]',
-    ]) ?? clone;
-
-  const headings = Array.from(root.querySelectorAll("h1, h2, h3"))
-    .map((node) => normalizeText(node.textContent || ""))
-    .filter(Boolean)
-    .slice(0, 12);
-
-  const candidates = Array.from(root.querySelectorAll("p, li, pre, code, table, h1, h2, h3, h4, section, div"))
-    .filter(isVisibleElement)
-    .map((node) => normalizeText(node.textContent || ""))
-    .filter((text) => text.length > 30);
-
-  const deduped: string[] = [];
-  for (const text of candidates) {
-    if (!deduped.some((existing) => existing === text || existing.includes(text))) {
-      deduped.push(text);
-    }
-    if (deduped.join("\n\n").length >= limit) {
-      break;
-    }
-  }
-  const mainText = deduped.join("\n\n").slice(0, limit);
+function normalizeResult(result: PageExtractionResult): PageContext {
+  const textExcerpt = result.ok ? result.textExcerpt || "" : "";
   return {
-    title,
-    url,
-    domain,
-    metaDescription,
-    headings,
-    selectedText,
-    mainText,
-    textChars: mainText.length,
-  };
-}
-
-function firstUsefulElement(root: HTMLElement, selectors: string[]): HTMLElement | null {
-  let best: HTMLElement | null = null;
-  for (const selector of selectors) {
-    const element = root.querySelector<HTMLElement>(selector);
-    if (element && normalizeText(element.textContent || "").length > normalizeText(best?.textContent || "").length) {
-      best = element;
-    }
-  }
-  return best;
-}
-
-function isVisibleElement(element: Element): boolean {
-  const htmlElement = element as HTMLElement;
-  if (htmlElement.hidden || htmlElement.getAttribute("aria-hidden") === "true") {
-    return false;
-  }
-  return true;
-}
-
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-export function fallbackPageContext(title: string, url: string): PageContext {
-  return {
-    title,
-    url,
-    domain: domainFromUrl(url),
-    metaDescription: null,
-    headings: [],
-    selectedText: null,
-    mainText: "",
-    textChars: 0,
+    ...result,
+    metaDescription: result.metaDescription ?? null,
+    selectedText: result.selectedText ?? null,
+    textExcerpt,
+    mainText: textExcerpt,
+    textChars: result.ok ? result.textChars ?? textExcerpt.length : 0,
+    extractor: "generic_visible_text",
+    diagnostics: result.diagnostics ?? { reason: "missing_diagnostics" },
   };
 }

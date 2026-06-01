@@ -9,6 +9,7 @@ The MindOS Browser Connector lets you save useful pages, notes, selected text, a
 - Optional note you type before saving.
 - In Smart capture mode, search queries and important developer/research pages after a short active dwell time.
 - Readable page context for captured important pages, including headings and visible text excerpts when extraction succeeds.
+- Repeat visits to the same important page update the same MindOS memory item instead of creating duplicate visible captures.
 
 ## What It Does Not Capture
 
@@ -36,7 +37,15 @@ Blocked page schemes include `chrome://`, `edge://`, `about:`, and `file:`. Sens
 
 Change the mode from MindOS -> Connectors -> Browser -> Configure.
 
-Important pages include developer docs, GitHub, patents/research pages, and Hugging Face model/dataset/docs pages. Manual capture uses the same readable page context extractor as smart capture.
+Important pages include developer docs, GitHub, patents/research pages, and Hugging Face model/dataset/docs pages. Manual capture uses the same generic visible-text extraction path as smart capture.
+
+Captured pages include meta description, headings, selected text, readable visible text excerpts, and extraction diagnostics when available. MindOS does not run an LLM automatically for browser pages.
+
+If extraction fails, the event can still save the page title and URL, but MindOS marks it as `page_context_missing=true` and does not treat the placeholder message as captured page text or pending summary material.
+
+Use **Debug extraction** -> **Test DOM access** in the popup first. This runs a direct `chrome.scripting.executeScript` check against `document.body.innerText`. If `bodyTextLength` is `0` or an error is shown, reload the extension in `chrome://extensions`, check permissions, and confirm the page is not a restricted browser/internal URL.
+
+Use **Debug extraction** -> **Test actual capture extraction** after DOM access works. This runs the same `extractReadablePageContext()` path used by manual and smart capture, and shows the readable extractor result, selected selector, candidate lengths, preview, and any extraction error. Placeholder failure text does not count as captured content.
 
 ## Install Locally
 
@@ -53,6 +62,8 @@ Then in Chrome or Edge:
 2. Enable Developer mode.
 3. Choose **Load unpacked**.
 4. Select `extensions/browser`.
+
+After rebuilding, go to `chrome://extensions` and click **Reload** on the MindOS extension before testing. Reopen the target page after reload so the current build and permissions are active.
 
 ## Demo Flow
 
@@ -87,6 +98,8 @@ Smart capture settings are also controlled from MindOS:
 - Ignored domains
 - Important domains
 
+Smart capture needs host permission for normal `http://` and `https://` pages so it can run the same safe DOM extraction used by manual capture. The extension still does not request browser history, cookies, or webRequest permissions.
+
 ## Build Commands
 
 ```bash
@@ -102,3 +115,4 @@ The zip command creates `mindos-browser-0.1.0.zip` for manual distribution.
 - **Offline**: confirm MindOS backend is running at the configured backend URL.
 - **Connector disabled**: toggle Browser on from the MindOS Connectors page.
 - **Cannot save this page**: browser-internal and local file pages are intentionally blocked.
+- **Could not extract page text**: open the popup, expand **Debug extraction**, and click **Test DOM access**. If `bodyTextLength` is `0` or an error appears, reload the extension in `chrome://extensions`, check page permissions, and avoid restricted pages such as `chrome://`, `edge://`, `about:`, `file:`, and extension pages. If DOM access works but **Test actual capture extraction** has no text, the generic extractor logic needs debugging.

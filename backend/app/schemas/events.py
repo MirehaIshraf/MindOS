@@ -27,6 +27,9 @@ class EventResponse(BaseModel):
 class RecentEventsResponse(BaseModel):
     events: list[EventResponse]
     total: int
+    limit: int = 20
+    offset: int = 0
+    has_more: bool = False
 
 
 class RelationshipResponse(BaseModel):

@@ -13,10 +13,18 @@ def recent_events(
     source: str | None = None,
     category: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     include_hidden: bool = False,
 ) -> RecentEventsResponse:
-    events = service.list_recent_events(source=source, category=category, limit=limit, include_hidden=include_hidden)
-    return RecentEventsResponse(events=[service.to_event_response(event) for event in events], total=len(events))
+    events = service.list_recent_events(source=source, category=category, limit=limit, offset=offset, include_hidden=include_hidden)
+    total = service.count_filtered_events(source=source, category=category, include_hidden=include_hidden)
+    return RecentEventsResponse(
+        events=[service.to_event_response(event) for event in events],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(events) < total,
+    )
 
 
 @router.get("/{event_id}", response_model=EventResponse)

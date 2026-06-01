@@ -37,6 +37,35 @@ class SQLiteEventRepository(EventRepository):
             record = session.get(EventRecord, event_id)
             return self._to_event(record) if record else None
 
+    def find_event_by_metadata(self, source: str, event_type: str, key: str, value: str) -> Event | None:
+        for event in self.list_all_events(include_hidden=True):
+            if event.source.value == source and event.type == event_type and str(event.metadata.get(key) or "") == value:
+                return event
+        return None
+
+    def update_event_content_and_metadata(
+        self,
+        event_id: str,
+        content: str,
+        metadata: dict,
+        title: str | None = None,
+        timestamp=None,
+    ) -> Event | None:
+        with self._session_factory() as session:
+            record = session.get(EventRecord, event_id)
+            if record is None:
+                return None
+            record.content = content
+            record.metadata_json = dumps_json(metadata)
+            if title is not None:
+                record.title = title
+            if timestamp is not None:
+                record.timestamp = timestamp
+            session.commit()
+            session.refresh(record)
+            event = self._to_event(record)
+        return event
+
     def list_recent_events(
         self,
         source: str | None = None,

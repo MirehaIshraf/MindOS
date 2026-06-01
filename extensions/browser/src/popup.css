@@ -79,11 +79,31 @@ input {
 .selection,
 .warning,
 .settings,
+.debug,
 .mode {
   background: #111113;
   border: 1px solid #27272a;
   border-radius: 8px;
   padding: 10px;
+}
+
+.debug button {
+  margin-top: 8px;
+}
+
+#extractionResult {
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  color: #d4d4d8;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .mode {

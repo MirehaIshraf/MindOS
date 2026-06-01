@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlparse
 
 from app.core.dependencies import get_event_repository
 from app.domain.enums import EmbeddingStatus, EventSource
@@ -12,7 +11,7 @@ from app.schemas.ingest import (
     ExternalIngestResponse,
 )
 from app.services.connector_registry_service import connector_registry_service
-from app.services.browser_importance_service import browser_importance_service
+from app.services.browser_memory_service import browser_memory_service
 from app.services.relationship_service import relationship_service
 
 SUPPORTED_EXTERNAL_SOURCES = [
@@ -147,11 +146,18 @@ class ExternalIngestService:
         metadata = self._normalize_metadata(source_value, request)
         content = request.content or ""
         if source_value == "browser_extension":
-            event_type, metadata, content = self._prepare_browser_event(event_type, metadata, content)
+            title = request.title.strip() or self._default_title(source_value, event_type, metadata)
+            event = browser_memory_service.ingest_browser_event(
+                event_type=event_type,
+                title=title,
+                content=content,
+                metadata=metadata,
+                timestamp=request.timestamp or datetime.now(timezone.utc),
+                config=connector_registry_service.get_config_dict("browser"),
+            )
+            self._record_connector_seen(source_value, event.metadata)
+            return event
         title = request.title.strip() or self._default_title(source_value, event_type, metadata)
-        if event_type == "browser_search_query" and metadata.get("query"):
-            title = f"Searched: {metadata['query']}"
-            content = f"Search query: {metadata['query']}"
         event = self._event_repository.create_event(
             {
                 "source": EventSource(source_value),
@@ -169,59 +175,6 @@ class ExternalIngestService:
             pass
         self._record_connector_seen(source_value, metadata)
         return event
-
-    def _prepare_browser_event(self, event_type: str, metadata: dict[str, Any], content: str) -> tuple[str, dict[str, Any], str]:
-        config = {**connector_registry_service.get_config_dict("browser")}
-        capture_mode = str(config.get("capture_mode") or "manual")
-        url = str(metadata.get("url") or "")
-        title = str(metadata.get("page_title") or "")
-        metadata.setdefault("capture_mode", capture_mode)
-        metadata.setdefault("ignored_domains", config.get("ignored_domains", []))
-        metadata.setdefault("important_domains", config.get("important_domains", []))
-        if capture_mode == "off":
-            raise PermissionError("Browser capture mode is off.")
-
-        importance = browser_importance_service.classify_browser_page(url, title, content[:1000], metadata)
-        metadata["importance"] = importance.importance
-        metadata["importance_reason"] = importance.reason
-        metadata["category"] = importance.category
-
-        if importance.importance == "private":
-            raise PermissionError("Browser page blocked by privacy rules.")
-
-        if event_type == "browser_search_query":
-            if not bool(config.get("capture_search_queries", True)):
-                raise PermissionError("Browser search query capture is disabled.")
-            query, search_engine = browser_importance_service.extract_search_query(url)
-            if query:
-                metadata["query"] = query
-                metadata["search_engine"] = search_engine
-            if not metadata.get("query"):
-                raise ValueError("browser_search_query requires a query.")
-            return event_type, metadata, content
-
-        if event_type == "browser_page_seen":
-            if capture_mode != "smart":
-                raise PermissionError("Browser smart history capture is disabled.")
-            return event_type, metadata, content
-
-        if event_type == "browser_page_captured":
-            if capture_mode != "smart" or not bool(config.get("capture_important_pages", False)):
-                raise PermissionError("Browser important page capture is disabled.")
-            if importance.importance in {"noisy", "normal"}:
-                metadata["downgraded_from"] = "browser_page_captured"
-                return "browser_page_seen", metadata, content
-            metadata.setdefault("summary_status", "pending")
-            metadata.setdefault("url", url)
-            metadata.setdefault("domain", _domain_from_url(url))
-            metadata.setdefault("page_title", title)
-            metadata["captured_text_chars"] = int(metadata.get("captured_text_chars") or _readable_text_chars(content))
-            metadata["text_excerpt_included"] = bool(metadata.get("text_excerpt_included") or metadata["captured_text_chars"] > 120)
-            if metadata["captured_text_chars"] < 120 and not metadata["text_excerpt_included"]:
-                metadata["page_context_missing"] = True
-            return event_type, metadata, content
-
-        return event_type, metadata, content
 
     def _ensure_connector_enabled(self, source: str) -> None:
         connector_id = EXTERNAL_SOURCE_TO_CONNECTOR.get(source)
@@ -311,21 +264,6 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _domain_from_url(url: str) -> str:
-    try:
-        return urlparse(url).hostname or ""
-    except Exception:
-        return ""
-
-
-def _readable_text_chars(content: str) -> int:
-    lowered = content.lower()
-    markers = ["context excerpt:", "selected text:", "description:"]
-    if not any(marker in lowered for marker in markers):
-        return 0
-    return len(content.strip())
 
 
 external_ingest_service = ExternalIngestService()

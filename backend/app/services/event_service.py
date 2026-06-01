@@ -15,8 +15,10 @@ class EventService:
         category: str | None = None,
         limit: int = 20,
         include_hidden: bool = False,
+        offset: int = 0,
     ) -> list[Event]:
         safe_limit = max(1, min(limit, 100))
+        safe_offset = max(0, offset)
         events = self._event_repository.list_all_events()
         filtered = [
             event
@@ -24,7 +26,19 @@ class EventService:
             if self._matches_filters(event=event, source=source, category=category, include_hidden=include_hidden)
         ]
         filtered.sort(key=lambda event: event.timestamp, reverse=True)
-        return filtered[:safe_limit]
+        return filtered[safe_offset : safe_offset + safe_limit]
+
+    def count_filtered_events(
+        self,
+        source: str | None = None,
+        category: str | None = None,
+        include_hidden: bool = False,
+    ) -> int:
+        return sum(
+            1
+            for event in self._event_repository.list_all_events()
+            if self._matches_filters(event=event, source=source, category=category, include_hidden=include_hidden)
+        )
 
     def get_event_by_id(self, event_id: str) -> Event | None:
         return self._event_repository.get_event_by_id(event_id)
