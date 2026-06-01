@@ -513,6 +513,90 @@ export type TaskHistoryResponse = {
   total: number;
 };
 
+export type FileSnapshotItem = {
+  name: string;
+  path: string;
+  relative_path: string;
+  extension: string;
+  size_bytes: number;
+  modified_at: string;
+  is_dir: boolean;
+  is_hidden: boolean;
+};
+
+export type FileSnapshotResponse = {
+  root_path: string;
+  files: FileSnapshotItem[];
+  folders: FileSnapshotItem[];
+  total_files: number;
+  total_folders: number;
+  warnings: string[];
+};
+
+export type FileOperation = {
+  type: "create_folder" | "move_file" | "copy_file" | "rename_file";
+  from_path?: string | null;
+  to_path?: string | null;
+  path?: string | null;
+  reason: string;
+};
+
+export type FileTaskPlan = {
+  task_id: string;
+  task_type: string;
+  root_path: string;
+  instruction: string;
+  summary: string;
+  risk_level: "low" | "medium" | "high";
+  requires_confirmation: boolean;
+  operations: FileOperation[];
+  skipped: Array<{ path: string; reason: string }>;
+  warnings: string[];
+  blocked_reasons: string[];
+  status: "draft" | "awaiting_confirmation" | "blocked" | "completed" | "failed" | "partial" | "undone";
+  planner_model?: string | null;
+  planner_provider?: string | null;
+  planner_warning?: string | null;
+};
+
+export type FileTaskExecutionResult = {
+  task_id: string;
+  status: "completed" | "failed" | "partial" | "cancelled";
+  created_folders: number;
+  moved_files: number;
+  copied_files: number;
+  renamed_files: number;
+  skipped: Array<{ path: string; reason: string }>;
+  errors: string[];
+  undo_available: boolean;
+};
+
+export type FileTaskUndoResult = {
+  task_id: string;
+  status: "undone" | "partial" | "failed";
+  undone_operations: number;
+  errors: string[];
+};
+
+export type FileTaskRecord = {
+  task_id: string;
+  root_path: string;
+  instruction: string;
+  status: string;
+  plan: FileTaskPlan;
+  execution?: FileTaskExecutionResult | null;
+  undo: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+  executed_at?: string | null;
+  undone_at?: string | null;
+};
+
+export type FileTaskRecentResponse = {
+  tasks: FileTaskRecord[];
+  total: number;
+};
+
 export type Connector = {
   id: string;
   name: string;

@@ -68,6 +68,23 @@ class TaskRecord(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class FileTaskRecord(Base):
+    __tablename__ = "file_tasks"
+
+    id = Column(String, primary_key=True)
+    root_path = Column(Text, nullable=False)
+    instruction = Column(Text, nullable=False)
+    status = Column(String, nullable=False, index=True)
+    plan_json = Column(Text, default="{}")
+    validation_json = Column(Text, default="{}")
+    execution_json = Column(Text, nullable=True)
+    undo_json = Column(Text, default="[]")
+    created_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+    undone_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class PlaybookRecord(Base):
     __tablename__ = "playbooks"
 

@@ -28,7 +28,7 @@ Main MVP modules:
 - Settings
 - Dev
 
-Tasks are experimental/paused. The backend task routes still exist, and the frontend Tasks page still exists, but Tasks are no longer a main sidebar item.
+Tasks are experimental/paused except for the File System Task Adapter MVP. The file adapter supports local file organization with plan/preview/confirm/execute/undo. Other task adapters remain paused/mock-only.
 
 ## Current Data Sources
 
@@ -105,4 +105,4 @@ Final task architecture:
 
 User asks task -> FastAPI retrieves context -> model drafts plan -> FastAPI validates -> user confirms -> FastAPI executes allowed tool
 
-This is paused for now. Do not prioritize task execution until the data collection and memory layers are stable.
+The File System Task Adapter is the first safe MVP version of this architecture. It only allows local `create_folder`, `move_file`, `copy_file`, and `rename_file` operations inside a selected root folder after confirmation. Do not extend this to external task execution until explicitly requested.

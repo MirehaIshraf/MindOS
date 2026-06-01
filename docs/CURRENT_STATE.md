@@ -23,7 +23,7 @@ Last updated: 2026-06-01
 | Embeddings | Working/Partial | Uses Ollama + ChromaDB; optional systems fail over to keyword search. |
 | Relationships | Working/Partial | Stored in SQLite; quality and noise reduction need continued tuning. |
 | Chat | Working | Uses ConversationContextService, QueryIntentService, ContextBuilderService, and selected model through ModelRouter. |
-| Tasks | Paused/Experimental | Backend and page still exist, but product priority is data collection. |
+| Tasks | Partial | File System Task Adapter MVP is active; other task adapters remain paused/mock-only. |
 | File connector | Working | Path-based folder import with clear events. |
 | Logs connector | Working | Path-based log import with clear events. |
 | Local Git connector | Working | Read-only local Git import with clear events. |
@@ -44,7 +44,7 @@ Last updated: 2026-06-01
 | Connectors | Working/Partial | Registry-driven cards with toggle/config/status; manual imports and saved sources remain in configure panels. |
 | Settings | Working/Partial | Chat and embedding model settings. |
 | Dev | Working/Partial | Debug page; should use `/status` as source of truth. |
-| Tasks | Paused/Experimental | Route/page exists but is hidden from main sidebar. |
+| Tasks | Partial | File System Task panel supports scan, prepare, confirmation execute, and undo; older external-task flows remain mock/experimental. |
 | Playbooks | Placeholder | Route/page exists but not a current priority. |
 
 ## Implemented Connectors
@@ -69,7 +69,8 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 
 ## Current Known Bugs / Risks
 
-- Tasks module is paused/unstable. Do not prioritize task execution now.
+- Tasks module is mostly paused. Only the File System Task Adapter MVP is active, and it only allows `create_folder`, `move_file`, `copy_file`, and `rename_file` after confirmation.
+- File tasks must not delete, overwrite, run shell commands, read file contents, move outside the selected root, or touch system folders.
 - Dev page has historically had status flicker/false unavailable issues. It should use `/status` as source of truth.
 - Raw chat events should not be indexed or related. Use memory policy and clean indexes if old data polluted Chroma/relationships.
 - Model and embedding registries must not mix chat and embedding models.

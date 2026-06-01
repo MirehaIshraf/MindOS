@@ -134,4 +134,6 @@ Before adding a new feature:
 
 ## Current Known Direction
 
-Tasks are paused. Future direction may include OpenClaw/Hermes-style agentic execution, but only after the data collection and memory layers are stable.
+Tasks are mostly paused, except the File System Task Adapter MVP. File tasks may use the selected LLM only to draft a plan; FastAPI validates every operation, shows a preview, requires user confirmation, executes through `FileAdapter`, and stores an undo log. Do not add delete, overwrite, shell command, external API, email, Jira, GitHub, browser, or VSCode task adapters unless explicitly requested.
+
+Future direction may include OpenClaw/Hermes-style agentic execution, but only after the data collection and memory layers are stable.

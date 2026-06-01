@@ -90,3 +90,9 @@ Pending captured pages can be summarized manually from Memory through `POST /eve
 SQLite event -> embedding text builder -> Ollama embedding model -> ChromaDB vector index -> search query embedding -> vector results -> full event fetch from SQLite
 
 SQLite remains source of truth. ChromaDB stores vectors and lightweight metadata only.
+
+## File Task Flow
+
+User instruction -> folder snapshot -> LLM planner with deterministic fallback -> safety validator -> task preview -> user confirmation -> `FileAdapter` execution -> undo log -> memory event.
+
+The File System Task Adapter is the only active task adapter. It scans a user-selected root folder without reading file contents, validates resolved absolute paths, and only executes `create_folder`, `move_file`, `copy_file`, and `rename_file` operations inside the selected root. It never deletes files, overwrites destinations, runs shell commands, or executes files. Undo is limited to safe reverse moves/renames and removing created folders only when empty.

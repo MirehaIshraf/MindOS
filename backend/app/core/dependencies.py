@@ -1,20 +1,23 @@
 from app.core.config import get_settings
-from app.repositories.base import ChatRepository, ConnectorSourceRepository, EventRepository, PlaybookRepository, RelationshipRepository, TaskRepository
+from app.repositories.base import ChatRepository, ConnectorSourceRepository, EventRepository, FileTaskRepository, PlaybookRepository, RelationshipRepository, TaskRepository
 from app.repositories.memory_chat_repository import get_memory_chat_repository
 from app.repositories.memory_connector_source_repository import get_memory_connector_source_repository
 from app.repositories.memory_event_repository import get_memory_event_repository
+from app.repositories.memory_file_task_repository import get_memory_file_task_repository
 from app.repositories.memory_playbook_repository import get_memory_playbook_repository
 from app.repositories.memory_relationship_repository import get_memory_relationship_repository
 from app.repositories.memory_task_repository import get_memory_task_repository
 from app.repositories.sqlite_chat_repository import SQLiteChatRepository
 from app.repositories.sqlite_connector_source_repository import SQLiteConnectorSourceRepository
 from app.repositories.sqlite_event_repository import SQLiteEventRepository
+from app.repositories.sqlite_file_task_repository import SQLiteFileTaskRepository
 from app.repositories.sqlite_playbook_repository import SQLitePlaybookRepository
 from app.repositories.sqlite_relationship_repository import SQLiteRelationshipRepository
 from app.repositories.sqlite_task_repository import SQLiteTaskRepository
 
 _event_repository: EventRepository | None = None
 _task_repository: TaskRepository | None = None
+_file_task_repository: FileTaskRepository | None = None
 _chat_repository: ChatRepository | None = None
 _playbook_repository: PlaybookRepository | None = None
 _relationship_repository: RelationshipRepository | None = None
@@ -37,6 +40,13 @@ def get_task_repository() -> TaskRepository:
     if _task_repository is None:
         _task_repository = SQLiteTaskRepository() if use_sqlite() else get_memory_task_repository()
     return _task_repository
+
+
+def get_file_task_repository() -> FileTaskRepository:
+    global _file_task_repository
+    if _file_task_repository is None:
+        _file_task_repository = SQLiteFileTaskRepository() if use_sqlite() else get_memory_file_task_repository()
+    return _file_task_repository
 
 
 def get_chat_repository() -> ChatRepository:

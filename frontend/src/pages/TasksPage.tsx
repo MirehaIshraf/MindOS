@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, ClipboardCheck, History, Send } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, FolderOpen, History, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -7,8 +7,19 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
 import { TaskPreviewDetails } from "../components/tasks/TaskPreviewDetails";
-import { cancelTask, confirmTask, executeTask, getErrorMessage, getPendingTasks, getTaskHistory } from "../services/api";
-import type { TaskHistoryItem, TaskResponse } from "../types";
+import {
+  cancelTask,
+  confirmTask,
+  executeFileTask,
+  executeTask,
+  getErrorMessage,
+  getPendingTasks,
+  getTaskHistory,
+  prepareFileTask,
+  scanFileTask,
+  undoFileTask,
+} from "../services/api";
+import type { FileOperation, FileSnapshotResponse, FileTaskExecutionResult, FileTaskPlan, FileTaskUndoResult, TaskHistoryItem, TaskResponse } from "../types";
 
 const exampleTasks = [
   "Create a Jira ticket for the login bug",
@@ -127,7 +138,7 @@ export function TasksPage() {
       </header>
 
       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-        Development mode: task actions are mocked. Real integrations will require confirmation later.
+        File System tasks can perform real local file moves only after confirmation. Other task actions remain mocked.
       </div>
 
       {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
@@ -139,6 +150,8 @@ export function TasksPage() {
           </pre>
         </details>
       ) : null}
+
+      <FileSystemTaskPanel />
 
       <Card className="space-y-4">
         <textarea
@@ -228,6 +241,298 @@ export function TasksPage() {
       </button>
     </div>
   );
+}
+
+function FileSystemTaskPanel() {
+  const [rootPath, setRootPath] = useState("");
+  const [instruction, setInstruction] = useState("Organize this folder by file type");
+  const [maxDepth, setMaxDepth] = useState(2);
+  const [maxFiles, setMaxFiles] = useState(500);
+  const [snapshot, setSnapshot] = useState<FileSnapshotResponse | null>(null);
+  const [plan, setPlan] = useState<FileTaskPlan | null>(null);
+  const [result, setResult] = useState<FileTaskExecutionResult | null>(null);
+  const [undoResult, setUndoResult] = useState<FileTaskUndoResult | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const operationGroups = plan ? groupFileOperations(plan.operations) : null;
+  const canExecute = Boolean(plan && plan.status !== "blocked" && plan.operations.length > 0);
+
+  async function handleScan() {
+    setLoading("scan");
+    setError(null);
+    try {
+      const response = await scanFileTask({ root_path: rootPath, max_depth: maxDepth, max_files: maxFiles });
+      setSnapshot(response);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handlePrepare() {
+    setLoading("prepare");
+    setError(null);
+    setResult(null);
+    setUndoResult(null);
+    try {
+      const response = await prepareFileTask({
+        root_path: rootPath,
+        instruction,
+        max_depth: maxDepth,
+        max_files: maxFiles,
+        dry_run: true,
+      });
+      setPlan(response);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleExecute() {
+    if (!plan) return;
+    setLoading("execute");
+    setError(null);
+    try {
+      const response = await executeFileTask(plan.task_id);
+      setResult(response);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleUndo() {
+    if (!plan) return;
+    setLoading("undo");
+    setError(null);
+    try {
+      const response = await undoFileTask(plan.task_id);
+      setUndoResult(response);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <Card className="space-y-4">
+      <div className="flex items-center gap-3">
+        <FolderOpen size={18} className="text-violet-300" />
+        <div>
+          <h2 className="text-base font-semibold text-app-text">File System Task</h2>
+          <p className="text-sm text-app-muted">Plan local file organization, preview every operation, then confirm execution.</p>
+        </div>
+      </div>
+
+      {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
+
+      <div className="grid gap-3 md:grid-cols-[1fr_120px_120px]">
+        <label className="space-y-1 text-sm">
+          <span className="text-app-muted">Root folder path</span>
+          <input
+            value={rootPath}
+            onChange={(event) => setRootPath(event.target.value)}
+            placeholder="D:\\Downloads"
+            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
+          />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="text-app-muted">Max depth</span>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            value={maxDepth}
+            onChange={(event) => setMaxDepth(Number(event.target.value))}
+            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
+          />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="text-app-muted">Max files</span>
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            value={maxFiles}
+            onChange={(event) => setMaxFiles(Number(event.target.value))}
+            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
+          />
+        </label>
+      </div>
+
+      <label className="space-y-1 text-sm">
+        <span className="text-app-muted">Instruction</span>
+        <textarea
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          className="min-h-20 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
+        />
+      </label>
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          "Organize this folder by file type",
+          "Move PDFs into a PDFs folder",
+          "Create folders for images, videos, installers, and archives",
+          "Rename screenshots by date",
+          "Create a project folder structure",
+        ].map((prompt) => (
+          <button key={prompt} type="button" onClick={() => setInstruction(prompt)} className="transition hover:opacity-80">
+            <Badge variant="info">{prompt}</Badge>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <Button variant="secondary" onClick={() => void handleScan()} loading={loading === "scan"} disabled={!rootPath.trim()}>
+          Scan
+        </Button>
+        <Button variant="primary" onClick={() => void handlePrepare()} loading={loading === "prepare"} disabled={!rootPath.trim() || !instruction.trim()}>
+          Prepare Plan
+        </Button>
+      </div>
+
+      {snapshot ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="success">{snapshot.total_files} files</Badge>
+            <Badge>{snapshot.total_folders} folders</Badge>
+            <Badge>{snapshot.root_path}</Badge>
+          </div>
+          {snapshot.warnings.length ? <WarningList title="Scan warnings" items={snapshot.warnings} /> : null}
+        </div>
+      ) : null}
+
+      {plan ? (
+        <div className="space-y-4 rounded-md border border-app-border bg-zinc-950 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={plan.status === "blocked" ? "danger" : "warning"}>{plan.status}</Badge>
+            <Badge variant={plan.risk_level === "low" ? "success" : "warning"}>risk: {plan.risk_level}</Badge>
+            <Badge>{plan.operations.length} operations</Badge>
+            {plan.planner_model ? <Badge variant="info">planner: {plan.planner_model}</Badge> : null}
+          </div>
+          <p className="text-sm text-app-text">{plan.summary}</p>
+          {plan.planner_warning ? <p className="text-sm text-amber-200">{plan.planner_warning}</p> : null}
+          {plan.blocked_reasons.length ? <WarningList title="Blocked reasons" items={plan.blocked_reasons} danger /> : null}
+          {plan.warnings.length ? <WarningList title="Warnings" items={plan.warnings} /> : null}
+          {operationGroups ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <OperationGroup title="Folders to create" operations={operationGroups.create_folder} rootPath={plan.root_path} />
+              <OperationGroup title="Files to move" operations={operationGroups.move_file} rootPath={plan.root_path} />
+              <OperationGroup title="Files to copy" operations={operationGroups.copy_file} rootPath={plan.root_path} />
+              <OperationGroup title="Files to rename" operations={operationGroups.rename_file} rootPath={plan.root_path} />
+            </div>
+          ) : null}
+          {plan.skipped.length ? (
+            <div>
+              <p className="text-xs uppercase text-app-muted">Skipped</p>
+              <div className="mt-2 max-h-40 overflow-auto rounded-md border border-app-border bg-zinc-900/60 p-3 text-xs leading-5 text-app-muted">
+                {plan.skipped.slice(0, 40).map((item) => (
+                  <p key={`${item.path}:${item.reason}`}>{relativeDisplay(item.path, plan.root_path)} - {item.reason}</p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-3">
+            <Button variant="primary" onClick={() => void handleExecute()} loading={loading === "execute"} disabled={!canExecute}>
+              Confirm Execute
+            </Button>
+            <Button variant="secondary" onClick={() => setPlan(null)}>
+              Cancel
+            </Button>
+            <Button variant="secondary" onClick={() => void handlePrepare()} loading={loading === "prepare"} disabled={!rootPath.trim()}>
+              Refresh Validation
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={result.status === "completed" ? "success" : result.status === "failed" ? "danger" : "warning"}>{result.status}</Badge>
+            <Badge>created {result.created_folders}</Badge>
+            <Badge>moved {result.moved_files}</Badge>
+            <Badge>copied {result.copied_files}</Badge>
+            <Badge>renamed {result.renamed_files}</Badge>
+            {result.undo_available ? <Badge variant="info">undo available</Badge> : null}
+          </div>
+          {result.errors.length ? <WarningList title="Execution errors" items={result.errors} danger /> : null}
+          {result.undo_available ? (
+            <div className="mt-3">
+              <Button variant="secondary" onClick={() => void handleUndo()} loading={loading === "undo"}>
+                Undo
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {undoResult ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={undoResult.status === "undone" ? "success" : "warning"}>{undoResult.status}</Badge>
+            <Badge>{undoResult.undone_operations} undone</Badge>
+          </div>
+          {undoResult.errors.length ? <WarningList title="Undo errors" items={undoResult.errors} danger /> : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function groupFileOperations(operations: FileOperation[]) {
+  return {
+    create_folder: operations.filter((operation) => operation.type === "create_folder"),
+    move_file: operations.filter((operation) => operation.type === "move_file"),
+    copy_file: operations.filter((operation) => operation.type === "copy_file"),
+    rename_file: operations.filter((operation) => operation.type === "rename_file"),
+  };
+}
+
+function OperationGroup({ title, operations, rootPath }: { title: string; operations: FileOperation[]; rootPath: string }) {
+  return (
+    <div className="rounded-md border border-app-border bg-zinc-900/60 p-3">
+      <p className="text-xs uppercase text-app-muted">{title}</p>
+      {operations.length === 0 ? (
+        <p className="mt-2 text-sm text-app-muted">None</p>
+      ) : (
+        <div className="mt-2 max-h-48 space-y-2 overflow-auto text-xs leading-5 text-app-text">
+          {operations.map((operation, index) => (
+            <div key={`${operation.type}:${operation.path ?? operation.from_path}:${operation.to_path}:${index}`}>
+              <p>{relativeDisplay(operation.path ?? operation.from_path ?? "", rootPath)}</p>
+              {operation.to_path ? <p className="text-app-muted">→ {relativeDisplay(operation.to_path, rootPath)}</p> : null}
+              {operation.reason ? <p className="text-app-muted">{operation.reason}</p> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WarningList({ title, items, danger = false }: { title: string; items: string[]; danger?: boolean }) {
+  return (
+    <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${danger ? "border-red-500/30 bg-red-500/10 text-red-100" : "border-amber-500/30 bg-amber-500/10 text-amber-100"}`}>
+      <p className="font-medium">{title}</p>
+      <ul className="mt-1 list-disc space-y-1 pl-5">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function relativeDisplay(path: string, rootPath: string) {
+  if (!path) return "";
+  return path.startsWith(rootPath) ? path.slice(rootPath.length).replace(/^[/\\]+/, "") || "." : path;
 }
 
 function PendingTaskCard({

@@ -46,6 +46,21 @@ class TaskLog(BaseModel):
     completed_at: datetime | None = None
 
 
+class FileTaskLog(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    root_path: str
+    instruction: str
+    status: str
+    plan: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+    execution: dict[str, Any] | None = None
+    undo: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    executed_at: datetime | None = None
+    undone_at: datetime | None = None
+
+
 class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     title: str

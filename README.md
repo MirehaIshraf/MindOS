@@ -21,6 +21,10 @@ Rules:
 - Do not index raw chat messages.
 - Tasks are paused until data collection is stable.
 
+## File System Task Adapter
+
+MindOS includes a File System Task Adapter MVP for local folder organization. It scans a user-selected folder, prepares a safe plan, shows a preview, requires confirmation, executes only allowed file operations, and stores an undo log. It does not delete files, overwrite destinations, execute shell commands, read file contents, or move files outside the selected root folder.
+
 ## Main Workspaces
 
 - `backend/`: FastAPI backend, SQLite persistence, memory/search/model services, connectors, and integrations.

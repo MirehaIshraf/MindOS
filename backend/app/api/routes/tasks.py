@@ -11,6 +11,18 @@ from app.schemas.tasks import (
     TaskPlanningResponse,
     TaskResponse,
 )
+from app.schemas.file_tasks import (
+    FileSnapshotResponse,
+    FileTaskExecuteRequest,
+    FileTaskExecutionResult,
+    FileTaskPlan,
+    FileTaskPrepareRequest,
+    FileTaskRecentResponse,
+    FileTaskRecordResponse,
+    FileTaskScanRequest,
+    FileTaskUndoResult,
+)
+from app.services.file_task_execution_service import file_task_execution_service
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -63,3 +75,52 @@ def pending_tasks() -> TaskHistoryResponse:
 @router.get("/history", response_model=TaskHistoryResponse)
 def task_history(limit: int = Query(default=20, ge=1, le=100)) -> TaskHistoryResponse:
     return task_service.list_history(limit=limit)
+
+
+@router.post("/file/scan", response_model=FileSnapshotResponse)
+def scan_file_task(request: FileTaskScanRequest) -> FileSnapshotResponse:
+    try:
+        return file_task_execution_service.scan(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/file/prepare", response_model=FileTaskPlan)
+def prepare_file_task(request: FileTaskPrepareRequest) -> FileTaskPlan:
+    try:
+        return file_task_execution_service.prepare(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/file/{task_id}/execute", response_model=FileTaskExecutionResult)
+def execute_file_task(task_id: str, request: FileTaskExecuteRequest) -> FileTaskExecutionResult:
+    try:
+        return file_task_execution_service.execute(task_id, request)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="File task not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/file/{task_id}/undo", response_model=FileTaskUndoResult)
+def undo_file_task(task_id: str) -> FileTaskUndoResult:
+    try:
+        return file_task_execution_service.undo(task_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="File task not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/file/recent", response_model=FileTaskRecentResponse)
+def recent_file_tasks(limit: int = Query(default=20, ge=1, le=100)) -> FileTaskRecentResponse:
+    return file_task_execution_service.recent(limit=limit)
+
+
+@router.get("/file/{task_id}", response_model=FileTaskRecordResponse)
+def get_file_task(task_id: str) -> FileTaskRecordResponse:
+    try:
+        return file_task_execution_service.get(task_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="File task not found.") from error

@@ -41,6 +41,10 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | mindos/chat_response | No | No | No | No | Stored for history and Chats category only. |
 | mindos/chat_summary | Yes | Yes | Yes | Yes | Future preferred representation of chat history. |
 | mindos/task_completed | Yes | Yes | Yes | Yes | Task lifecycle events are still stored even though Tasks are paused. |
+| mindos/file_task_prepared | Yes | No | No | No | File task preview/confirmation state; visible but not normal context. |
+| mindos/file_task_completed | Yes | Yes | No | Yes | Completed local file organization task summary. |
+| mindos/file_task_failed | Yes | Yes | No | Yes | Failed file task summary. |
+| mindos/file_task_undone | Yes | Yes | No | Yes | File task undo summary. |
 | mindos/report_generated | Yes | Yes | Yes | Yes | Reports are useful memory. |
 | local_agent/agent_observation | No | No | No | No | Raw agent observations are noisy by default. |
 | local_agent/agent_summary | Yes | Yes | Yes | Yes | Summaries are preferred over raw agent streams. |
@@ -64,6 +68,7 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - LLM summarization must not run automatically for every browser page capture.
 - Browser smart capture must not store private/login/payment pages, and full page text must remain off by default.
 - `task_completed` and `report_generated` are indexable/context eligible.
+- File task lifecycle events should not create relationships for every file operation. Prepared file tasks are visible but non-indexable/non-context. Completed, failed, and undone file task summaries are indexable/context eligible.
 
 ## Why This Exists
 

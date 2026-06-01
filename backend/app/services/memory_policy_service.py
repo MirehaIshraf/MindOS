@@ -29,6 +29,24 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
     if event_type == "chat_summary":
         return _policy("chat", hidden=False)
 
+    if event_type == "file_task_prepared":
+        return {
+            "memory_category": "task",
+            "hidden_from_default": False,
+            "is_indexable": False,
+            "is_relationship_eligible": False,
+            "is_context_eligible": False,
+        }
+
+    if event_type in {"file_task_completed", "file_task_failed", "file_task_undone"}:
+        return {
+            "memory_category": "task",
+            "hidden_from_default": False,
+            "is_indexable": True,
+            "is_relationship_eligible": False,
+            "is_context_eligible": True,
+        }
+
     if event_type.startswith("task_"):
         return _policy("task", hidden=False)
 

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import ChatSession, ChatStoredMessage, ConnectorSource, Event, ImportRun, Playbook, Relationship, TaskLog
+from app.domain.models import ChatSession, ChatStoredMessage, ConnectorSource, Event, FileTaskLog, ImportRun, Playbook, Relationship, TaskLog
 
 
 class EventRepository(ABC):
@@ -136,6 +136,32 @@ class TaskRepository(ABC):
 
     @abstractmethod
     def count_tasks(self) -> int:
+        raise NotImplementedError
+
+
+class FileTaskRepository(ABC):
+    @abstractmethod
+    def create(self, data: dict) -> FileTaskLog:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update(self, task_id: str, updates: dict) -> FileTaskLog:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, task_id: str) -> FileTaskLog | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent(self, limit: int = 20) -> list[FileTaskLog]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count(self) -> int:
         raise NotImplementedError
 
 

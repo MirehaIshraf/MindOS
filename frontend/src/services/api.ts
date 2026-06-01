@@ -30,6 +30,11 @@ import type {
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
+  FileSnapshotResponse,
+  FileTaskExecutionResult,
+  FileTaskPlan,
+  FileTaskRecentResponse,
+  FileTaskUndoResult,
   GitImportPayload,
   GitImportResult,
   GitPreviewResult,
@@ -444,6 +449,37 @@ export async function getTaskHistory(limit = 20): Promise<TaskHistoryResponse> {
   const response = await api.get<TaskHistoryResponse>("/tasks/history", {
     params: { limit },
   });
+  return response.data;
+}
+
+export async function scanFileTask(payload: { root_path: string; max_depth?: number; max_files?: number }): Promise<FileSnapshotResponse> {
+  const response = await api.post<FileSnapshotResponse>("/tasks/file/scan", payload);
+  return response.data;
+}
+
+export async function prepareFileTask(payload: {
+  root_path: string;
+  instruction: string;
+  max_depth?: number;
+  max_files?: number;
+  dry_run?: boolean;
+}): Promise<FileTaskPlan> {
+  const response = await api.post<FileTaskPlan>("/tasks/file/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function executeFileTask(taskId: string): Promise<FileTaskExecutionResult> {
+  const response = await api.post<FileTaskExecutionResult>(`/tasks/file/${taskId}/execute`, { confirmation: true }, { timeout: 130000 });
+  return response.data;
+}
+
+export async function undoFileTask(taskId: string): Promise<FileTaskUndoResult> {
+  const response = await api.post<FileTaskUndoResult>(`/tasks/file/${taskId}/undo`, {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function getRecentFileTasks(limit = 20): Promise<FileTaskRecentResponse> {
+  const response = await api.get<FileTaskRecentResponse>("/tasks/file/recent", { params: { limit } });
   return response.data;
 }
 

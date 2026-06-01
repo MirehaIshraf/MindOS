@@ -121,7 +121,16 @@ Tasks are experimental/paused but routes still exist:
 - `GET /tasks/pending`
 - `GET /tasks/history`
 
-Do not prioritize Tasks unless explicitly requested.
+File System Task Adapter routes:
+
+- `POST /tasks/file/scan`: scan a selected folder without reading file contents. Request includes `root_path`, `max_depth`, and `max_files`.
+- `POST /tasks/file/prepare`: create a validated preview plan from `root_path`, `instruction`, `max_depth`, `max_files`, and `dry_run`.
+- `POST /tasks/file/{task_id}/execute`: execute a prepared plan only when `{ "confirmation": true }` is provided.
+- `POST /tasks/file/{task_id}/undo`: run safe undo operations when available.
+- `GET /tasks/file/{task_id}`: fetch file task plan, execution result, and undo state.
+- `GET /tasks/file/recent`: list recent file tasks.
+
+Only File System tasks are active. Other task adapters remain paused/mock-only unless explicitly requested.
 
 ## Playbooks
 
