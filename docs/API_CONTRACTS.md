@@ -56,6 +56,11 @@ Preferred browser event types:
 
 - `GET /chat`: placeholder readiness response.
 - `POST /chat`: chat with local memory context and selected model.
+- `POST /chat/runs`: start a chat response in the background. Request includes `session_id`, `message`, `model_id`, and `use_memory`. Returns `run_id`, `session_id`, and `status`. If the same session already has a queued/running run, returns `409`.
+- `GET /chat/runs/{run_id}`: poll a background chat run. Returns status, user message, assistant result when completed, error when failed, timestamps, model/provider, answer style, intent metadata, and UI-only progress fields: `current_step`, `progress_message`, `progress_percent`, and `progress_events`. Stale queued/running runs older than 30 minutes are marked failed before status is returned.
+- `GET /chat/sessions/{session_id}/active-run`: returns only the active queued/running chat run for that exact session, or `active_run: null`.
+- `POST /chat/runs/{run_id}/cancel`: requests cancellation. Queued runs are marked cancelled; running model calls may finish before cancellation takes effect.
+- `GET /chat/runs/debug/active`: debug list of queued/running chat runs with session ids and age.
 - `POST /chat/resolve-context`: debug endpoint for resolving follow-up references in a chat session. Request includes `session_id` and `query`; response includes `is_follow_up`, `resolved_query`, source ids, source URLs, entities, and reason.
 - `GET /chat/sessions`: list chat sessions.
 - `GET /chat/sessions/{session_id}/messages`: list messages in a chat session.

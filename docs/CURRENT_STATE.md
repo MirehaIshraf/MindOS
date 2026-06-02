@@ -22,7 +22,7 @@ Last updated: 2026-06-01
 | Search | Working | Keyword plus semantic/hybrid when embeddings are enabled. |
 | Embeddings | Working/Partial | Uses Ollama + ChromaDB; optional systems fail over to keyword search. |
 | Relationships | Working/Partial | Stored in SQLite; quality and noise reduction need continued tuning. |
-| Chat | Working | Uses ConversationContextService, QueryIntentService, ContextBuilderService, and selected model through ModelRouter. |
+| Chat | Working | Uses ConversationContextService, QueryIntentService, ContextBuilderService, selected model through ModelRouter, and background chat runs for navigation-safe responses. |
 | Tasks | Partial | File System Task Adapter MVP is active; other task adapters remain paused/mock-only. |
 | File connector | Working | Path-based folder import with clear events. |
 | Logs connector | Working | Path-based log import with clear events. |
@@ -80,6 +80,8 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 - Browser extension includes a hard DOM access diagnostic and generic visible-text extraction diagnostics. Backend validation prevents placeholder failure text from being counted as captured content. Site-specific extractors and automatic summarization are not the focus until basic DOM extraction is verified.
 - Chat retrieval now uses deterministic query intent routing, but retrieval quality still needs tuning with real memory data.
 - Chat follow-up resolution is implemented for active sessions. Assistant response metadata stores primary source ids/titles/URLs so prompts like "summarize this model" can reuse the previous memory source without indexing raw chat messages.
+- Chat background runs are implemented. A chat response continues server-side after page navigation, active runs are scoped by chat session, stale runs are failed after 30 minutes, and one active chat run per session is supported for now. Runs expose transient UI-only progress messages that are not stored as chat messages or memory. Task background execution is planned but not implemented.
+- Greeting/simple conversational prompts such as "Hi" and "Hello" route to `general_chat` with the `no_memory` profile even when local memory is enabled.
 - Entity/detail prompts such as "give me details of this model MiniCPM5-1B" route to source-focused memory lookup instead of root-cause retrieval.
 - Activity tracker and local agent collector are not implemented yet; only the ingestion API exists for those sources.
 - Activity tracker summaries are intended to be indexable later, but current policy treats all `activity_tracker` source events as hidden/non-indexable.

@@ -5,9 +5,14 @@ import type {
   BackendHealth,
   BackendStatus,
   BrowserDedupeResponse,
+  ActiveChatRunResponse,
   ChatMessagesResponse,
   ChatModelsResponse,
   ChatRequestPayload,
+  ChatRunCancelResponse,
+  ChatRunCreatePayload,
+  ChatRunStartResponse,
+  ChatRunStatus,
   ChatResponse,
   ChatSessionsResponse,
   ContextPackage,
@@ -286,6 +291,29 @@ export async function sendChatMessage(payload: ChatRequestPayload): Promise<Chat
   }, {
     timeout: 130000,
   });
+  return response.data;
+}
+
+export async function startChatRun(payload: ChatRunCreatePayload): Promise<ChatRunStartResponse> {
+  const response = await api.post<ChatRunStartResponse>("/chat/runs", {
+    ...payload,
+    use_memory: payload.use_memory ?? true,
+  });
+  return response.data;
+}
+
+export async function getChatRun(runId: string): Promise<ChatRunStatus> {
+  const response = await api.get<ChatRunStatus>(`/chat/runs/${runId}`);
+  return response.data;
+}
+
+export async function getActiveChatRun(sessionId: string): Promise<ActiveChatRunResponse> {
+  const response = await api.get<ActiveChatRunResponse>(`/chat/sessions/${sessionId}/active-run`);
+  return response.data;
+}
+
+export async function cancelChatRun(runId: string): Promise<ChatRunCancelResponse> {
+  const response = await api.post<ChatRunCancelResponse>(`/chat/runs/${runId}/cancel`);
   return response.data;
 }
 

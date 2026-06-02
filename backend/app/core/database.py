@@ -54,6 +54,29 @@ class ChatMessageRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class ChatRunRecord(Base):
+    __tablename__ = "chat_runs"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    user_message_id = Column(String, nullable=True)
+    assistant_message_id = Column(String, nullable=True)
+    status = Column(String, nullable=False, index=True)
+    user_message = Column(Text, nullable=False)
+    resolved_query = Column(Text, nullable=True)
+    model_id = Column(String, nullable=True)
+    provider = Column(String, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    error = Column(Text, nullable=True)
+    result_json = Column(Text, nullable=True)
+    metadata_json = Column(Text, default="{}")
+    current_step = Column(String, nullable=True)
+    progress_message = Column(Text, nullable=True)
+    progress_percent = Column(Integer, nullable=True)
+    progress_events_json = Column(Text, nullable=True)
+
+
 class TaskRecord(Base):
     __tablename__ = "tasks"
 
@@ -181,6 +204,7 @@ def initialize_database() -> None:
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     _ensure_event_policy_columns(engine)
+    _ensure_chat_run_columns(engine)
 
 
 def _ensure_event_policy_columns(engine) -> None:
@@ -226,3 +250,21 @@ def _ensure_event_policy_columns(engine) -> None:
                 """
             )
         )
+
+
+def _ensure_chat_run_columns(engine) -> None:
+    if not inspect(engine).has_table("chat_runs"):
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("chat_runs")}
+    statements = []
+    if "current_step" not in columns:
+        statements.append("ALTER TABLE chat_runs ADD COLUMN current_step TEXT")
+    if "progress_message" not in columns:
+        statements.append("ALTER TABLE chat_runs ADD COLUMN progress_message TEXT")
+    if "progress_percent" not in columns:
+        statements.append("ALTER TABLE chat_runs ADD COLUMN progress_percent INTEGER")
+    if "progress_events_json" not in columns:
+        statements.append("ALTER TABLE chat_runs ADD COLUMN progress_events_json TEXT")
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))

@@ -47,6 +47,14 @@ Memory lookup queries use a precision profile: purified search terms, preferred 
 
 Conversation follow-ups run through `ConversationContextService` before intent classification. It reads recent messages from the active chat session, uses assistant response metadata to find the previous primary memory source, resolves references such as "this model" or "this patent", and lets ContextBuilder use the `source_focused` profile to fetch that source directly.
 
+## Background Run Flow
+
+User starts chat -> backend creates a `ChatRun` -> user message is saved immediately -> background execution continues server-side -> frontend can navigate away -> frontend polls run status -> assistant result is saved into the chat session -> user returns and sees the saved response.
+
+Chat runs also expose lightweight UI progress metadata such as `current_step`, `progress_message`, and bounded progress events. These messages describe operational status, are not assistant chat messages, are not memory events, and are not model chain-of-thought.
+
+The current MVP supports one active chat run per chat session. Active-run lookup is session-scoped and only returns queued/running work for that exact session; stale runs older than 30 minutes are marked failed. The same queued/running/completed/failed/cancelled status pattern is intended to support long-running task runs later, but task background execution is not implemented in this step.
+
 ## Connector Flow
 
 User explicitly imports or collector sends event -> ExternalIngestService/IngestionService or connector import service -> EventRepository -> MemoryPolicyService -> EmbeddingIndexService if eligible -> RelationshipService if eligible

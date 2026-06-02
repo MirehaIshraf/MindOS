@@ -25,6 +25,60 @@ class ChatRequest(BaseModel):
         return value
 
 
+class ChatRunCreateRequest(BaseModel):
+    session_id: str | None = None
+    message: str
+    model_id: str | None = None
+    use_memory: bool = True
+
+    @field_validator("message")
+    @classmethod
+    def message_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("message must not be empty")
+        return value
+
+
+class ChatRunStartResponse(BaseModel):
+    run_id: str
+    session_id: str
+    status: str
+    message: str
+
+
+class ChatRunStatusResponse(BaseModel):
+    run_id: str
+    session_id: str
+    status: str
+    user_message: str
+    assistant_message: str | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    model_id: str | None = None
+    provider: str | None = None
+    answer_style: str | None = None
+    intent: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    current_step: str | None = None
+    progress_message: str | None = None
+    progress_percent: int | None = None
+    progress_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ActiveChatRunResponse(BaseModel):
+    active_run: ChatRunStatusResponse | None = None
+
+
+class ChatRunCancelResponse(BaseModel):
+    run_id: str
+    status: str
+    message: str
+
+
 class ChatSource(BaseModel):
     event_id: str
     source: str

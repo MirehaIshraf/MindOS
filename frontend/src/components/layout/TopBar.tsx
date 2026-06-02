@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
-import { healthCheck } from "../../services/api";
+import { getChatRun, healthCheck } from "../../services/api";
 import { useAppStore } from "../../store/appStore";
+import { useRunStore } from "../../store/runStore";
 import { Badge } from "../shared/Badge";
 
 const titles: Record<string, string> = {
@@ -17,6 +18,7 @@ const titles: Record<string, string> = {
 
 export function TopBar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     activePageTitle,
     backendOnline,
@@ -25,6 +27,8 @@ export function TopBar() {
     setBackendOnline,
     setStorageMode,
   } = useAppStore();
+  const { activeChatRunId, activeChatRunStatus, updateActiveChatRunStatus, clearActiveChatRun } = useRunStore();
+  const chatRunning = Boolean(activeChatRunId && ["queued", "running"].includes(activeChatRunStatus ?? ""));
 
   useEffect(() => {
     setActivePageTitle(titles[location.pathname] ?? "MindOS");
@@ -59,6 +63,42 @@ export function TopBar() {
     };
   }, [setBackendOnline, setStorageMode]);
 
+  useEffect(() => {
+    if (!activeChatRunId) {
+      return;
+    }
+    let active = true;
+    const runId = activeChatRunId;
+
+    async function checkRun() {
+      try {
+        const run = await getChatRun(runId);
+        if (!active) {
+          return;
+        }
+        updateActiveChatRunStatus(run.status, run.error ?? null, {
+          step: run.current_step,
+          message: run.progress_message,
+          percent: run.progress_percent,
+        });
+        if (!["queued", "running"].includes(run.status)) {
+          clearActiveChatRun();
+        }
+      } catch {
+        if (active) {
+          clearActiveChatRun();
+        }
+      }
+    }
+
+    void checkRun();
+    const intervalId = window.setInterval(checkRun, 3_000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [activeChatRunId, clearActiveChatRun, updateActiveChatRunStatus]);
+
   return (
     <header className="fixed left-[260px] right-0 top-0 z-10 flex h-16 items-center justify-between border-b border-app-border bg-app-background/95 px-8 backdrop-blur">
       <div>
@@ -66,6 +106,16 @@ export function TopBar() {
         <h2 className="text-lg font-semibold text-app-text">{activePageTitle}</h2>
       </div>
       <div className="flex items-center gap-3">
+        {chatRunning ? (
+          <button
+            type="button"
+            onClick={() => navigate("/chat")}
+            className="flex items-center gap-2 rounded-md border border-app-primary/40 bg-app-primary/10 px-3 py-2 text-sm text-app-text hover:border-app-primary"
+          >
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-app-primary" aria-hidden="true" />
+            Chat running...
+          </button>
+        ) : null}
         {storageMode ? <Badge variant="info">{storageMode}</Badge> : null}
         <div className="flex items-center gap-2 rounded-md border border-app-border bg-app-panel px-3 py-2 text-sm text-app-muted">
           <span

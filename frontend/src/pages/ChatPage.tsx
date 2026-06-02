@@ -6,7 +6,20 @@ import { ChatInput } from "../components/chat/ChatInput";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
-import { deleteChatSession, getChatMessages, getChatSessions, getChatModelsResponse, selectChatModel, sendChatMessage } from "../services/api";
+import { RunProgressCard } from "../components/shared/RunProgressCard";
+import {
+  cancelChatRun,
+  deleteChatSession,
+  getActiveChatRun,
+  getChatMessages,
+  getChatRun,
+  getChatSessions,
+  getChatModelsResponse,
+  getErrorMessage,
+  selectChatModel,
+  startChatRun,
+} from "../services/api";
+import { useRunStore } from "../store/runStore";
 import type { ChatMessage as ChatMessageRecord, ChatSession, ModelConfig, StoredChatMessage } from "../types";
 
 const examplePrompts = [
@@ -33,11 +46,102 @@ export function ChatPage() {
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [modelError, setModelError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const {
+    activeChatRunId,
+    activeChatSessionId,
+    activeChatRunStatus,
+    activeChatRunStartedAt,
+    activeChatRunStep,
+    activeChatRunMessage,
+    activeChatRunPercent,
+    setActiveChatRun,
+    updateActiveChatRunStatus,
+    clearActiveChatRun,
+  } = useRunStore();
+  const currentSessionHasActiveRun = Boolean(
+    currentSessionId && activeChatRunId && activeChatSessionId === currentSessionId && ["queued", "running"].includes(activeChatRunStatus ?? ""),
+  );
 
   useEffect(() => {
     void refreshSessions();
     void refreshChatModels();
   }, []);
+
+  useEffect(() => {
+    if (!activeChatSessionId) {
+      return;
+    }
+    setCurrentSessionId((current) => current ?? activeChatSessionId);
+    void restoreActiveRun(activeChatSessionId);
+  }, [activeChatSessionId]);
+
+  useEffect(() => {
+    if (!activeChatRunId) {
+      setIsReplying(false);
+      return;
+    }
+
+    let active = true;
+    const runId = activeChatRunId;
+
+    async function pollRun() {
+      try {
+        const run = await getChatRun(runId);
+        if (!active) {
+          return;
+        }
+        updateActiveChatRunStatus(run.status, run.error ?? null, {
+          step: run.current_step,
+          message: run.progress_message,
+          percent: run.progress_percent,
+        });
+        const runBelongsToOpenSession = run.session_id === currentSessionId;
+        if (run.status === "completed") {
+          if (runBelongsToOpenSession) {
+            await loadSessionMessages(run.session_id);
+          }
+          await refreshSessions();
+          clearActiveChatRun();
+          if (runBelongsToOpenSession) {
+            setIsReplying(false);
+          }
+          return;
+        }
+        if (run.status === "failed" || run.status === "cancelled") {
+          if (runBelongsToOpenSession) {
+            await loadSessionMessages(run.session_id);
+            setMessages((current) => [
+              ...current,
+              createMessage(
+                "assistant",
+                run.status === "cancelled"
+                  ? "That chat response was cancelled."
+                  : `MindOS could not finish that response. ${run.error ?? ""}`.trim(),
+              ),
+            ]);
+          }
+          clearActiveChatRun();
+          if (runBelongsToOpenSession) {
+            setIsReplying(false);
+          }
+          return;
+        }
+        setIsReplying(runBelongsToOpenSession);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        updateActiveChatRunStatus("failed", getErrorMessage(error));
+      }
+    }
+
+    void pollRun();
+    const intervalId = window.setInterval(pollRun, 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [activeChatRunId, clearActiveChatRun, currentSessionId, updateActiveChatRunStatus]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -56,15 +160,58 @@ export function ChatPage() {
 
   const loadingMessages = useMemo(() => loadingStatusMessages(pendingStyle), [pendingStyle]);
   const selectedModel = chatModels.find((model) => model.id === selectedModelId) ?? chatModels[0];
+  const elapsedSeconds = useMemo(() => {
+    if (!currentSessionHasActiveRun || !activeChatRunStartedAt) {
+      return null;
+    }
+    return Math.max(0, Math.floor((Date.now() - new Date(activeChatRunStartedAt).getTime()) / 1000));
+  }, [activeChatRunStartedAt, currentSessionHasActiveRun, statusIndex]);
 
   async function refreshSessions() {
     setSessionError(null);
     try {
       const response = await getChatSessions();
       setSessions(response.sessions);
+      if (!currentSessionId && !activeChatSessionId && response.sessions.length > 0) {
+        void restoreActiveRun(response.sessions[0].id);
+      }
     } catch {
       setSessionError("Could not load recent chats.");
     }
+  }
+
+  async function restoreActiveRun(sessionId: string) {
+    try {
+      const response = await getActiveChatRun(sessionId);
+      if (!response.active_run) {
+        if (activeChatSessionId === sessionId) {
+          clearActiveChatRun();
+        }
+        setIsReplying(false);
+        return;
+      }
+      const run = response.active_run;
+      setActiveChatRun({
+        runId: run.run_id,
+        sessionId: run.session_id,
+        status: run.status,
+        startedAt: run.started_at,
+        step: run.current_step,
+        message: run.progress_message,
+        percent: run.progress_percent,
+      });
+      setCurrentSessionId(run.session_id);
+      setIsReplying(true);
+      await loadSessionMessages(run.session_id);
+    } catch {
+      // Recovery is best-effort; normal chat loading still works.
+    }
+  }
+
+  async function loadSessionMessages(sessionId: string) {
+    const response = await getChatMessages(sessionId);
+    setCurrentSessionId(sessionId);
+    setMessages(mapStoredMessages(response.messages));
   }
 
   async function refreshChatModels() {
@@ -98,17 +245,12 @@ export function ChatPage() {
 
   async function handleSend() {
     const content = input.trim();
-    if (!content || isReplying) {
+    if (!content || currentSessionHasActiveRun) {
       return;
     }
 
     const userMessage = createMessage("user", content);
     const style = detectPendingStyle(content);
-    const history = messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-      timestamp: message.timestamp,
-    }));
 
     setMessages((current) => [...current, userMessage]);
     setInput("");
@@ -116,40 +258,29 @@ export function ChatPage() {
     setIsReplying(true);
 
     try {
-      const response = await sendChatMessage({
+      const response = await startChatRun({
         message: content,
-        history,
-        use_context: useContext,
+        use_memory: useContext,
         session_id: currentSessionId,
         model_id: selectedModelId || undefined,
       });
       setCurrentSessionId(response.session_id);
-      setMessages((current) => [
-        ...current,
-        createMessage("assistant", response.reply, {
-          sourcesUsed: response.sources_used,
-          model: response.model,
-          provider: response.provider,
-          modelDisplayName: response.model_display_name,
-          searchMode: response.search_mode,
-          taskHint: response.task_hint,
-          taskInstruction: content,
-          contextSummary: response.context_summary,
-          contextStats: response.context_stats,
-          warning: response.warning,
-          answerStyle: response.answer_style,
-          intent: response.intent,
-          isFollowUp: response.is_follow_up,
-          resolvedQuery: response.resolved_query,
-        }),
-      ]);
+      setActiveChatRun({
+        runId: response.run_id,
+        sessionId: response.session_id,
+        status: response.status,
+        message: "Starting your request...",
+        step: "queued",
+        percent: 5,
+      });
       await refreshSessions();
-    } catch {
-      setMessages((current) => [
-        ...current,
-        createMessage("assistant", "MindOS backend is offline or chat failed. Please check Developer Mode."),
-      ]);
-    } finally {
+    } catch (error) {
+      const message = getErrorMessage(error);
+      if (message.includes("already running") && currentSessionId) {
+        await restoreActiveRun(currentSessionId);
+        return;
+      }
+      setMessages((current) => [...current, createMessage("assistant", message || "MindOS backend is offline or chat failed.")]);
       setIsReplying(false);
     }
   }
@@ -164,10 +295,11 @@ export function ChatPage() {
   async function handleLoadSession(sessionId: string) {
     setLoadingSessionId(sessionId);
     setSessionError(null);
+    setIsReplying(false);
+    setPendingStyle("normal");
     try {
-      const response = await getChatMessages(sessionId);
-      setCurrentSessionId(sessionId);
-      setMessages(mapStoredMessages(response.messages));
+      await loadSessionMessages(sessionId);
+      await restoreActiveRun(sessionId);
       setSessionsOpen(false);
     } catch {
       setSessionError("Could not load that chat.");
@@ -189,6 +321,26 @@ export function ChatPage() {
       setSessionError("Could not delete that chat.");
     } finally {
       setLoadingSessionId(null);
+    }
+  }
+
+  async function handleCancelRun() {
+    if (!activeChatRunId || !currentSessionHasActiveRun) {
+      return;
+    }
+    try {
+      const response = await cancelChatRun(activeChatRunId);
+      updateActiveChatRunStatus(response.status, null, {
+        step: response.status === "cancelled" ? "cancelled" : activeChatRunStep,
+        message: response.message,
+        percent: response.status === "cancelled" ? 100 : activeChatRunPercent,
+      });
+      if (response.status === "cancelled") {
+        clearActiveChatRun();
+        setIsReplying(false);
+      }
+    } catch (error) {
+      setSessionError(getErrorMessage(error));
     }
   }
 
@@ -295,10 +447,16 @@ export function ChatPage() {
           ))
         )}
 
-        {isReplying ? (
-          <div className="flex justify-start">
-            <div className="px-2 py-1 text-sm text-app-muted">{loadingMessages[statusIndex % loadingMessages.length]}</div>
-          </div>
+        {isReplying && currentSessionHasActiveRun ? (
+          <RunProgressCard
+            title="MindOS is working"
+            message={activeChatRunMessage || loadingMessages[statusIndex % loadingMessages.length]}
+            step={activeChatRunStep}
+            elapsedSeconds={elapsedSeconds}
+            status={activeChatRunStatus ?? "running"}
+            progressPercent={activeChatRunPercent}
+            onCancel={() => void handleCancelRun()}
+          />
         ) : null}
 
         <div ref={messagesEndRef} />
@@ -310,7 +468,7 @@ export function ChatPage() {
           value={input}
           onChange={setInput}
           onSend={handleSend}
-          disabled={isReplying}
+          disabled={currentSessionHasActiveRun}
           useContext={useContext}
           onUseContextChange={setUseContext}
         />

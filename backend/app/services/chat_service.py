@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.config import get_settings
-from app.core.dependencies import get_chat_repository, get_event_repository
+from app.core.dependencies import get_chat_repository, get_chat_run_repository, get_event_repository
 from app.domain.enums import EmbeddingStatus, EventSource
+from app.domain.models import ChatRun, ChatStoredMessage
 from app.integrations.llm.base import LLMClient
-from app.repositories.base import ChatRepository, EventRepository
+from app.repositories.base import ChatRepository, ChatRunRepository, EventRepository
 from app.schemas.chat import (
     ChatContextStats,
     ChatMessagesResponse,
@@ -86,11 +87,13 @@ class ChatService:
         context_builder: ContextBuilderService | None = None,
         llm: LLMClient | None = None,
         chat_repository: ChatRepository | None = None,
+        chat_run_repository: ChatRunRepository | None = None,
         event_repository: EventRepository | None = None,
     ) -> None:
         self._context_builder = context_builder or ContextBuilderService()
         self._llm = llm
         self._chat_repository = chat_repository or get_chat_repository()
+        self._chat_run_repository = chat_run_repository or get_chat_run_repository()
         self._event_repository = event_repository or get_event_repository()
 
     def placeholder(self) -> dict[str, str]:
@@ -99,21 +102,208 @@ class ChatService:
         }
 
     def chat(self, request: ChatRequest) -> ChatResponse:
+        response, _ = self._run_chat_turn(request, record_user_message=True)
+        return response
+
+    def create_background_run(self, request: ChatRequest) -> ChatRun:
         session = self._chat_repository.get_session(request.session_id) if request.session_id else None
         if session is None:
             session = self._chat_repository.create_session(short_title(request.message))
 
         model_config = self._resolve_requested_model(request.model_id)
+        self.mark_stale_runs_failed()
+        active_run = self._chat_run_repository.get_active_run(session.id)
+        if active_run is not None:
+            raise ValueError("A chat response is already running for this session.")
+
+        user_message = self._chat_repository.add_message(session.id, "user", request.message)
+        self._record_chat_memory_event(
+            event_type="chat_message",
+            title=f"User asked MindOS about: {short_title(request.message)}",
+            content=request.message,
+            session_id=session.id,
+            role="user",
+        )
+        return self._chat_run_repository.create_run(
+            {
+                "session_id": session.id,
+                "user_message_id": user_message.id,
+                "status": "queued",
+                "user_message": request.message,
+                "model_id": request.model_id,
+                "provider": model_config.provider if model_config else None,
+                "metadata_json": {"use_memory": request.use_context},
+                "current_step": "queued",
+                "progress_message": "Starting your request...",
+                "progress_percent": 5,
+                "progress_events": [
+                    {
+                        "step": "queued",
+                        "message": "Starting your request...",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "level": "info",
+                    }
+                ],
+            }
+        )
+
+    def process_background_run(self, run_id: str, request: ChatRequest) -> None:
+        run = self._chat_run_repository.get_run(run_id)
+        if run is None or run.status == "cancelled":
+            return
+        self._chat_run_repository.update_run(run_id, {"status": "running"})
+        self._set_run_progress(run_id, "understanding", "Understanding your request...", 10)
+        try:
+            response, assistant_message = self._run_chat_turn(
+                request,
+                session_id=run.session_id,
+                record_user_message=False,
+                exclude_message_id=run.user_message_id,
+                run_id=run_id,
+            )
+            latest_run = self._chat_run_repository.get_run(run_id)
+            if latest_run and latest_run.metadata_json.get("cancellation_requested"):
+                self._chat_run_repository.update_run(
+                    run_id,
+                    {
+                        "status": "cancelled",
+                        "completed_at": datetime.now(timezone.utc),
+                        "assistant_message_id": assistant_message.id if assistant_message else None,
+                        "result_json": response.model_dump(mode="json"),
+                        "current_step": "cancelled",
+                        "progress_message": "Response cancelled.",
+                        "progress_percent": 100,
+                    },
+                )
+                return
+            self._set_run_progress(run_id, "completed", "Response ready.", 100)
+            self._chat_run_repository.update_run(
+                run_id,
+                {
+                    "status": "completed",
+                    "assistant_message_id": assistant_message.id if assistant_message else None,
+                    "resolved_query": response.resolved_query,
+                    "provider": response.provider,
+                    "completed_at": datetime.now(timezone.utc),
+                    "result_json": response.model_dump(mode="json"),
+                    "metadata_json": {
+                        "answer_style": response.answer_style,
+                        "intent": response.intent,
+                        "is_follow_up": response.is_follow_up,
+                    },
+                },
+            )
+        except Exception as error:
+            self._set_run_progress(run_id, "failed", "Something went wrong while preparing the response.", 100, level="error")
+            self._chat_run_repository.update_run(
+                run_id,
+                {
+                    "status": "failed",
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(error),
+                },
+            )
+
+    def get_run(self, run_id: str) -> ChatRun | None:
+        self.mark_stale_runs_failed()
+        return self._chat_run_repository.get_run(run_id)
+
+    def get_active_run(self, session_id: str) -> ChatRun | None:
+        self.mark_stale_runs_failed()
+        return self._chat_run_repository.get_active_run(session_id)
+
+    def list_active_runs_debug(self) -> list[dict[str, object]]:
+        self.mark_stale_runs_failed()
+        now = datetime.now(timezone.utc)
+        payload: list[dict[str, object]] = []
+        for run in self._chat_run_repository.list_recent_runs(limit=100):
+            if run.status not in {"queued", "running"}:
+                continue
+            age_seconds = max(0, int((now - ensure_aware(run.started_at)).total_seconds()))
+            payload.append(
+                {
+                    "run_id": run.id,
+                    "session_id": run.session_id,
+                    "status": run.status,
+                    "started_at": run.started_at,
+                    "age_seconds": age_seconds,
+                }
+            )
+        return payload
+
+    def mark_stale_runs_failed(self, max_age_minutes: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        updated = 0
+        for run in self._chat_run_repository.list_recent_runs(limit=100):
+            if run.status not in {"queued", "running"}:
+                continue
+            if ensure_aware(run.started_at) >= cutoff:
+                continue
+            metadata = dict(run.metadata_json or {})
+            metadata["stale"] = True
+            self._chat_run_repository.update_run(
+                run.id,
+                {
+                    "status": "failed",
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": "Chat run marked failed after exceeding the 30 minute active-run limit.",
+                    "metadata_json": metadata,
+                },
+            )
+            updated += 1
+        return updated
+
+    def cancel_run(self, run_id: str) -> ChatRun:
+        return self._chat_run_repository.cancel_run(run_id)
+
+    def clear_runs(self) -> None:
+        self._chat_run_repository.clear_runs()
+
+    def _set_run_progress(
+        self,
+        run_id: str | None,
+        step: str,
+        message: str,
+        progress_percent: int | None = None,
+        level: str = "info",
+    ) -> None:
+        if not run_id:
+            return
+        try:
+            self._chat_run_repository.update_progress(run_id, step, message, progress_percent)
+            self._chat_run_repository.append_progress_event(run_id, step, message, level=level)
+        except KeyError:
+            return
+
+    def _run_chat_turn(
+        self,
+        request: ChatRequest,
+        *,
+        session_id: str | None = None,
+        record_user_message: bool = True,
+        exclude_message_id: str | None = None,
+        run_id: str | None = None,
+    ) -> tuple[ChatResponse, ChatStoredMessage | None]:
+        session = self._chat_repository.get_session(session_id or request.session_id) if (session_id or request.session_id) else None
+        if session is None:
+            session = self._chat_repository.create_session(short_title(request.message))
+
+        model_config = self._resolve_requested_model(request.model_id)
         recent_messages = self._chat_repository.list_messages(session.id)
+        if exclude_message_id:
+            recent_messages = [message for message in recent_messages if message.id != exclude_message_id]
+        self._set_run_progress(run_id, "resolving_context", "Checking recent conversation context...", 18)
         conversation_context = conversation_context_service.resolve_follow_up(
             query=request.message,
             recent_messages=recent_messages,
         )
+        self._set_run_progress(run_id, "understanding", "Checking whether local memory is needed...", 25)
         active_query = conversation_context.resolved_query if conversation_context.is_follow_up else request.message
         query_intent = query_intent_service.classify(request.message, conversation_context)
         context_profile = query_intent.retrieval_profile or (model_config.default_context_profile if model_config else "fast_chat")
         context_package: ContextPackage | None = None
-        if request.use_context or query_intent.needs_local_memory:
+        if context_profile != "no_memory" and (request.use_context or query_intent.needs_local_memory):
+            self._set_run_progress(run_id, "retrieving_memory", "Searching local memory...", 35)
             context_package = self._context_builder.build_chat_context(
                 query=active_query,
                 profile=context_profile,
@@ -122,20 +312,28 @@ class ChatService:
                 source_event_ids=conversation_context.source_event_ids if conversation_context.is_follow_up else None,
             )
             context_package.metadata["conversation_context"] = conversation_context.model_dump()
+            source_count = len(context_package.direct_events) + len(context_package.related_events)
+            source_label = f"Reading {source_count} relevant source{'s' if source_count != 1 else ''}..." if source_count else "Checking retrieved context..."
+            self._set_run_progress(run_id, "reading_sources", source_label, 55)
+        else:
+            self._set_run_progress(run_id, "general_chat", "Preparing a direct response...", 45)
 
         # Search happens before storage so the current user message cannot retrieve itself.
-        self._chat_repository.add_message(session.id, "user", request.message)
-        self._record_chat_memory_event(
-            event_type="chat_message",
-            title=f"User asked MindOS about: {short_title(request.message)}",
-            content=request.message,
-            session_id=session.id,
-            role="user",
-        )
+        if record_user_message:
+            self._chat_repository.add_message(session.id, "user", request.message)
+            self._record_chat_memory_event(
+                event_type="chat_message",
+                title=f"User asked MindOS about: {short_title(request.message)}",
+                content=request.message,
+                session_id=session.id,
+                role="user",
+            )
 
         history = [message.model_dump(mode="json") for message in request.history]
         task_hint = detect_task_hint(request.message)
         answer_style = query_intent.answer_style or detect_answer_style(request.message, task_hint)
+        model_display = model_config.display_name if model_config else "selected model"
+        self._set_run_progress(run_id, "generating", f"Preparing response with {model_display}...", 70)
         reply, model_name, provider, model_display_name, llm_warning = self._generate_reply(
             message=request.message,
             history=history,
@@ -146,7 +344,10 @@ class ChatService:
             context_profile=context_profile,
             conversation_context=conversation_context,
             resolved_query=active_query,
+            run_id=run_id,
+            model_display_name=model_display,
         )
+        self._set_run_progress(run_id, "finalizing", "Finalizing answer...", 92)
         reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
         context_stats = context_stats_payload(context_package)
@@ -168,7 +369,7 @@ class ChatService:
             llm_warning,
         )
 
-        self._chat_repository.add_message(
+        assistant_message = self._chat_repository.add_message(
             session.id,
             "assistant",
             reply,
@@ -207,22 +408,25 @@ class ChatService:
             },
         )
 
-        return ChatResponse(
-            session_id=session.id,
-            reply=reply,
-            sources_used=sources_used,
-            model=model_name,
-            provider=provider,
-            model_display_name=model_display_name,
-            search_mode=search_mode,
-            task_hint=task_hint,
-            warning=warning,
-            context_summary=context_package.summary if context_package else "",
-            context_stats=context_stats,
-            answer_style=answer_style,
-            intent=query_intent.intent,
-            is_follow_up=conversation_context.is_follow_up,
-            resolved_query=active_query if active_query != request.message else None,
+        return (
+            ChatResponse(
+                session_id=session.id,
+                reply=reply,
+                sources_used=sources_used,
+                model=model_name,
+                provider=provider,
+                model_display_name=model_display_name,
+                search_mode=search_mode,
+                task_hint=task_hint,
+                warning=warning,
+                context_summary=context_package.summary if context_package else "",
+                context_stats=context_stats,
+                answer_style=answer_style,
+                intent=query_intent.intent,
+                is_follow_up=conversation_context.is_follow_up,
+                resolved_query=active_query if active_query != request.message else None,
+            ),
+            assistant_message,
         )
 
     def resolve_context(self, session_id: str, query: str) -> ResolvedConversationContext:
@@ -248,6 +452,7 @@ class ChatService:
 
     def clear_sessions(self) -> None:
         self._chat_repository.clear_sessions()
+        self._chat_run_repository.clear_runs()
 
     def count_sessions(self) -> int:
         return self._chat_repository.count_sessions()
@@ -299,11 +504,14 @@ class ChatService:
         context_profile: str,
         conversation_context: ResolvedConversationContext | None = None,
         resolved_query: str | None = None,
+        run_id: str | None = None,
+        model_display_name: str | None = None,
     ) -> tuple[str, str, str, str, str | None]:
         system_prompt = prompt_for_answer_style(task_hint, answer_style)
         if conversation_context and conversation_context.is_follow_up:
             system_prompt += FOLLOW_UP_PROMPT
         if self._llm is not None:
+            self._set_run_progress(run_id, "thinking", f"{model_display_name or getattr(self._llm, 'model', 'Selected model')} is thinking...", 80)
             return (
                 self._llm.generate_response(message=message, history=history, context=context_package, system_prompt=system_prompt),
                 getattr(self._llm, "model", "custom-llm"),
@@ -332,19 +540,20 @@ class ChatService:
                 f"Entities: {', '.join(conversation_context.entities)}\n"
                 f"Resolved query: {resolved_query or message}"
             )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "Local memory context:\n\n"
-                    + (formatted_context if formatted_context else "No local memory context was found for this request.")
-                    + resolved_reference
-                ),
-            },
-            *recent_history,
-            {"role": "user", "content": f"/no_think\n\nUser question: {message}"},
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
+        if context_profile != "no_memory":
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Local memory context:\n\n"
+                        + (formatted_context if formatted_context else "No local memory context was found for this request.")
+                        + resolved_reference
+                    ),
+                }
+            )
+        messages.extend([*recent_history, {"role": "user", "content": f"/no_think\n\nUser question: {message}"}])
+        self._set_run_progress(run_id, "thinking", f"{model_display_name or 'Selected model'} is thinking...", 80)
         result = model_router_service.generate(
             messages=messages,
             requested_model_id=model_id,
@@ -461,6 +670,8 @@ If no relevant memory is found:
 
 Do not give generic explanations.
 """
+    elif answer_style == "conversational":
+        prompt += "\nThe user is making a simple conversational turn. Reply briefly and naturally. Do not use local memory or root-cause formatting.\n"
     if task_hint:
         prompt += (
             "\nThe user's message looks like a task request of type: "
@@ -522,6 +733,12 @@ def detect_answer_style(message: str, task_hint: str | None = None) -> str:
     if any(term in text for term in summary_terms):
         return "summary"
     return "normal"
+
+
+def ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 chat_service = ChatService()

@@ -88,6 +88,27 @@ class ChatStoredMessage(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ChatRun(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    session_id: str
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    status: str = "queued"
+    user_message: str
+    resolved_query: str | None = None
+    model_id: str | None = None
+    provider: str | None = None
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    error: str | None = None
+    result_json: dict[str, Any] | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+    current_step: str | None = None
+    progress_message: str | None = None
+    progress_percent: int | None = None
+    progress_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class Relationship(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     from_event_id: str

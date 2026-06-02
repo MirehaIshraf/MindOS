@@ -315,6 +315,58 @@ export type ChatRequestPayload = {
   model_id?: string | null;
 };
 
+export type ChatRunCreatePayload = {
+  message: string;
+  session_id?: string | null;
+  model_id?: string | null;
+  use_memory?: boolean;
+};
+
+export type ChatRunStartResponse = {
+  run_id: string;
+  session_id: string;
+  status: string;
+  message: string;
+};
+
+export type ChatRunStatus = {
+  run_id: string;
+  session_id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  user_message: string;
+  assistant_message?: string | null;
+  result?: ChatResponse | Record<string, unknown> | null;
+  error?: string | null;
+  started_at: string;
+  completed_at?: string | null;
+  user_message_id?: string | null;
+  assistant_message_id?: string | null;
+  model_id?: string | null;
+  provider?: string | null;
+  answer_style?: string | null;
+  intent?: string | null;
+  metadata?: Record<string, unknown>;
+  current_step?: string | null;
+  progress_message?: string | null;
+  progress_percent?: number | null;
+  progress_events?: Array<{
+    step: string;
+    message: string;
+    timestamp: string;
+    level: string;
+  }>;
+};
+
+export type ActiveChatRunResponse = {
+  active_run: ChatRunStatus | null;
+};
+
+export type ChatRunCancelResponse = {
+  run_id: string;
+  status: string;
+  message: string;
+};
+
 export type ChatResponse = {
   session_id: string;
   reply: string;

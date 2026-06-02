@@ -57,8 +57,30 @@ ROOT_CAUSE_TERMS = [
     "not working",
     "broke",
     "deployment failed",
+    "deployment fail",
     "login failed",
+    "login fail",
+    "issue caused by",
+    "reason for failure",
 ]
+GREETING_TERMS = {
+    "hi",
+    "hello",
+    "hey",
+    "assalamu alaikum",
+    "salam",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "what's up",
+    "whats up",
+    "how are you",
+    "thanks",
+    "thank you",
+    "okay",
+    "ok",
+    "cool",
+}
 SUMMARY_TERMS = ["summarize", "summary", "overview", "what did i work on", "report", "this week", "recent work"]
 SOURCE_DETAIL_TERMS = [
     "give me details",
@@ -118,6 +140,18 @@ class QueryIntentService:
                 needs_local_memory=True,
                 allow_general_model_knowledge=False,
                 answer_style="follow_up_summary" if self._is_summary_follow_up(text) else "memory_lookup",
+            )
+        if self._is_greeting_or_simple_chat(text):
+            return QueryIntent(
+                intent="general_chat",
+                confidence=1.0,
+                search_terms=[],
+                preferred_sources=[],
+                excluded_types=[],
+                retrieval_profile="no_memory",
+                needs_local_memory=False,
+                allow_general_model_knowledge=True,
+                answer_style="conversational",
             )
         task_hint = any(term in text for term in TASK_TERMS)
         if task_hint:
@@ -255,7 +289,23 @@ class QueryIntentService:
         return any(term in text for term in SOURCE_ENTITY_TERMS) or bool(re.search(r"\b[a-z]+[a-z0-9._/-]*\d+[a-z0-9._/-]*\b", text))
 
     def _is_root_cause(self, text: str) -> bool:
-        return any(term in text for term in ROOT_CAUSE_TERMS)
+        return any(term in text for term in ROOT_CAUSE_TERMS) or bool(re.search(r"\bwhy\b.{0,40}\bfail(?:ed|ure)?\b", text))
+
+    def _is_greeting_or_simple_chat(self, text: str) -> bool:
+        if text in GREETING_TERMS:
+            return True
+        if len(text.split()) <= 3 and not self._has_strong_local_intent(text):
+            return True
+        return False
+
+    def _has_strong_local_intent(self, text: str) -> bool:
+        if any(term in text for term in ROOT_CAUSE_TERMS):
+            return True
+        if re.search(r"\bwhy\b.{0,40}\bfail(?:ed|ure)?\b", text):
+            return True
+        if any(term in text for term in TASK_TERMS):
+            return True
+        return bool(re.search(r"\b(did|have|has).{0,30}\b(search|save|saved|visit|visited|open|opened)\b", text))
 
 
 def normalize(value: str) -> str:

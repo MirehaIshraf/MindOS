@@ -132,6 +132,14 @@ Before adding a new feature:
 - Browser connector is an implemented MVP connector for manually saved pages/selections, not passive tracking.
 - Update docs alongside connector, ingestion, memory, or API changes.
 
+## Background Run Rules
+
+- Long-running chat and future task work should be tracked as backend runs, not only page-local frontend state.
+- Page navigation must not cancel an active chat/task run.
+- For now, support one active chat run per chat session and recover it through polling.
+- Run progress messages are UI-only operational status; do not save them as chat messages, memory events, indexed content, or model chain-of-thought.
+- Do not index raw chat messages just because a chat run is tracked.
+
 ## Current Known Direction
 
 Tasks are mostly paused, except the File System Task Adapter MVP. File tasks may use the selected LLM only to draft a plan; FastAPI validates every operation, shows a preview, requires user confirmation, executes through `FileAdapter`, and stores an undo log. Do not add delete, overwrite, shell command, external API, email, Jira, GitHub, browser, or VSCode task adapters unless explicitly requested.

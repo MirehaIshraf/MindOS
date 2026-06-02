@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import ChatSession, ChatStoredMessage, ConnectorSource, Event, FileTaskLog, ImportRun, Playbook, Relationship, TaskLog
+from app.domain.models import ChatRun, ChatSession, ChatStoredMessage, ConnectorSource, Event, FileTaskLog, ImportRun, Playbook, Relationship, TaskLog
 
 
 class EventRepository(ABC):
@@ -200,6 +200,48 @@ class ChatRepository(ABC):
 
     @abstractmethod
     def count_messages(self) -> int:
+        raise NotImplementedError
+
+
+class ChatRunRepository(ABC):
+    @abstractmethod
+    def create_run(self, data: dict) -> ChatRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_run(self, run_id: str, updates: dict) -> ChatRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_progress(self, run_id: str, step: str, message: str, progress_percent: int | None = None) -> ChatRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def append_progress_event(self, run_id: str, step: str, message: str, level: str = "info") -> ChatRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_run(self, run_id: str) -> ChatRun | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_active_run(self, session_id: str) -> ChatRun | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_latest_run(self, session_id: str) -> ChatRun | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_runs(self, limit: int = 20) -> list[ChatRun]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def cancel_run(self, run_id: str) -> ChatRun:
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear_runs(self) -> None:
         raise NotImplementedError
 
 

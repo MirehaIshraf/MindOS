@@ -13,6 +13,17 @@ HIGH_PRIORITY_RELATIONSHIPS = {"FIXED_BY", "CAUSED_BY", "SAME_TASK", "SAME_FILE"
 MEDIUM_PRIORITY_RELATIONSHIPS = {"SAME_REPO"}
 LOW_PRIORITY_RELATIONSHIPS = {"SAME_TOPIC", "TEMPORAL_NEARBY"}
 PROFILE_DEFAULTS = {
+    "no_memory": {
+        "direct_limit": 0,
+        "related_per_event": 0,
+        "direct_chars": 0,
+        "related_chars": 0,
+        "max_total_chars": 0,
+        "allow_low_priority": False,
+        "expand_relationships": False,
+        "min_score": None,
+        "search_mode": "none",
+    },
     "precision_lookup": {
         "direct_limit": 5,
         "related_per_event": 0,
@@ -259,6 +270,19 @@ class ContextBuilderService:
         source_event_ids: list[str] | None = None,
     ) -> ContextPackage:
         profile_config = self._profile_config(profile)
+        if profile == "no_memory":
+            return self._package(
+                query=query,
+                direct_events=[],
+                related_events=[],
+                relationships=[],
+                warnings=[],
+                metadata={
+                    "intent": intent.model_dump(mode="json") if intent else None,
+                    "search_query": "",
+                    "search_mode": "none",
+                },
+            )
         search_query = self._search_query(query, intent)
         preferred_sources = intent.preferred_sources if intent and intent.preferred_sources else None
         direct_events: list[ContextEvent] = []
