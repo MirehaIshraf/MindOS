@@ -99,8 +99,25 @@ SQLite event -> embedding text builder -> Ollama embedding model -> ChromaDB vec
 
 SQLite remains source of truth. ChromaDB stores vectors and lightweight metadata only.
 
-## File Task Flow
+## File System Task Adapter UI Flow
 
-User instruction -> folder snapshot -> LLM planner with deterministic fallback -> safety validator -> task preview -> user confirmation -> `FileAdapter` execution -> undo log -> memory event.
+The Tasks UI follows a compact command flow: user command -> folder scan -> deterministic or AI-assisted plan preview -> confirmation -> browser execution for selected handles -> undo when available.
 
-The File System Task Adapter is the only active task adapter. It scans a user-selected root folder without reading file contents, validates resolved absolute paths, and only executes `create_folder`, `move_file`, `copy_file`, and `rename_file` operations inside the selected root. It never deletes files, overwrites destinations, runs shell commands, or executes files. Undo is limited to safe reverse moves/renames and removing created folders only when empty.
+File task input sources:
+
+1. `backend_path`: the user types or pastes an absolute local path. The frontend sends the path to the backend for validation and metadata-only scanning.
+2. `browser_handle`: the user chooses a folder with the Chromium File System Access API. The browser does not expose an absolute Windows path, so the frontend scans the selected directory handle and builds a preview from that in-memory snapshot.
+
+File scan flow: user path -> `POST /tasks/file/scan` -> `FileSnapshotService` -> safe metadata-only scan -> UI scan summary and category counts.
+
+File task prepare flow: user instruction + root path -> `POST /tasks/file/prepare` -> `FileSnapshotService` scan -> deterministic planner -> safety validation -> preview plan -> user confirmation later.
+
+File task AI planning flow: browser scan -> deterministic instruction intent -> metadata-only `POST /tasks/file/plan-with-llm` when useful -> selected chat model returns JSON plan -> exact-intent fallback if the model fails -> backend validates allowed `create_folder` / `move_file` operations -> frontend validates against the browser scan again -> preview plan -> user confirmation -> browser execution.
+
+For browser-selected folders, deterministic prepare and POC execution are frontend-side because no absolute path is available for backend validation. AI-assisted planning may call the backend model router, but only scanned metadata is sent, never file contents or handles. The preview uses real scanned file metadata and validated `file.create_folder` / `file.move_file` rows. Browser execution requests read/write permission on the selected directory handle, creates category folders, and moves files with no overwrites by writing the destination before removing the original entry. Backend path execution will be added later and must remain backend-controlled: FastAPI validates, the user confirms, the backend executes, and undo support is created during execution.
+
+Document Summary Task flow: browser-selected folder scan -> readable file selection -> output filename/format/style options -> safe text extraction in the browser -> `POST /tasks/document/summary/prepare` with selected extracted text -> selected model summary preview -> user confirms Save summary -> browser File System Access API writes a new non-overwriting `.md` or `.txt` file -> lightweight `document_summary_created` memory event. The extraction layer supports text-like files, selectable-text PDFs through pdf.js, and DOCX raw text through Mammoth. No OCR is performed. Original documents are not modified, and extracted full text is not stored in task history or memory.
+
+Document Summary Naming flow: selected file names + folder name + extracted headings + generated summary -> deterministic naming service -> optional LLM naming when a model was already used -> sanitized title/topic/filename suggestion -> user-editable output filename -> collision-safe browser save.
+
+Task History and Memory are separate. Operational file tasks can appear in Tasks/Recent Tasks, but they do not create Memory events or index entries. Document summary completion is the only task flow that creates Memory today, and it records only lightweight output filename, folder, and file-count metadata.

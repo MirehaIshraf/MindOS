@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-Last updated: 2026-06-01
+Last updated: 2026-06-03
 
 ## Backend Status
 
@@ -23,7 +23,7 @@ Last updated: 2026-06-01
 | Embeddings | Working/Partial | Uses Ollama + ChromaDB; optional systems fail over to keyword search. |
 | Relationships | Working/Partial | Stored in SQLite; quality and noise reduction need continued tuning. |
 | Chat | Working | Uses ConversationContextService, QueryIntentService, ContextBuilderService, selected model through ModelRouter, and background chat runs for navigation-safe responses. |
-| Tasks | Partial | File System Task Adapter MVP is active; other task adapters remain paused/mock-only. |
+| Tasks | Partial | Tasks page uses a compact command-palette-style UI currently wired for the File System task MVP. Manual path scan and deterministic prepare use backend preview endpoints; Chromium browser folder picking uses the File System Access API and scans selected folder handles in the frontend. Browser-selected folder planning supports AI-assisted metadata-only plans with deterministic fallback; execution is enabled for the POC after validation and confirmation. Document Summary Task POC supports readable file selection, PDF/DOCX/text extraction, output filename/format, summary style, model summary preview, and saving a new summary file. Backend path execution is not implemented. |
 | File connector | Working | Path-based folder import with clear events. |
 | Logs connector | Working | Path-based log import with clear events. |
 | Local Git connector | Working | Read-only local Git import with clear events. |
@@ -44,7 +44,7 @@ Last updated: 2026-06-01
 | Connectors | Working/Partial | Registry-driven cards with toggle/config/status; manual imports and saved sources remain in configure panels. |
 | Settings | Working/Partial | Chat and embedding model settings. |
 | Dev | Working/Partial | Debug page; should use `/status` as source of truth. |
-| Tasks | Partial | File System Task panel supports scan, prepare, confirmation execute, and undo; older external-task flows remain mock/experimental. |
+| Tasks | Partial | Task UI supports command entry, inline folder context, manual path input, browser-native folder selection, real read-only scan summaries, deterministic or AI-assisted plan previews, browser-handle execution for creating category folders and moving files, and document-summary previews for selected safe text/PDF/DOCX files. Browser-selected folders do not expose absolute Windows paths, so file organization and summary saving use the directory handle. Manual path mode remains preview-only. |
 | Playbooks | Placeholder | Route/page exists but not a current priority. |
 
 ## Implemented Connectors
@@ -69,7 +69,9 @@ These should send data to `/ingest/external` or `/ingest/external/bulk`.
 
 ## Current Known Bugs / Risks
 
-- Tasks module is mostly paused. Only the File System Task Adapter MVP is active, and it only allows `create_folder`, `move_file`, `copy_file`, and `rename_file` after confirmation.
+- Tasks module is mostly paused. The Tasks page now provides a compact command-palette-style File Task UI with one active organize-folder suggestion, manual path input, Chromium browser folder picking through the File System Access API, real read-only folder scanning, deterministic and LLM-assisted preview operations, and POC execution for browser-selected folders. File task planning now classifies intent first, so fallback preserves the user request instead of broadening it to organize-by-type. Browser execution creates folders and moves files only after confirmation, without deletes, overwrites, audit log, or shell commands. Manual path execution is not connected yet.
+- Document Summary Task POC supports browser-selected folders only. It lets the user choose readable `.txt`, `.md`, `.log`, `.json`, `.csv`, `.pdf`, and `.docx` files, pick output filename/format, choose brief/detailed/file-by-file style, send only selected extracted text to the selected model for a preview, and save a new `.md`/`.txt` summary file after confirmation. PDF extraction supports selectable-text PDFs only; scanned/image PDFs and OCR are not supported yet. Summary preview now suggests a dynamic task title, topic, and safe output filename from selected filenames, extracted headings/text, generated summary, instruction, and folder name; the user can edit the filename before saving. Original files are never modified, output files are never overwritten, and full source document text is not stored in task history or memory.
+- Recent Tasks can list all meaningful task activity, but only completed document summary tasks create indexed Memory events. Operational file tasks such as organize/move/copy/rename/create-folder remain Task History only and intentionally do not create Memory events or vector index entries.
 - File tasks must not delete, overwrite, run shell commands, read file contents, move outside the selected root, or touch system folders.
 - Dev page has historically had status flicker/false unavailable issues. It should use `/status` as source of truth.
 - Raw chat events should not be indexed or related. Use memory policy and clean indexes if old data polluted Chroma/relationships.

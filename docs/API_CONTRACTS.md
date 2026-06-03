@@ -128,8 +128,28 @@ Tasks are experimental/paused but routes still exist:
 
 File System Task Adapter routes:
 
-- `POST /tasks/file/scan`: scan a selected folder without reading file contents. Request includes `root_path`, `max_depth`, and `max_files`.
-- `POST /tasks/file/prepare`: create a validated preview plan from `root_path`, `instruction`, `max_depth`, `max_files`, and `dry_run`.
+- `POST /tasks/file/scan`: read-only scan of a selected folder without reading file contents or modifying files. Request:
+  `{ "root_path": "D:\\Downloads", "max_depth": 2, "max_files": 500, "include_hidden": false }`.
+  Response includes `root_path`, `files`, `folders`, `total_files`, `total_folders`, `total_size_bytes`, `max_depth`, `max_files`, `truncated`, and `warnings`.
+  Protected/system roots, drive roots, network paths, files, and missing folders return JSON `400` errors.
+- `POST /tasks/file/prepare`: create a deterministic preview-only file organization plan. It scans metadata, classifies files by extension, validates planned paths, and returns planned operations without creating folders or moving files. It does not call an LLM and does not create memory events.
+  Request example:
+  `{ "root_path": "D:\\Downloads", "instruction": "Organize this folder by file type", "max_depth": 2, "max_files": 500, "include_hidden": false, "mode": "organize", "dry_run": true }`.
+  Response includes `task_id`, `task_type`, `root_path`, `instruction`, `summary`, `risk_level`, `requires_confirmation`, `status`, `total_operations`, per-operation counts, `operations`, `folders_to_create`, `files_to_move`, `skipped`, `warnings`, `blocked_reasons`, `category_counts`, and `preview_only: true`.
+  Operation records include `id`, `type`, `tool`, absolute paths, relative display paths, reason, and `status`. `create_folder` operations use `path`; `move_file` operations use `from_path` and `to_path`.
+  Unknown file types are skipped unless the instruction explicitly asks to include other/unknown files. Existing destinations are skipped or blocked; no overwrite operation is proposed.
+- `POST /tasks/file/plan-with-llm`: create a preview-only AI-assisted plan for a browser-selected folder. It accepts metadata only; no file contents, browser handles, or absolute Windows paths are sent. The LLM only proposes JSON operations and the backend validates the result before returning a `FileTaskPlan`.
+  Request example:
+  `{ "instruction": "Move AI-related PDFs into AI Research", "root_name": "Downloads", "files": [{ "name": "transformer.pdf", "relative_path": "transformer.pdf", "extension": ".pdf", "size_bytes": 1234, "category": "PDFs" }], "folders": [], "allowed_operations": ["create_folder", "move_file"], "max_operations": 500 }`.
+  Allowed output operations are `create_folder` and `move_file` with relative paths only. Delete, overwrite, shell, edit, execute, folder moves, absolute paths, and path traversal are blocked. If the selected model is unavailable or returns invalid JSON, the endpoint returns a safe deterministic fallback for the same detected intent; it must not broaden a category move into a whole-folder organize plan.
+- `POST /tasks/document/summary/prepare`: create a document summary preview from browser-extracted text. Request:
+  `{ "instruction": "Summarize these documents", "folder_name": "Notes", "files": [{ "relative_path": "notes.md", "extension": ".md", "text": "..." }], "files_skipped": [], "output_format": "markdown", "output_filename": "mindos-summary.md", "summary_style": "detailed" }`.
+  Response includes `task_id`, `status`, `summary_title`, `summary_markdown`, `files_used`, `files_skipped`, `warnings`, `output_filename_suggestion`, `output_format`, `summary_style`, `topic`, `naming_confidence`, `naming_method`, `model`, `provider`, and `model_display_name`.
+  The backend does not read files from disk for this endpoint. Browser-selected file text is extracted in the frontend with limits, then sent to the selected model for a preview. Frontend extraction supports `.txt`, `.md`, `.log`, `.json`, `.csv`, selectable-text `.pdf`, and `.docx`; no OCR is performed. Saving the summary file is a separate user-confirmed browser File System Access API action.
+- `POST /tasks/document/summary/complete`: record a completed document summary after the browser saves the output file. Request:
+  `{ "task_id": "...", "folder_name": "Notes", "output_file_name": "capsule-networks-summary.md", "files_used_count": 3, "files_skipped_count": 1, "summary_style": "detailed", "output_format": "markdown", "file_types_used": ["pdf", "docx", "md"], "summary_title": "Summarized Capsule Networks documents", "topic": "Capsule Networks", "naming_confidence": "high" }`.
+  Response includes `status`, `task_type`, optional `memory_event_id`, and optional `warning`.
+  This endpoint creates the only task-related Memory event for the File Task POC: `mindos/document_summary_created`. It stores lightweight dynamic title/topic plus filename/folder/count/style/format/file-type metadata only, not full source document text.
 - `POST /tasks/file/{task_id}/execute`: execute a prepared plan only when `{ "confirmation": true }` is provided.
 - `POST /tasks/file/{task_id}/undo`: run safe undo operations when available.
 - `GET /tasks/file/{task_id}`: fetch file task plan, execution result, and undo state.

@@ -144,4 +144,18 @@ Before adding a new feature:
 
 Tasks are mostly paused, except the File System Task Adapter MVP. File tasks may use the selected LLM only to draft a plan; FastAPI validates every operation, shows a preview, requires user confirmation, executes through `FileAdapter`, and stores an undo log. Do not add delete, overwrite, shell command, external API, email, Jira, GitHub, browser, or VSCode task adapters unless explicitly requested.
 
+When modifying Tasks, keep task execution safe: LLM plans, FastAPI validates, the user confirms, and the backend executes. Do not add direct execution from the frontend.
+
+Browser-selected file task execution is a POC exception that uses the browser File System Access API only after explicit user confirmation. It must never overwrite existing destinations, and it must not remove an original file until the destination write has completed and been verified.
+
+LLM-generated file task plans must always be validated before preview or execution. Never execute raw LLM tool calls or model-proposed operations directly.
+
+Document summary tasks may read selected safe text documents from a browser-selected folder, but must not modify originals, overwrite output files, store full extracted text in memory, or execute files.
+Document summary PDF support is selectable-text extraction only. Do not add OCR or scanned-PDF processing unless explicitly requested.
+Generated document summary filenames must be sanitized, should use meaningful inferred topics when possible, and must never overwrite existing files.
+
+Do not create memory events for operational file tasks. File organize, move, copy, rename, create-folder, cleanup, scan, prepare, execute, and undo activity belongs in Task History only. Only completed document summary tasks should create indexed Memory events, and those events must stay lightweight.
+
+Do not store full source document text in task history or memory. This includes extracted PDF/DOCX text. Document summary task history should store only lightweight counts, filenames, folder names, output format, summary style, and file types.
+
 Future direction may include OpenClaw/Hermes-style agentic execution, but only after the data collection and memory layers are stable.

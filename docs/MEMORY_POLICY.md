@@ -40,11 +40,12 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | mindos/chat_message | No | No | No | No | Stored for history and Chats category only. |
 | mindos/chat_response | No | No | No | No | Stored for history and Chats category only. |
 | mindos/chat_summary | Yes | Yes | Yes | Yes | Future preferred representation of chat history. |
-| mindos/task_completed | Yes | Yes | Yes | Yes | Task lifecycle events are still stored even though Tasks are paused. |
+| mindos/task_completed | Yes | Yes | Yes | Yes | Legacy/mock task lifecycle events. Operational file tasks should use Task History only instead. |
 | mindos/file_task_prepared | Yes | No | No | No | File task preview/confirmation state; visible but not normal context. |
-| mindos/file_task_completed | Yes | Yes | No | Yes | Completed local file organization task summary. |
-| mindos/file_task_failed | Yes | Yes | No | Yes | Failed file task summary. |
-| mindos/file_task_undone | Yes | Yes | No | Yes | File task undo summary. |
+| mindos/file_task_completed | Yes | No | No | No | Legacy safety net only. Operational file tasks should appear in Task History, not Memory. |
+| mindos/file_task_failed | Yes | No | No | No | Legacy safety net only. Operational file tasks should appear in Task History, not Memory. |
+| mindos/file_task_undone | Yes | No | No | No | Legacy safety net only. Operational file task undo should appear in Task History, not Memory. |
+| mindos/document_summary_created | Yes | Yes | Yes | Yes | Lightweight record that a document summary file was created, including dynamic title/topic, output filename, folder, counts, style, format, and file types. Do not store full source document text. |
 | mindos/report_generated | Yes | Yes | Yes | Yes | Reports are useful memory. |
 | local_agent/agent_observation | No | No | No | No | Raw agent observations are noisy by default. |
 | local_agent/agent_summary | Yes | Yes | Yes | Yes | Summaries are preferred over raw agent streams. |
@@ -67,8 +68,10 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - Browser page summarization is manual and deterministic. Pending browser captures can be summarized from captured readable context, which updates the same `browser_page_captured` event with `summary_status=ready`, `summary_method=deterministic`, and `content_quality=summary`.
 - LLM summarization must not run automatically for every browser page capture.
 - Browser smart capture must not store private/login/payment pages, and full page text must remain off by default.
-- `task_completed` and `report_generated` are indexable/context eligible.
-- File task lifecycle events should not create relationships for every file operation. Prepared file tasks are visible but non-indexable/non-context. Completed, failed, and undone file task summaries are indexable/context eligible.
+- `task_completed` and `report_generated` are indexable/context eligible for legacy/read-only task flows.
+- Task memory policy: `document_summary_created` is visible, indexable, relationship eligible, and context eligible. Operational file tasks such as `file_organize`, `file_move`, `file_copy`, `file_rename`, and `create_folders` are Task History only; they must not create Memory events, be indexed, or be used for relationship/context expansion.
+- Document summary task history and memory events must stay lightweight. `document_summary_created` may use a dynamic title/topic and safe output filename metadata, but must not store full source document text, including extracted PDF/DOCX text, in either task history or memory.
+- Existing `file_task_prepared`, `file_task_completed`, `file_task_failed`, and `file_task_undone` policy entries are non-indexable/non-context safety nets. New operational file tasks should avoid creating these memory events in the first place.
 
 ## Why This Exists
 
