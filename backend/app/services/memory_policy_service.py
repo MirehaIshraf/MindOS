@@ -1,3 +1,6 @@
+from app.services.task_memory_policy_service import is_operational_file_task
+
+
 CAPTURED_SOURCES = {
     "file_system",
     "logs",
@@ -29,6 +32,15 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
     if event_type == "chat_summary":
         return _policy("chat", hidden=False)
 
+    if event_type == "document_summary_created":
+        return {
+            "memory_category": "task",
+            "hidden_from_default": False,
+            "is_indexable": True,
+            "is_relationship_eligible": True,
+            "is_context_eligible": True,
+        }
+
     if event_type == "file_task_prepared":
         return {
             "memory_category": "task",
@@ -42,9 +54,18 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
         return {
             "memory_category": "task",
             "hidden_from_default": False,
-            "is_indexable": True,
+            "is_indexable": False,
             "is_relationship_eligible": False,
-            "is_context_eligible": True,
+            "is_context_eligible": False,
+        }
+
+    if event_type.startswith("task_") and is_operational_file_task(str((metadata or {}).get("task_type") or "")):
+        return {
+            "memory_category": "task",
+            "hidden_from_default": False,
+            "is_indexable": False,
+            "is_relationship_eligible": False,
+            "is_context_eligible": False,
         }
 
     if event_type.startswith("task_"):

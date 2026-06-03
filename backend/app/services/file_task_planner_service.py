@@ -1,16 +1,16 @@
-import json
-import re
 from pathlib import Path
 from uuid import uuid4
 
-from app.schemas.file_tasks import FileOperation, FileSnapshotResponse, FileTaskPlan, SkippedFileItem
-from app.services.model_router_service import model_router_service
+from app.schemas.file_tasks import FileOperation, FileSnapshotItem, FileTaskPlan, FileTaskPrepareRequest, SkippedFileItem
+from app.services.file_snapshot_service import file_snapshot_service
+from app.services.file_task_safety_service import file_task_safety_service
+
 
 TYPE_FOLDERS = {
     "PDFs": {".pdf"},
-    "Images": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"},
+    "Images": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"},
     "Videos": {".mp4", ".mov", ".avi", ".mkv", ".webm"},
-    "Audio": {".mp3", ".wav", ".m4a", ".flac"},
+    "Audio": {".mp3", ".wav", ".m4a", ".flac", ".aac"},
     "Archives": {".zip", ".rar", ".7z", ".tar", ".gz"},
     "Installers": {".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm"},
     "Code": {".py", ".java", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".json", ".xml", ".yml", ".yaml"},
@@ -21,127 +21,101 @@ TYPE_FOLDERS = {
 
 
 class FileTaskPlannerService:
-    def plan(self, *, root_path: str, instruction: str, snapshot: FileSnapshotResponse, model_id: str | None = None) -> FileTaskPlan:
-        llm_plan, warning, model, provider = self._try_llm_plan(root_path, instruction, snapshot, model_id)
-        if llm_plan is not None:
-            llm_plan.planner_warning = warning
-            llm_plan.planner_model = model
-            llm_plan.planner_provider = provider
-            return llm_plan
-        plan = self._deterministic_plan(root_path, instruction, snapshot)
-        plan.planner_warning = warning or "Used deterministic file organization fallback."
-        plan.planner_model = model
-        plan.planner_provider = provider
-        return plan
-
-    def _try_llm_plan(
-        self,
-        root_path: str,
-        instruction: str,
-        snapshot: FileSnapshotResponse,
-        model_id: str | None,
-    ) -> tuple[FileTaskPlan | None, str | None, str | None, str | None]:
-        compact_files = [
-            {
-                "path": item.path,
-                "relative_path": item.relative_path,
-                "extension": item.extension,
-                "size_bytes": item.size_bytes,
-            }
-            for item in snapshot.files[:200]
-        ]
-        prompt = (
-            "You are creating a safe local file organization plan. Return JSON only. "
-            "Allowed operations: create_folder, move_file, copy_file, rename_file. "
-            "Never delete, overwrite, execute, edit content, or move outside root. "
-            "Use only files from the provided snapshot. If unsure, skip.\n\n"
-            f"Root: {root_path}\nInstruction: {instruction}\nFiles: {json.dumps(compact_files)}\n\n"
-            "Return keys: summary, risk_level, operations, skipped, warnings."
+    def prepare_deterministic_file_plan(self, request: FileTaskPrepareRequest) -> FileTaskPlan:
+        snapshot = file_snapshot_service.scan_folder(
+            root_path=request.root_path,
+            max_depth=request.max_depth,
+            max_files=request.max_files,
+            include_hidden=request.include_hidden,
         )
-        try:
-            result = model_router_service.generate(
-                messages=[
-                    {"role": "system", "content": "Return strict JSON only. No markdown."},
-                    {"role": "user", "content": prompt},
-                ],
-                requested_model_id=model_id,
-                options={"temperature": 0},
-            )
-            data = parse_json_object(result.reply)
-            operations = [FileOperation(**operation) for operation in data.get("operations", []) if isinstance(operation, dict)]
-            skipped = [SkippedFileItem(**item) for item in data.get("skipped", []) if isinstance(item, dict)]
-            if not operations:
-                return None, result.warning or "Planner returned no operations; using deterministic fallback.", result.model_used, result.provider
-            return (
-                FileTaskPlan(
-                    task_id=str(uuid4()),
-                    root_path=root_path,
-                    instruction=instruction,
-                    summary=str(data.get("summary") or "Prepared file organization task."),
-                    risk_level=data.get("risk_level") if data.get("risk_level") in {"low", "medium", "high"} else "medium",
-                    operations=operations,
-                    skipped=skipped,
-                    warnings=[str(item) for item in data.get("warnings", []) if item],
-                    status="draft",
-                    planner_model=result.model_used,
-                    planner_provider=result.provider,
-                    planner_warning=result.warning,
-                ),
-                result.warning,
-                result.model_used,
-                result.provider,
-            )
-        except Exception as error:
-            return None, f"LLM planner unavailable or invalid; using deterministic fallback. {error}", None, None
+        root = Path(snapshot.root_path).resolve()
+        include_others = should_include_others(request.instruction)
 
-    def _deterministic_plan(self, root_path: str, instruction: str, snapshot: FileSnapshotResponse) -> FileTaskPlan:
-        text = instruction.lower()
-        operations: list[FileOperation] = []
+        category_counts: dict[str, int] = {}
         skipped: list[SkippedFileItem] = []
-        organize_by_type = any(phrase in text for phrase in ["organize by file type", "organize this folder", "sort by type", "by file type"])
-        if not organize_by_type:
-            return FileTaskPlan(
-                task_id=str(uuid4()),
-                root_path=root_path,
-                instruction=instruction,
-                summary="No deterministic planner matched this instruction.",
-                risk_level="medium",
-                operations=[],
-                skipped=[SkippedFileItem(path=item.path, reason="No matching deterministic rule") for item in snapshot.files[:50]],
-                warnings=["Try: Organize this folder by file type."],
-                blocked_reasons=[],
-                status="blocked",
-            )
-        root = Path(root_path).resolve()
-        folders_needed: set[str] = set()
-        moves: list[tuple[str, str, str]] = []
-        include_others = "others" in text or "unknown" in text
+        move_operations: list[FileOperation] = []
+        destination_folders: set[str] = set()
+
         for item in snapshot.files:
-            folder = folder_for_extension(item.extension, include_others=include_others)
-            if folder is None:
-                skipped.append(SkippedFileItem(path=item.path, reason="No matching file type rule"))
+            category = folder_for_extension(item.extension, include_others=include_others)
+            if category is None:
+                skipped.append(to_skipped(item, "Unknown file type."))
                 continue
+            category_counts[category] = category_counts.get(category, 0) + 1
             source = Path(item.path).resolve()
-            destination = root / folder / source.name
-            if source.parent == root / folder:
-                skipped.append(SkippedFileItem(path=item.path, reason="Already in target folder"))
+            destination_folder = root / category
+            destination = destination_folder / source.name
+
+            if is_already_organized(source, destination_folder):
+                skipped.append(to_skipped(item, "Already organized."))
                 continue
-            folders_needed.add(folder)
-            moves.append((item.path, str(destination), folder))
-        for folder in sorted(folders_needed):
-            operations.append(FileOperation(type="create_folder", path=str(root / folder), reason=f"Create {folder} folder."))
-        for source, destination, folder in moves:
-            operations.append(FileOperation(type="move_file", from_path=source, to_path=destination, reason=f"Move into {folder}."))
+            if destination.exists():
+                skipped.append(to_skipped(item, "Destination already exists. No overwrite allowed."))
+                continue
+
+            destination_folders.add(category)
+            move_operations.append(
+                FileOperation(
+                    type="move_file",
+                    tool="file.move_file",
+                    from_path=str(source),
+                    to_path=str(destination),
+                    relative_from=str(source.relative_to(root)),
+                    relative_to=str(destination.relative_to(root)),
+                    reason=f"{category_singular(category)} file should be grouped under {category}.",
+                )
+            )
+
+        create_operations: list[FileOperation] = []
+        for category in sorted(destination_folders):
+            folder_path = root / category
+            if folder_path.exists():
+                continue
+            create_operations.append(
+                FileOperation(
+                    type="create_folder",
+                    tool="file.create_folder",
+                    path=str(folder_path),
+                    relative_to=str(folder_path.relative_to(root)),
+                    reason=f"Create {category} folder for organized files.",
+                )
+            )
+
+        operations = assign_operation_ids([*create_operations, *move_operations])
+        validation = file_task_safety_service.validate_plan(str(root), operations)
+        blocked_reasons = validation["blocked_reasons"]
+        warnings = [*snapshot.warnings, *validation["warnings"]]
+        status = status_for_plan(operations, blocked_reasons, skipped)
+
         return FileTaskPlan(
             task_id=str(uuid4()),
             root_path=str(root),
-            instruction=instruction,
-            summary="Organize files by type.",
+            instruction=request.instruction,
+            summary=build_summary(move_operations, category_counts),
             risk_level="low" if len(operations) <= 100 else "medium",
+            requires_confirmation=True,
             operations=operations,
+            folders_to_create=create_operations,
+            files_to_move=move_operations,
             skipped=skipped,
-            warnings=[],
-            status="draft",
+            warnings=dedupe(warnings),
+            blocked_reasons=dedupe(blocked_reasons),
+            status=status,
+            total_operations=len(operations),
+            create_folder_count=len(create_operations),
+            move_file_count=len(move_operations),
+            copy_file_count=0,
+            rename_file_count=0,
+            category_counts=category_counts,
+            preview_only=True,
+            planner_model=None,
+            planner_provider=None,
+            planner_warning="Deterministic preview only. No LLM planner was used.",
+        )
+
+    def plan(self, *, root_path: str, instruction: str, snapshot=None, model_id: str | None = None) -> FileTaskPlan:
+        return self.prepare_deterministic_file_plan(
+            FileTaskPrepareRequest(root_path=root_path, instruction=instruction)
         )
 
 
@@ -150,18 +124,61 @@ def folder_for_extension(extension: str, *, include_others: bool) -> str | None:
     for folder, extensions in TYPE_FOLDERS.items():
         if ext in extensions:
             return folder
-    return "Others" if include_others and ext else None
+    return "Other" if include_others and ext else None
 
 
-def parse_json_object(value: str) -> dict:
-    text = value.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError("Planner did not return JSON.")
-    return json.loads(match.group(0))
+def should_include_others(instruction: str) -> bool:
+    text = instruction.lower()
+    return "unknown" in text or "others" in text or "other files" in text
+
+
+def is_already_organized(source: Path, destination_folder: Path) -> bool:
+    return source.parent.resolve() == destination_folder.resolve()
+
+
+def to_skipped(item: FileSnapshotItem, reason: str) -> SkippedFileItem:
+    return SkippedFileItem(path=item.path, relative_path=item.relative_path, reason=reason)
+
+
+def assign_operation_ids(operations: list[FileOperation]) -> list[FileOperation]:
+    output: list[FileOperation] = []
+    for index, operation in enumerate(operations, start=1):
+        output.append(operation.model_copy(update={"id": f"op_{index:03d}", "status": operation.status or "planned"}))
+    return output
+
+
+def status_for_plan(operations: list[FileOperation], blocked_reasons: list[str], skipped: list[SkippedFileItem]) -> str:
+    if blocked_reasons:
+        return "blocked"
+    if operations:
+        return "awaiting_confirmation"
+    return "empty"
+
+
+def build_summary(move_operations: list[FileOperation], category_counts: dict[str, int]) -> str:
+    if not move_operations:
+        return "No file moves are needed for this folder."
+    categories = sorted(category_counts)
+    category_text = ", ".join(categories[:5])
+    if len(categories) > 5:
+        category_text += f", and {len(categories) - 5} more"
+    return f"Organize {len(move_operations)} files into {len(categories)} folders by file type: {category_text}."
+
+
+def category_singular(category: str) -> str:
+    if category == "PDFs":
+        return "PDF"
+    if category.endswith("s"):
+        return category[:-1]
+    return category
+
+
+def dedupe(values: list[str]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if value not in output:
+            output.append(value)
+    return output
 
 
 file_task_planner_service = FileTaskPlannerService()

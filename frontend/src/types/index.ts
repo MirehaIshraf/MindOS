@@ -577,20 +577,32 @@ export type FileSnapshotItem = {
 };
 
 export type FileSnapshotResponse = {
-  root_path: string;
+  root_path: string | null;
+  root_name?: string;
+  display_name?: string;
+  source?: "backend_path" | "browser_handle";
   files: FileSnapshotItem[];
   folders: FileSnapshotItem[];
   total_files: number;
   total_folders: number;
+  total_size_bytes: number;
+  max_depth: number;
+  max_files: number;
+  truncated: boolean;
   warnings: string[];
 };
 
 export type FileOperation = {
+  id: string;
   type: "create_folder" | "move_file" | "copy_file" | "rename_file";
+  tool: string;
   from_path?: string | null;
   to_path?: string | null;
   path?: string | null;
+  relative_from?: string | null;
+  relative_to?: string | null;
   reason: string;
+  status: "planned" | "blocked";
 };
 
 export type FileTaskPlan = {
@@ -602,13 +614,44 @@ export type FileTaskPlan = {
   risk_level: "low" | "medium" | "high";
   requires_confirmation: boolean;
   operations: FileOperation[];
-  skipped: Array<{ path: string; reason: string }>;
+  folders_to_create: FileOperation[];
+  files_to_move: FileOperation[];
+  skipped: Array<{ path: string; relative_path?: string | null; reason: string }>;
   warnings: string[];
   blocked_reasons: string[];
-  status: "draft" | "awaiting_confirmation" | "blocked" | "completed" | "failed" | "partial" | "undone";
+  status: "draft" | "awaiting_confirmation" | "blocked" | "empty" | "unsupported" | "completed" | "failed" | "partial" | "undone";
+  total_operations: number;
+  create_folder_count: number;
+  move_file_count: number;
+  copy_file_count: number;
+  rename_file_count: number;
+  category_counts: Record<string, number>;
+  preview_only: boolean;
   planner_model?: string | null;
   planner_provider?: string | null;
   planner_warning?: string | null;
+};
+
+export type FileTaskLlmPlanRequest = {
+  instruction: string;
+  root_name: string;
+  files: Array<{
+    name: string;
+    relative_path: string;
+    extension: string;
+    size_bytes: number;
+    modified_at?: string | null;
+    category?: string | null;
+    is_hidden?: boolean;
+  }>;
+  folders: Array<{
+    name: string;
+    relative_path: string;
+    is_hidden?: boolean;
+  }>;
+  allowed_operations?: Array<"create_folder" | "move_file">;
+  max_operations?: number;
+  model_id?: string | null;
 };
 
 export type FileTaskExecutionResult = {
@@ -647,6 +690,67 @@ export type FileTaskRecord = {
 export type FileTaskRecentResponse = {
   tasks: FileTaskRecord[];
   total: number;
+};
+
+export type DocumentSummaryStyle = "brief" | "detailed" | "file_by_file";
+
+export type DocumentSummaryPrepareRequest = {
+  instruction: string;
+  folder_name: string;
+  files: Array<{
+    relative_path: string;
+    extension: string;
+    text: string;
+  }>;
+  files_skipped?: Array<{
+    relative_path: string;
+    reason: string;
+  }>;
+  output_format?: "markdown" | "text";
+  output_filename?: string;
+  summary_style?: DocumentSummaryStyle;
+  model_id?: string | null;
+};
+
+export type DocumentSummaryPrepareResponse = {
+  task_id: string;
+  status: "preview" | "empty" | "unsupported" | "failed";
+  summary_title: string;
+  summary_markdown: string;
+  files_used: string[];
+  files_skipped: Array<{ relative_path: string; reason: string }>;
+  warnings: string[];
+  output_filename_suggestion: string;
+  model?: string | null;
+  provider?: string | null;
+  model_display_name?: string | null;
+  planner_warning?: string | null;
+  output_format?: "markdown" | "text";
+  summary_style?: DocumentSummaryStyle;
+  topic?: string | null;
+  naming_confidence?: "high" | "medium" | "low";
+  naming_method?: "llm" | "deterministic" | "fallback";
+};
+
+export type DocumentSummaryCompleteRequest = {
+  task_id: string;
+  folder_name: string;
+  output_file_name: string;
+  files_used_count: number;
+  files_skipped_count: number;
+  summary_style?: DocumentSummaryStyle;
+  output_format?: "markdown" | "text";
+  file_types_used?: string[];
+  summary_title?: string | null;
+  topic?: string | null;
+  naming_confidence?: "high" | "medium" | "low";
+};
+
+export type DocumentSummaryCompleteResponse = {
+  status: "recorded" | "completed_with_warning";
+  task_type: "document_summary";
+  memory_event_id?: string | null;
+  warning?: string | null;
 };
 
 export type Connector = {

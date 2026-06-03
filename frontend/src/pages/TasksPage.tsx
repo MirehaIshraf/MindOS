@@ -1,745 +1,1576 @@
-import { AlertTriangle, CheckCircle2, ClipboardCheck, FolderOpen, History, Send } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { ChevronRight, FolderOpen, ListChecks, Play, Sparkles } from "lucide-react";
+import { KeyboardEvent, RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
-import { EmptyState } from "../components/shared/EmptyState";
-import { TaskPreviewDetails } from "../components/tasks/TaskPreviewDetails";
+import { completeDocumentSummary, getErrorMessage, getModelSettings, prepareFileTaskPlan, scanFileTask } from "../services/api";
 import {
-  cancelTask,
-  confirmTask,
-  executeFileTask,
-  executeTask,
-  getErrorMessage,
-  getPendingTasks,
-  getTaskHistory,
-  prepareFileTask,
-  scanFileTask,
-  undoFileTask,
-} from "../services/api";
-import type { FileOperation, FileSnapshotResponse, FileTaskExecutionResult, FileTaskPlan, FileTaskUndoResult, TaskHistoryItem, TaskResponse } from "../types";
+  executeBrowserFilePlan,
+  undoBrowserFilePlan,
+  type BrowserExecutionProgress,
+  type BrowserExecutionResult,
+  type BrowserUndoResult,
+} from "../services/browserFileExecutor";
+import { chooseBrowserFolder, isBrowserFolderPickerSupported, type BrowserPickedFolder } from "../services/browserFolderPicker";
+import { scanBrowserFolder, type BrowserFolderScanResult } from "../services/browserFolderScanner";
+import { getReadableFilesFromScan, readDocumentsForSummary, type BrowserDocumentReadResult } from "../services/browserDocumentReader";
+import { writeSummaryFile } from "../services/browserDocumentWriter";
+import { prepareBrowserDocumentSummary } from "../services/documentSummaryPlanner";
+import {
+  buildExactIntentFallbackPlan,
+  classifyFileTaskIntent,
+  createLlmAssistedBrowserFilePlan,
+  shouldUseLlmFilePlanning,
+  validateBrowserFilePlan,
+  type FileTaskIntent,
+} from "../services/fileTaskLlmPlanner";
+import type { DocumentSummaryPrepareResponse, DocumentSummaryStyle, FileOperation, FileSnapshotItem, FileSnapshotResponse, FileTaskPlan, ModelConfig } from "../types";
 
-const exampleTasks = [
-  "Create a Jira ticket for the login bug",
-  "Draft an email about deployment failure",
-  "Suggest a branch name for JWT fix",
-  "Generate a commit message for recent changes",
-  "Prepare a weekly report",
+type TaskUiState = "resting" | "typing" | "context" | "document_options" | "plan";
+
+type CategorySummary = {
+  label: string;
+  count: number;
+};
+
+type ScanSource = "backend_path" | "browser_handle";
+type ExecutionPhase = "idle" | "confirming" | "running" | "completed" | "undoing" | "undone";
+
+type RecentTaskItem = {
+  id: string;
+  type: "file_organize" | "document_summary";
+  title: string;
+  summary: string;
+  status: "completed" | "partial" | "failed";
+  folderName: string;
+  outputFileName?: string;
+  createdAt: string;
+  details: Record<string, number | string | boolean | null>;
+};
+
+type DocumentSummarySelection = {
+  instruction: string;
+  scan: BrowserFolderScanResult;
+  candidates: FileSnapshotItem[];
+  selectedPaths: string[];
+  skipped: Array<{ relative_path: string; reason: string }>;
+  warnings: string[];
+};
+
+type CloudSummaryWarning = {
+  provider: string;
+  displayName: string;
+} | null;
+
+const recentTasksStorageKey = "mindos.tasks.recent";
+const commandSuggestions = ["Organize Downloads", "Move PDFs", "Create project folders", "Rename screenshots"];
+
+const folderSuggestions = [
+  { label: "Downloads", path: "D:\\Downloads" },
+  { label: "Documents", path: "D:\\Documents" },
+  { label: "Desktop", path: "D:\\Desktop" },
+  { label: "Projects", path: "D:\\Projects" },
+];
+
+const extensionCategories: Array<{ label: string; extensions: string[] }> = [
+  { label: "PDFs", extensions: [".pdf"] },
+  { label: "Images", extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"] },
+  { label: "Videos", extensions: [".mp4", ".mov", ".avi", ".mkv", ".webm"] },
+  { label: "Audio", extensions: [".mp3", ".wav", ".m4a", ".flac", ".aac"] },
+  { label: "Archives", extensions: [".zip", ".rar", ".7z", ".tar", ".gz"] },
+  { label: "Installers", extensions: [".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm"] },
+  { label: "Code", extensions: [".py", ".java", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".json", ".xml", ".yml", ".yaml"] },
+  { label: "Documents", extensions: [".doc", ".docx", ".txt", ".md", ".rtf"] },
+  { label: "Spreadsheets", extensions: [".xls", ".xlsx", ".csv"] },
+  { label: "Presentations", extensions: [".ppt", ".pptx"] },
 ];
 
 export function TasksPage() {
-  const [searchParams] = useSearchParams();
-  const [taskText, setTaskText] = useState("");
-  const [modelId, setModelId] = useState<string | null>(null);
-  const [activeTask, setActiveTask] = useState<TaskResponse | null>(null);
-  const [pendingTasks, setPendingTasks] = useState<TaskHistoryItem[]>([]);
-  const [history, setHistory] = useState<TaskHistoryItem[]>([]);
-  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
-  const [loadingAction, setLoadingAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [lastTaskApiError, setLastTaskApiError] = useState<Record<string, unknown> | null>(null);
-  const pendingSectionRef = useRef<HTMLDivElement>(null);
+  const [uiState, setUiState] = useState<TaskUiState>("resting");
+  const [command, setCommand] = useState("");
+  const [rootPath, setRootPath] = useState("");
+  const [scanResult, setScanResult] = useState<FileSnapshotResponse | null>(null);
+  const [filePlan, setFilePlan] = useState<FileTaskPlan | null>(null);
+  const [documentSelection, setDocumentSelection] = useState<DocumentSummarySelection | null>(null);
+  const [documentSummary, setDocumentSummary] = useState<DocumentSummaryPrepareResponse | null>(null);
+  const [documentReadResult, setDocumentReadResult] = useState<BrowserDocumentReadResult | null>(null);
+  const [summaryOutputFilename, setSummaryOutputFilename] = useState("mindos-summary.md");
+  const [summaryFilenameWasEdited, setSummaryFilenameWasEdited] = useState(false);
+  const [summaryOutputFormat, setSummaryOutputFormat] = useState<"markdown" | "text">("markdown");
+  const [summaryStyle, setSummaryStyle] = useState<DocumentSummaryStyle>("detailed");
+  const [cloudSummaryWarning, setCloudSummaryWarning] = useState<CloudSummaryWarning>(null);
+  const [scanSource, setScanSource] = useState<ScanSource>("backend_path");
+  const [browserFolder, setBrowserFolder] = useState<BrowserPickedFolder | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [prepareLoading, setPrepareLoading] = useState(false);
+  const [prepareStatus, setPrepareStatus] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [prepareError, setPrepareError] = useState<string | null>(null);
+  const [pathIsStale, setPathIsStale] = useState(false);
+  const [folderPickerMessage, setFolderPickerMessage] = useState<string | null>(null);
+  const [isChoosingFolder, setIsChoosingFolder] = useState(false);
+  const [executionPhase, setExecutionPhase] = useState<ExecutionPhase>("idle");
+  const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [executionProgress, setExecutionProgress] = useState<BrowserExecutionProgress | null>(null);
+  const [executionResult, setExecutionResult] = useState<BrowserExecutionResult | null>(null);
+  const [undoResult, setUndoResult] = useState<BrowserUndoResult | null>(null);
+  const [summarySaveLoading, setSummarySaveLoading] = useState(false);
+  const [summarySaveMessage, setSummarySaveMessage] = useState<string | null>(null);
+  const [recentTasks, setRecentTasks] = useState<RecentTaskItem[]>(() => loadRecentTasks());
+  const pathInputRef = useRef<HTMLInputElement>(null);
+
+  const visiblePath = browserFolder?.name || rootPath || inferredPathFromCommand(command) || "D:\\Downloads";
+  const detectedIntent = useMemo(() => classifyFileTaskIntent(command.trim()), [command]);
+  const hasMeaningfulCommand = command.trim().split(/\s+/).filter(Boolean).length >= 2;
+  const showIntentHint = (uiState === "typing" || (uiState === "context" && command.trim().length > 0)) && !hasMeaningfulCommand;
+  const showDetectedIntent = (uiState === "typing" || uiState === "context") && hasMeaningfulCommand;
+  const showContext = uiState === "context" || uiState === "document_options" || uiState === "plan";
+  const commandValue = command.trim();
+  const categories = useMemo(() => buildCategorySummary(scanResult?.files ?? []), [scanResult]);
 
   useEffect(() => {
-    const instruction = searchParams.get("instruction");
-    if (instruction) {
-      setTaskText(instruction);
-    }
-    setModelId(searchParams.get("model_id"));
-  }, [searchParams]);
+    localStorage.setItem(recentTasksStorageKey, JSON.stringify(recentTasks.slice(0, 20)));
+  }, [recentTasks]);
 
-  useEffect(() => {
-    void refreshTasks();
-  }, []);
-
-  async function refreshTasks() {
-    const [historyResponse, pendingResponse] = await Promise.all([getTaskHistory(), getPendingTasks()]);
-    setHistory(historyResponse.tasks);
-    setPendingTasks(pendingResponse.tasks);
+  function addRecentTask(item: Omit<RecentTaskItem, "id" | "createdAt">) {
+    setRecentTasks((current) => [
+      {
+        ...item,
+        id: `task-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        createdAt: new Date().toISOString(),
+      },
+      ...current,
+    ].slice(0, 20));
   }
 
-  async function safeRefreshTasks() {
-    try {
-      await refreshTasks();
-    } catch {
-      setHistory([]);
-      setPendingTasks([]);
-    }
+  function resetPlan() {
+    setFilePlan(null);
+    setDocumentSelection(null);
+    setDocumentSummary(null);
+    setDocumentReadResult(null);
+    setCloudSummaryWarning(null);
+    setSummarySaveMessage(null);
+    setPrepareError(null);
+    setPrepareStatus(null);
+    resetExecution();
   }
 
-  async function handleSubmit() {
-    const instruction = taskText.trim();
-    if (!instruction) {
+  function resetExecution() {
+    setExecutionPhase("idle");
+    setExecutionMessage(null);
+    setExecutionProgress(null);
+    setExecutionResult(null);
+    setUndoResult(null);
+    setSummarySaveLoading(false);
+  }
+
+  function handleCommandChange(value: string) {
+    setCommand(value);
+    setScanError(null);
+    setFolderPickerMessage(null);
+    resetPlan();
+    if (value.trim()) {
+      setUiState("typing");
+      return;
+    }
+    setUiState(scanResult || rootPath ? "typing" : "resting");
+  }
+
+  function handleCommandKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const pathFromCommand = extractPathLikeCommand(command);
+    if (pathFromCommand) {
+      setBrowserFolder(null);
+      setScanSource("backend_path");
+      setRootPath(pathFromCommand);
+      setFolderPickerMessage(null);
+      void handleScan(pathFromCommand);
+      return;
+    }
+    continueFromCommand();
+  }
+
+  function continueFromCommand() {
+    const nextPath = rootPath || inferredPathFromCommand(command);
+    if (nextPath) {
+      setBrowserFolder(null);
+      setScanSource("backend_path");
+      setRootPath(nextPath);
+    }
+    setUiState("context");
+  }
+
+  function handleSuggestionClick(suggestion: string) {
+    setCommand(suggestion.toLowerCase());
+    setScanError(null);
+    setFolderPickerMessage(null);
+    resetPlan();
+    if (suggestion === "Organize Downloads" && !rootPath) {
+      setRootPath("D:\\Downloads");
+      setBrowserFolder(null);
+      setScanSource("backend_path");
+    }
+    setUiState("context");
+  }
+
+  function handleFolderSelect(path: string) {
+    setRootPath(path);
+    setBrowserFolder(null);
+    setScanSource("backend_path");
+    setScanResult(null);
+    setPathIsStale(false);
+    setScanError(null);
+    setFolderPickerMessage(null);
+    resetPlan();
+    setUiState("context");
+  }
+
+  async function handleChooseFolder() {
+    setFolderPickerMessage(null);
+    setScanError(null);
+    setPrepareError(null);
+
+    if (!isBrowserFolderPickerSupported()) {
+      setFolderPickerMessage("Your browser does not support folder picking. Paste the folder path manually.");
+      pathInputRef.current?.focus();
+      setUiState("context");
       return;
     }
 
-    setLoadingAction("execute");
-    setError(null);
-    setLastTaskApiError(null);
+    setIsChoosingFolder(true);
     try {
-      const response = await executeTask(instruction, true, modelId);
-      setActiveTask(response);
-      setTaskText("");
-      await refreshTasks();
-    } catch (caughtError) {
-      console.error("TasksPage failed to execute task", caughtError);
-      setError(getErrorMessage(caughtError));
-      setLastTaskApiError(taskApiErrorDetails(caughtError));
+      const selectedFolder = await chooseBrowserFolder();
+      if (!selectedFolder) return;
+      setBrowserFolder(selectedFolder);
+      setScanSource("browser_handle");
+      setRootPath("");
+      setScanResult(null);
+      setPathIsStale(false);
+      resetPlan();
+      setUiState("context");
+      await handleBrowserScan(selectedFolder);
+    } catch (error) {
+      setFolderPickerMessage(getErrorMessage(error));
+      pathInputRef.current?.focus();
     } finally {
-      setLoadingAction(null);
+      setIsChoosingFolder(false);
     }
   }
 
-  async function handleConfirmToken(confirmationToken: string) {
-    setLoadingAction(`confirm:${confirmationToken}`);
-    setError(null);
+  async function handleBrowserScan(folder = browserFolder, options: { clearPlan?: boolean } = {}): Promise<BrowserFolderScanResult | null> {
+    const clearPlan = options.clearPlan ?? true;
+    if (!folder) {
+      setScanError("Choose a folder before scanning.");
+      setUiState("context");
+      return null;
+    }
+    setScanLoading(true);
+    setScanSource("browser_handle");
+    setScanResult(null);
+    setPathIsStale(false);
+    setScanError(null);
+    setFolderPickerMessage(null);
+    if (clearPlan) {
+      resetPlan();
+    } else {
+      setPrepareError(null);
+    }
+    setUiState("context");
     try {
-      const response = await confirmTask(confirmationToken);
-      setActiveTask(response);
-      await refreshTasks();
-    } catch (caughtError) {
-      console.error("TasksPage failed to confirm task", caughtError);
-      setError(getErrorMessage(caughtError));
+      const result = await scanBrowserFolder(folder.handle, { maxDepth: 2, maxFiles: 500, includeHidden: false });
+      setScanResult(result);
+      return result;
+    } catch (error) {
+      setScanError(getErrorMessage(error));
+      return null;
     } finally {
-      setLoadingAction(null);
+      setScanLoading(false);
     }
   }
 
-  async function handleCancelTask(taskId: string) {
-    setLoadingAction(`cancel:${taskId}`);
-    setError(null);
+  async function handleScan(path = visiblePath): Promise<FileSnapshotResponse | null> {
+    if (scanSource === "browser_handle" && browserFolder) {
+      return handleBrowserScan(browserFolder);
+    }
+    const scanPath = path.trim();
+    if (!scanPath) {
+      setScanError("Enter a folder path to scan.");
+      setUiState("context");
+      return null;
+    }
+    setRootPath(scanPath);
+    setBrowserFolder(null);
+    setScanSource("backend_path");
+    setScanResult(null);
+    setPathIsStale(false);
+    setScanError(null);
+    setFolderPickerMessage(null);
+    resetPlan();
+    setScanLoading(true);
+    setUiState("context");
     try {
-      const response = await cancelTask(taskId);
-      setActiveTask(response);
-      await refreshTasks();
-    } catch (caughtError) {
-      console.error("TasksPage failed to cancel task", caughtError);
-      setError(getErrorMessage(caughtError));
+      const result = await scanFileTask({ root_path: scanPath, max_depth: 2, max_files: 500, include_hidden: false });
+      setScanResult(result);
+      setRootPath(result.root_path ?? scanPath);
+      setPathIsStale(false);
+      return result;
+    } catch (error) {
+      setScanError(toTaskErrorMessage(error));
+      return null;
     } finally {
-      setLoadingAction(null);
+      setScanLoading(false);
     }
   }
 
-  function handleReview(taskId: string) {
-    setHighlightedTaskId(taskId);
-    pendingSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => setHighlightedTaskId(null), 1400);
+  async function handlePrepare() {
+    if (scanSource === "browser_handle") {
+      await handlePrepareBrowserPlan();
+      return;
+    }
+
+    const preparePath = (pathIsStale ? visiblePath : scanResult?.root_path || visiblePath).trim();
+    if (detectedIntent.intent === "document_summary") {
+      setPrepareError("For this POC, choose the folder with the Choose button so MindOS can read and save files safely.");
+      return;
+    }
+    if (!preparePath) {
+      setPrepareError("Enter a folder path before preparing a plan.");
+      return;
+    }
+    setPrepareError(null);
+    setPrepareLoading(true);
+    try {
+      if (!scanResult || pathIsStale) {
+        const scan = await handleScan(preparePath);
+        if (!scan) {
+          setPrepareError("Scan the folder successfully before preparing a plan.");
+          return;
+        }
+      }
+      const plan = await prepareFileTaskPlan({
+        root_path: preparePath,
+        instruction: command.trim() || "Organize this folder by file type",
+        max_depth: 2,
+        max_files: 500,
+        include_hidden: false,
+        mode: "organize",
+        dry_run: true,
+      });
+      setFilePlan(plan);
+      setRootPath(plan.root_path);
+      setUiState("plan");
+    } catch (error) {
+      setPrepareError(toTaskErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+    }
   }
 
-  const activePendingTask = activeTask?.status === "confirmation_required" ? activeTask : null;
+  async function handlePrepareBrowserPlan() {
+    setPrepareError(null);
+    setPrepareLoading(true);
+    setPrepareStatus("Creating safe plan...");
+    try {
+      const currentScan = scanResult && !pathIsStale ? (scanResult as BrowserFolderScanResult) : await handleBrowserScan();
+      if (!currentScan) {
+        setPrepareError("Scan the folder successfully before preparing a plan.");
+        return;
+      }
+      const instruction = command.trim() || "Organize this folder by file type";
+      const intent = classifyFileTaskIntent(instruction);
+      if (intent.intent === "document_summary") {
+        await handlePrepareDocumentSummary(currentScan, instruction);
+        setUiState("document_options");
+        return;
+      }
+      if (shouldUseLlmFilePlanning(instruction, intent)) {
+        setPrepareStatus("Asking model to prepare a plan...");
+        try {
+          const llmPlan = await createLlmAssistedBrowserFilePlan(currentScan, instruction);
+          setPrepareStatus("Validating plan...");
+          setFilePlan(llmPlan);
+        } catch (error) {
+          setPrepareStatus("Using exact-intent fallback...");
+          const fallback = buildExactIntentFallbackPlan(currentScan, instruction, `AI planner failed, so MindOS used a safe exact-intent fallback. ${getErrorMessage(error)}`);
+          setFilePlan(validateBrowserFilePlan(fallback, currentScan));
+        }
+      } else {
+        const deterministicPlan = buildExactIntentFallbackPlan(currentScan, instruction);
+        setFilePlan(validateBrowserFilePlan(deterministicPlan, currentScan));
+      }
+      setUiState("plan");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handlePrepareDocumentSummary(currentScan: BrowserFolderScanResult, instruction: string) {
+    if (!browserFolder) {
+      setPrepareError("For this POC, choose the folder with the Choose button so MindOS can read and save files safely.");
+      return;
+    }
+    setFilePlan(null);
+    setDocumentSummary(null);
+    setDocumentReadResult(null);
+    setCloudSummaryWarning(null);
+    const readable = getReadableFilesFromScan(currentScan, instruction);
+    const warnings = readable.warning ? [`${readable.warning} I can currently summarize txt, md, log, json, csv, PDF, and DOCX files.`] : [];
+    setDocumentSelection({
+      instruction,
+      scan: currentScan,
+      candidates: readable.candidates,
+      selectedPaths: readable.candidates.slice(0, 20).map((file) => file.relative_path),
+      skipped: readable.skipped,
+      warnings,
+    });
+    if (!readable.candidates.length) {
+      setDocumentSummary({
+        task_id: `doc-summary-empty-${Date.now()}`,
+        status: "empty",
+        summary_title: "No readable documents found",
+        summary_markdown: warnings.find((warning) => warning.includes("PDF reading")) ?? "I couldn't find readable documents in this folder.",
+        files_used: [],
+        files_skipped: readable.skipped,
+        warnings,
+        output_filename_suggestion: summaryOutputFilename,
+        output_format: summaryOutputFormat,
+        summary_style: summaryStyle,
+      });
+    }
+  }
+
+  async function handlePrepareSelectedDocumentSummary(cloudConfirmed = false) {
+    if (!browserFolder || !documentSelection) return;
+    const selectedFiles = documentSelection.candidates.filter((file) => documentSelection.selectedPaths.includes(file.relative_path));
+    if (!selectedFiles.length) {
+      setPrepareError("Select at least one readable file.");
+      return;
+    }
+    setPrepareError(null);
+    setPrepareLoading(true);
+    setCloudSummaryWarning(null);
+    try {
+      const selectedModel = await getSelectedChatModel();
+      if (selectedModel?.type === "cloud" && !cloudConfirmed) {
+        setCloudSummaryWarning({ provider: selectedModel.provider, displayName: selectedModel.display_name });
+        return;
+      }
+      setPrepareStatus("Reading selected files...");
+      const readResult = await readDocumentsForSummary(browserFolder.handle, documentSelection.scan, {
+        instruction: documentSelection.instruction,
+        selectedFiles,
+        onProgress: setPrepareStatus,
+      });
+      setDocumentReadResult(readResult);
+      if (!readResult.files_read.length) {
+        setDocumentSummary({
+          task_id: `doc-summary-empty-${Date.now()}`,
+          status: "empty",
+          summary_title: "No readable documents found",
+          summary_markdown: "I couldn't find readable documents in the selected files.",
+          files_used: [],
+          files_skipped: readResult.skipped,
+          warnings: readResult.warnings,
+          output_filename_suggestion: normalizedSummaryFilename(summaryOutputFilename, summaryOutputFormat),
+          output_format: summaryOutputFormat,
+          summary_style: summaryStyle,
+        });
+        return;
+      }
+      setPrepareStatus("Preparing summary with selected model...");
+      const summary = await prepareBrowserDocumentSummary(documentSelection.instruction, documentSelection.scan.display_name || documentSelection.scan.root_name, readResult, {
+        outputFormat: summaryOutputFormat,
+        outputFilename: summaryFilenameWasEdited ? normalizedSummaryFilename(summaryOutputFilename, summaryOutputFormat) : undefined,
+        summaryStyle,
+      });
+      setPrepareStatus("Finalizing preview...");
+      setDocumentSummary(summary);
+      if (!summaryFilenameWasEdited) {
+        setSummaryOutputFilename(normalizedSummaryFilename(summary.output_filename_suggestion, summaryOutputFormat));
+      }
+      setUiState("plan");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handleSaveSummary() {
+    if (!browserFolder || !documentSummary || documentSummary.status !== "preview") return;
+    setSummarySaveLoading(true);
+    setSummarySaveMessage(null);
+    try {
+      const finalOutputFilename = normalizedSummaryFilename(summaryOutputFilename || documentSummary.output_filename_suggestion, documentSummary.output_format ?? summaryOutputFormat);
+      const saved = await writeSummaryFile(browserFolder.handle, finalOutputFilename, documentSummary.summary_markdown);
+      let message = `Saved summary: ${saved.filename}. Original files were not changed.`;
+      const fileTypesUsed = uniqueFileTypes(documentReadResult);
+      try {
+        const completion = await completeDocumentSummary({
+          task_id: documentSummary.task_id,
+          folder_name: browserFolder.name,
+          output_file_name: saved.filename,
+          files_used_count: documentSummary.files_used.length,
+          files_skipped_count: documentSummary.files_skipped.length,
+          summary_style: documentSummary.summary_style ?? summaryStyle,
+          output_format: documentSummary.output_format ?? summaryOutputFormat,
+          file_types_used: fileTypesUsed,
+          summary_title: documentSummary.summary_title,
+          topic: documentSummary.topic,
+          naming_confidence: documentSummary.naming_confidence ?? "low",
+        });
+        if (completion.warning) {
+          message = `${message} ${completion.warning}`;
+        }
+      } catch (memoryError) {
+        message = `${message} MindOS could not record the memory event: ${getErrorMessage(memoryError)}`;
+      }
+      addRecentTask({
+        type: "document_summary",
+        title: documentSummary.summary_title || "Created document summary",
+        summary: `Used ${documentSummary.files_used.length} files · skipped ${documentSummary.files_skipped.length} · saved ${saved.filename}`,
+        status: "completed",
+        folderName: browserFolder.name,
+        outputFileName: saved.filename,
+        details: {
+          files_used_count: documentSummary.files_used.length,
+          files_skipped_count: documentSummary.files_skipped.length,
+          output_format: documentSummary.output_format ?? summaryOutputFormat,
+          summary_style: documentSummary.summary_style ?? summaryStyle,
+          file_types_used: fileTypesUsed.join(", "),
+          topic: documentSummary.topic || "",
+          naming_confidence: documentSummary.naming_confidence ?? "low",
+        },
+      });
+      setSummarySaveMessage(message);
+    } catch (error) {
+      setSummarySaveMessage(getErrorMessage(error));
+    } finally {
+      setSummarySaveLoading(false);
+    }
+  }
+
+  function handleEdit() {
+    setUiState("context");
+  }
+
+  function handleRunPlanRequest() {
+    setExecutionMessage(null);
+    if (!filePlan) return;
+    if (scanSource !== "browser_handle" || !browserFolder) {
+      setExecutionMessage("Execution is currently available only for browser-selected folders. Choose a folder first.");
+      return;
+    }
+    if (filePlan.blocked_reasons.length > 0) {
+      setExecutionMessage("This plan is blocked and cannot run.");
+      return;
+    }
+    if (filePlan.total_operations === 0) {
+      setExecutionMessage("There are no file operations to run.");
+      return;
+    }
+    setExecutionPhase("confirming");
+  }
+
+  async function handleExecuteBrowserPlan() {
+    if (!filePlan || !browserFolder) return;
+    setExecutionMessage(null);
+    setExecutionProgress(null);
+    setExecutionResult(null);
+    setUndoResult(null);
+    setExecutionPhase("running");
+    try {
+      const result = await executeBrowserFilePlan(browserFolder.handle, filePlan, {
+        onProgress: setExecutionProgress,
+      });
+      setExecutionResult(result);
+      setExecutionPhase("completed");
+      addRecentTask({
+        type: "file_organize",
+        title: result.status === "completed" ? "Organized folder" : result.status === "partial" ? "Partially organized folder" : "File task failed",
+        summary: `Created ${result.createdFolders} folders · moved ${result.movedFiles} files · skipped ${result.skipped.length}`,
+        status: result.status,
+        folderName: browserFolder.name,
+        details: {
+          created_folders: result.createdFolders,
+          moved_files: result.movedFiles,
+          skipped_count: result.skipped.length,
+          errors_count: result.errors.length,
+          undo_available: result.undoAvailable,
+        },
+      });
+      await handleBrowserScan(browserFolder, { clearPlan: false });
+    } catch (error) {
+      setExecutionMessage(getErrorMessage(error));
+      setExecutionPhase("idle");
+    }
+  }
+
+  async function handleUndoBrowserPlan() {
+    if (!browserFolder || !executionResult?.undoOperations.length) return;
+    setExecutionMessage(null);
+    setExecutionPhase("undoing");
+    try {
+      const result = await undoBrowserFilePlan(browserFolder.handle, executionResult.undoOperations);
+      setUndoResult(result);
+      setExecutionPhase("undone");
+      await handleBrowserScan(browserFolder, { clearPlan: false });
+    } catch (error) {
+      setExecutionMessage(getErrorMessage(error));
+      setExecutionPhase("completed");
+    }
+  }
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold text-app-text">Tasks</h1>
-        <p className="mt-2 text-sm text-app-muted">Create, preview, confirm, and track actions safely.</p>
-      </header>
-
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-        File System tasks can perform real local file moves only after confirmation. Other task actions remain mocked.
-      </div>
-
-      {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
-      {lastTaskApiError ? (
-        <details className="rounded-md border border-app-border bg-app-panel p-4">
-          <summary className="cursor-pointer text-sm text-app-muted">Last task API error</summary>
-          <pre className="mt-3 max-h-72 overflow-auto rounded-md bg-zinc-950 p-3 text-xs leading-5 text-app-text">
-            {JSON.stringify(lastTaskApiError, null, 2)}
-          </pre>
-        </details>
-      ) : null}
-
-      <FileSystemTaskPanel />
-
-      <Card className="space-y-4">
-        <textarea
-          value={taskText}
-          onChange={(event) => setTaskText(event.target.value)}
-          placeholder="Tell MindOS what task you want to prepare..."
-          className="min-h-28 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-4 py-3 text-sm leading-6 text-app-text outline-none transition placeholder:text-zinc-600 focus:border-app-primary focus:ring-2 focus:ring-violet-900/50"
-        />
-        <div className="flex flex-wrap gap-2">
-          {exampleTasks.map((task) => (
-            <button key={task} type="button" onClick={() => setTaskText(task)} className="transition hover:opacity-80">
-              <Badge variant="info">{task}</Badge>
-            </button>
-          ))}
-        </div>
-        <div className="flex justify-end">
-          <Button type="button" variant="primary" onClick={handleSubmit} disabled={!taskText.trim()} loading={loadingAction === "execute"}>
-            <Send size={16} />
-            Prepare Task
-          </Button>
-        </div>
-        {loadingAction === "execute" ? <p className="text-sm text-app-muted">Planning task from local memory...</p> : null}
-      </Card>
-
-      {activePendingTask ? (
-        <TaskPreviewCard
-          task={activePendingTask}
-          onConfirm={() => activePendingTask.confirmation_token && handleConfirmToken(activePendingTask.confirmation_token)}
-          onCancel={() => activePendingTask.task_id && handleCancelTask(activePendingTask.task_id)}
-          loading={loadingAction === `confirm:${activePendingTask.confirmation_token}`}
-        />
-      ) : activeTask ? (
-        <TaskResultCard task={activeTask} />
-      ) : null}
-
-      <div ref={pendingSectionRef}>
-        <Card>
-          <div className="flex items-center gap-3">
-            <ClipboardCheck size={18} className="text-violet-300" />
-            <h2 className="text-base font-semibold text-app-text">Pending Confirmations</h2>
+    <div>
+      <main className="mx-auto max-w-3xl">
+        <Card className="space-y-4 p-4 md:p-5">
+          <div>
+            <p className="text-sm font-medium text-app-text">Ask MindOS</p>
+            <p className="mt-1 text-xs text-app-muted">Preview actions before MindOS touches anything.</p>
           </div>
-          <div className="mt-4 space-y-3">
-            {pendingTasks.length === 0 ? (
-              <EmptyState title="No Pending Confirmations" description="Tasks waiting for approval will appear here." />
-            ) : (
-              pendingTasks.map((task) => (
-                <PendingTaskCard
-                  key={task.id}
-                  task={task}
-                  highlighted={highlightedTaskId === task.id}
-                  onConfirm={() => task.confirmation_token && handleConfirmToken(task.confirmation_token)}
-                  onCancel={() => handleCancelTask(task.id)}
-                  confirmLoading={loadingAction === `confirm:${task.confirmation_token}`}
-                  cancelLoading={loadingAction === `cancel:${task.id}`}
-                />
-              ))
-            )}
-          </div>
+
+          <TaskCommandBar
+            value={command}
+            state={uiState}
+            onChange={handleCommandChange}
+            onFocus={() => {
+              if (uiState !== "typing") setUiState("typing");
+            }}
+            onKeyDown={handleCommandKeyDown}
+            onPrepare={continueFromCommand}
+          />
+
+          {uiState === "resting" ? (
+            <div className="space-y-2">
+              <p className="text-xs text-app-muted">Suggested actions</p>
+              <TaskSuggestionChips suggestions={commandSuggestions} onSelect={handleSuggestionClick} />
+            </div>
+          ) : null}
+
+          {showIntentHint ? (
+            <TaskActionHint
+              onSelect={() => {
+                setPrepareError(null);
+                setUiState("context");
+              }}
+            />
+          ) : null}
+          {showDetectedIntent ? <DetectedIntentChip intent={detectedIntent} /> : null}
+
+          {showContext ? (
+            <TaskContextPicker
+              path={visiblePath}
+              source={scanSource}
+              inputRef={pathInputRef}
+              scanLoading={scanLoading}
+              choosingFolder={isChoosingFolder}
+              onPathChange={(path) => {
+                setBrowserFolder(null);
+                setScanSource("backend_path");
+                setRootPath(path);
+                setPathIsStale(Boolean(scanResult && path !== scanResult.root_path));
+                setScanError(null);
+                setFolderPickerMessage(null);
+                resetPlan();
+              }}
+              onPathKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                void handleScan(visiblePath);
+              }}
+              onFolderSelect={handleFolderSelect}
+              onChooseFolder={() => void handleChooseFolder()}
+              onScan={() => void handleScan(visiblePath)}
+            />
+          ) : null}
+
+          {scanLoading ? <p className="rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">Scanning folder...</p> : null}
+          {folderPickerMessage ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{folderPickerMessage}</p> : null}
+          {scanError ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{scanError}</p> : null}
+          {prepareError ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{prepareError}</p> : null}
+          {prepareStatus ? <p className="rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{prepareStatus}</p> : null}
+          {scanResult ? <ScanSummary result={scanResult} categories={categories} stale={pathIsStale} source={scanSource} /> : null}
+
+          {uiState === "typing" && commandValue ? (
+            <div className="flex justify-end">
+              <Button type="button" variant="primary" className="h-9 px-3" onClick={continueFromCommand}>
+                <ChevronRight size={15} />
+                Continue
+              </Button>
+            </div>
+          ) : null}
+
+          {uiState === "context" ? (
+            <div className="flex justify-end">
+              <Button type="button" variant="primary" className="h-9 px-3" onClick={() => void handlePrepare()} loading={prepareLoading} disabled={scanLoading}>
+                <ListChecks size={15} />
+                {pathIsStale ? "Scan & Prepare" : "Prepare"}
+              </Button>
+            </div>
+          ) : null}
+
+          {uiState === "document_options" && documentSelection ? (
+            <DocumentSelectionCard
+              selection={documentSelection}
+              outputFilename={summaryOutputFilename}
+              outputFormat={summaryOutputFormat}
+              summaryStyle={summaryStyle}
+              loading={prepareLoading}
+              cloudWarning={cloudSummaryWarning}
+              onSelectedPathsChange={(selectedPaths) => setDocumentSelection((current) => current ? { ...current, selectedPaths } : current)}
+              onOutputFilenameChange={(filename) => {
+                setSummaryFilenameWasEdited(true);
+                setSummaryOutputFilename(filename);
+              }}
+              onOutputFormatChange={(format) => {
+                setSummaryOutputFormat(format);
+                setSummaryOutputFilename((current) => normalizedSummaryFilename(current, format));
+              }}
+              onSummaryStyleChange={setSummaryStyle}
+              onCancelCloudWarning={() => {
+                setCloudSummaryWarning(null);
+                setPrepareLoading(false);
+              }}
+              onContinueCloudWarning={() => void handlePrepareSelectedDocumentSummary(true)}
+              onEdit={handleEdit}
+              onPrepare={() => void handlePrepareSelectedDocumentSummary(false)}
+            />
+          ) : null}
+
+          {uiState === "plan" && filePlan ? (
+            <TaskPlanCard
+              plan={filePlan}
+              source={scanSource}
+              executionPhase={executionPhase}
+              onEdit={handleEdit}
+              onRun={handleRunPlanRequest}
+            />
+          ) : null}
+          {uiState === "plan" && documentSummary ? (
+            <DocumentSummaryPreviewCard
+              summary={documentSummary}
+              readResult={documentReadResult}
+              outputFilename={summaryOutputFilename}
+              saving={summarySaveLoading}
+              saveMessage={summarySaveMessage}
+              onOutputFilenameChange={(filename) => {
+                setSummaryFilenameWasEdited(true);
+                setSummaryOutputFilename(filename);
+              }}
+              onEdit={handleEdit}
+              onSave={() => void handleSaveSummary()}
+            />
+          ) : null}
+          {executionMessage ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{executionMessage}</p> : null}
+          {executionPhase === "confirming" && filePlan ? (
+            <RunConfirmationCard plan={filePlan} onCancel={() => setExecutionPhase("idle")} onConfirm={() => void handleExecuteBrowserPlan()} />
+          ) : null}
+          {executionPhase === "running" && executionProgress ? <ExecutionProgressCard progress={executionProgress} /> : null}
+          {executionResult && executionPhase !== "running" ? (
+            <ExecutionResultCard
+              result={executionResult}
+              undoResult={undoResult}
+              undoing={executionPhase === "undoing"}
+              onUndo={() => void handleUndoBrowserPlan()}
+            />
+          ) : null}
         </Card>
-      </div>
+        <RecentTasksCard tasks={recentTasks} />
+      </main>
+    </div>
+  );
+}
 
-      <Card>
-        <div className="flex items-center gap-3">
-          <History size={18} className="text-violet-300" />
-          <h2 className="text-base font-semibold text-app-text">Recent Tasks</h2>
-        </div>
-        <div className="mt-4 space-y-3">
-          {history.length === 0 ? (
-            <EmptyState title="No Task History" description="Prepared and completed tasks will appear here." />
-          ) : (
-            history.map((task) => (
-              <HistoryRow
-                key={task.id}
-                task={task}
-                onReview={() => handleReview(task.id)}
-                onConfirm={() => task.confirmation_token && handleConfirmToken(task.confirmation_token)}
-                onCancel={() => handleCancelTask(task.id)}
-                hasPendingCard={pendingTasks.some((pending) => pending.id === task.id)}
-              />
-            ))
-          )}
-        </div>
-      </Card>
-
-      <button type="button" className="sr-only" onClick={() => void safeRefreshTasks()}>
-        Refresh task state
+function TaskCommandBar({
+  value,
+  state,
+  onChange,
+  onFocus,
+  onKeyDown,
+  onPrepare,
+}: {
+  value: string;
+  state: TaskUiState;
+  onChange: (value: string) => void;
+  onFocus: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onPrepare: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-app-border bg-zinc-950 px-3 py-2 shadow-sm shadow-black/10 focus-within:border-violet-500/60 focus-within:ring-2 focus-within:ring-violet-900/40">
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
+        <Sparkles size={16} />
+      </span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={onFocus}
+        onKeyDown={onKeyDown}
+        placeholder="Ask MindOS to do something..."
+        className="min-w-0 flex-1 bg-transparent text-sm text-app-text outline-none placeholder:text-zinc-600"
+      />
+      <button
+        type="button"
+        onClick={onPrepare}
+        className="hidden rounded-md border border-app-border px-2.5 py-1.5 text-xs text-app-muted transition hover:border-violet-500/50 hover:text-violet-200 sm:inline-flex"
+      >
+        {state === "resting" ? "Safe mode" : "Prepare"}
       </button>
     </div>
   );
 }
 
-function FileSystemTaskPanel() {
-  const [rootPath, setRootPath] = useState("");
-  const [instruction, setInstruction] = useState("Organize this folder by file type");
-  const [maxDepth, setMaxDepth] = useState(2);
-  const [maxFiles, setMaxFiles] = useState(500);
-  const [snapshot, setSnapshot] = useState<FileSnapshotResponse | null>(null);
-  const [plan, setPlan] = useState<FileTaskPlan | null>(null);
-  const [result, setResult] = useState<FileTaskExecutionResult | null>(null);
-  const [undoResult, setUndoResult] = useState<FileTaskUndoResult | null>(null);
-  const [loading, setLoading] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const operationGroups = plan ? groupFileOperations(plan.operations) : null;
-  const canExecute = Boolean(plan && plan.status !== "blocked" && plan.operations.length > 0);
-
-  async function handleScan() {
-    setLoading("scan");
-    setError(null);
-    try {
-      const response = await scanFileTask({ root_path: rootPath, max_depth: maxDepth, max_files: maxFiles });
-      setSnapshot(response);
-    } catch (caughtError) {
-      setError(getErrorMessage(caughtError));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handlePrepare() {
-    setLoading("prepare");
-    setError(null);
-    setResult(null);
-    setUndoResult(null);
-    try {
-      const response = await prepareFileTask({
-        root_path: rootPath,
-        instruction,
-        max_depth: maxDepth,
-        max_files: maxFiles,
-        dry_run: true,
-      });
-      setPlan(response);
-    } catch (caughtError) {
-      setError(getErrorMessage(caughtError));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleExecute() {
-    if (!plan) return;
-    setLoading("execute");
-    setError(null);
-    try {
-      const response = await executeFileTask(plan.task_id);
-      setResult(response);
-    } catch (caughtError) {
-      setError(getErrorMessage(caughtError));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleUndo() {
-    if (!plan) return;
-    setLoading("undo");
-    setError(null);
-    try {
-      const response = await undoFileTask(plan.task_id);
-      setUndoResult(response);
-    } catch (caughtError) {
-      setError(getErrorMessage(caughtError));
-    } finally {
-      setLoading(null);
-    }
-  }
-
+function TaskSuggestionChips({ suggestions, onSelect }: { suggestions: string[]; onSelect: (suggestion: string) => void }) {
   return (
-    <Card className="space-y-4">
-      <div className="flex items-center gap-3">
-        <FolderOpen size={18} className="text-violet-300" />
-        <div>
-          <h2 className="text-base font-semibold text-app-text">File System Task</h2>
-          <p className="text-sm text-app-muted">Plan local file organization, preview every operation, then confirm execution.</p>
-        </div>
-      </div>
+    <div className="flex flex-wrap gap-2">
+      {suggestions.map((suggestion) => (
+        <button
+          key={suggestion}
+          type="button"
+          onClick={() => onSelect(suggestion)}
+          className="rounded-full border border-app-border bg-zinc-950 px-3 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:bg-violet-500/10 hover:text-violet-200"
+        >
+          {suggestion}
+        </button>
+      ))}
+    </div>
+  );
+}
 
-      {error ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
+function TaskActionHint({ onSelect }: { onSelect: () => void }) {
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950/80 p-2">
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition hover:bg-violet-500/10"
+      >
+        <span className="flex items-center gap-3">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
+            <FolderOpen size={16} />
+          </span>
+          <span>
+            <span className="block text-sm font-medium text-app-text">Organize a folder</span>
+            <span className="mt-1 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-app-muted">file.scan &rarr; sort &rarr; move</span>
+              <span className="rounded-full border border-app-border px-2 py-0.5 text-[11px] text-app-muted">Local file task</span>
+            </span>
+          </span>
+        </span>
+        <ChevronRight size={16} className="text-app-muted" />
+      </button>
+    </div>
+  );
+}
 
-      <div className="grid gap-3 md:grid-cols-[1fr_120px_120px]">
-        <label className="space-y-1 text-sm">
-          <span className="text-app-muted">Root folder path</span>
-          <input
-            value={rootPath}
-            onChange={(event) => setRootPath(event.target.value)}
-            placeholder="D:\\Downloads"
-            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-app-muted">Max depth</span>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            value={maxDepth}
-            onChange={(event) => setMaxDepth(Number(event.target.value))}
-            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-app-muted">Max files</span>
-          <input
-            type="number"
-            min={1}
-            max={1000}
-            value={maxFiles}
-            onChange={(event) => setMaxFiles(Number(event.target.value))}
-            className="w-full rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
-          />
-        </label>
-      </div>
+function DetectedIntentChip({ intent }: { intent: FileTaskIntent }) {
+  const detail =
+    intent.intent === "move_category"
+      ? intent.targetCategory
+      : intent.intent === "document_summary"
+        ? "Readable files"
+      : intent.intent === "create_folders"
+        ? intent.folderNames.length ? intent.folderNames.join(", ") : "Folders"
+        : intent.intent === "rename_files"
+          ? "Not connected"
+          : intent.intent === "organize_by_type"
+            ? "By type"
+            : "Safe preview";
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-zinc-950/80 px-3 py-2 text-xs">
+      <span className={intent.supported ? "text-violet-200" : "text-amber-200"}>{intent.label}</span>
+      <span className="text-app-muted">·</span>
+      <span className="text-app-muted">{detail}</span>
+    </div>
+  );
+}
 
-      <label className="space-y-1 text-sm">
-        <span className="text-app-muted">Instruction</span>
-        <textarea
-          value={instruction}
-          onChange={(event) => setInstruction(event.target.value)}
-          className="min-h-20 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-app-text outline-none focus:border-app-primary"
+function TaskContextPicker({
+  path,
+  source,
+  inputRef,
+  scanLoading,
+  choosingFolder,
+  onPathChange,
+  onPathKeyDown,
+  onFolderSelect,
+  onChooseFolder,
+  onScan,
+}: {
+  path: string;
+  source: ScanSource;
+  inputRef: RefObject<HTMLInputElement>;
+  scanLoading: boolean;
+  choosingFolder: boolean;
+  onPathChange: (path: string) => void;
+  onPathKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onFolderSelect: (path: string) => void;
+  onChooseFolder: () => void;
+  onScan: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 rounded-lg border border-app-border bg-zinc-950 px-3 py-2">
+        <span className="shrink-0 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-xs text-violet-200">
+          Organize folder
+        </span>
+        <input
+          ref={inputRef}
+          value={path}
+          onChange={(event) => onPathChange(event.target.value)}
+          onKeyDown={onPathKeyDown}
+          className="min-w-0 flex-1 bg-transparent font-mono text-sm text-app-text outline-none"
+          aria-label="Folder path"
+          readOnly={source === "browser_handle"}
         />
-      </label>
-
+        <Button type="button" variant="secondary" className="h-8 px-3" loading={choosingFolder} onClick={onChooseFolder}>
+          <FolderOpen size={14} />
+          Choose
+        </Button>
+        <Button type="button" variant="secondary" className="h-8 px-3" loading={scanLoading} onClick={onScan}>
+          Scan
+        </Button>
+      </div>
       <div className="flex flex-wrap gap-2">
-        {[
-          "Organize this folder by file type",
-          "Move PDFs into a PDFs folder",
-          "Create folders for images, videos, installers, and archives",
-          "Rename screenshots by date",
-          "Create a project folder structure",
-        ].map((prompt) => (
-          <button key={prompt} type="button" onClick={() => setInstruction(prompt)} className="transition hover:opacity-80">
-            <Badge variant="info">{prompt}</Badge>
+        {folderSuggestions.map((folder) => (
+          <button
+            key={folder.path}
+            type="button"
+            onClick={() => onFolderSelect(folder.path)}
+            className="rounded-md border border-app-border bg-zinc-950 px-2.5 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:text-violet-200"
+          >
+            {folder.label}
           </button>
         ))}
       </div>
-
-      <div className="flex flex-wrap gap-3">
-        <Button variant="secondary" onClick={() => void handleScan()} loading={loading === "scan"} disabled={!rootPath.trim()}>
-          Scan
-        </Button>
-        <Button variant="primary" onClick={() => void handlePrepare()} loading={loading === "prepare"} disabled={!rootPath.trim() || !instruction.trim()}>
-          Prepare Plan
-        </Button>
-      </div>
-
-      {snapshot ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="success">{snapshot.total_files} files</Badge>
-            <Badge>{snapshot.total_folders} folders</Badge>
-            <Badge>{snapshot.root_path}</Badge>
-          </div>
-          {snapshot.warnings.length ? <WarningList title="Scan warnings" items={snapshot.warnings} /> : null}
-        </div>
-      ) : null}
-
-      {plan ? (
-        <div className="space-y-4 rounded-md border border-app-border bg-zinc-950 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={plan.status === "blocked" ? "danger" : "warning"}>{plan.status}</Badge>
-            <Badge variant={plan.risk_level === "low" ? "success" : "warning"}>risk: {plan.risk_level}</Badge>
-            <Badge>{plan.operations.length} operations</Badge>
-            {plan.planner_model ? <Badge variant="info">planner: {plan.planner_model}</Badge> : null}
-          </div>
-          <p className="text-sm text-app-text">{plan.summary}</p>
-          {plan.planner_warning ? <p className="text-sm text-amber-200">{plan.planner_warning}</p> : null}
-          {plan.blocked_reasons.length ? <WarningList title="Blocked reasons" items={plan.blocked_reasons} danger /> : null}
-          {plan.warnings.length ? <WarningList title="Warnings" items={plan.warnings} /> : null}
-          {operationGroups ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              <OperationGroup title="Folders to create" operations={operationGroups.create_folder} rootPath={plan.root_path} />
-              <OperationGroup title="Files to move" operations={operationGroups.move_file} rootPath={plan.root_path} />
-              <OperationGroup title="Files to copy" operations={operationGroups.copy_file} rootPath={plan.root_path} />
-              <OperationGroup title="Files to rename" operations={operationGroups.rename_file} rootPath={plan.root_path} />
-            </div>
-          ) : null}
-          {plan.skipped.length ? (
-            <div>
-              <p className="text-xs uppercase text-app-muted">Skipped</p>
-              <div className="mt-2 max-h-40 overflow-auto rounded-md border border-app-border bg-zinc-900/60 p-3 text-xs leading-5 text-app-muted">
-                {plan.skipped.slice(0, 40).map((item) => (
-                  <p key={`${item.path}:${item.reason}`}>{relativeDisplay(item.path, plan.root_path)} - {item.reason}</p>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <div className="flex flex-wrap gap-3">
-            <Button variant="primary" onClick={() => void handleExecute()} loading={loading === "execute"} disabled={!canExecute}>
-              Confirm Execute
-            </Button>
-            <Button variant="secondary" onClick={() => setPlan(null)}>
-              Cancel
-            </Button>
-            <Button variant="secondary" onClick={() => void handlePrepare()} loading={loading === "prepare"} disabled={!rootPath.trim()}>
-              Refresh Validation
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {result ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <Badge variant={result.status === "completed" ? "success" : result.status === "failed" ? "danger" : "warning"}>{result.status}</Badge>
-            <Badge>created {result.created_folders}</Badge>
-            <Badge>moved {result.moved_files}</Badge>
-            <Badge>copied {result.copied_files}</Badge>
-            <Badge>renamed {result.renamed_files}</Badge>
-            {result.undo_available ? <Badge variant="info">undo available</Badge> : null}
-          </div>
-          {result.errors.length ? <WarningList title="Execution errors" items={result.errors} danger /> : null}
-          {result.undo_available ? (
-            <div className="mt-3">
-              <Button variant="secondary" onClick={() => void handleUndo()} loading={loading === "undo"}>
-                Undo
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {undoResult ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <Badge variant={undoResult.status === "undone" ? "success" : "warning"}>{undoResult.status}</Badge>
-            <Badge>{undoResult.undone_operations} undone</Badge>
-          </div>
-          {undoResult.errors.length ? <WarningList title="Undo errors" items={undoResult.errors} danger /> : null}
-        </div>
-      ) : null}
-    </Card>
+    </div>
   );
 }
 
-function groupFileOperations(operations: FileOperation[]) {
-  return {
-    create_folder: operations.filter((operation) => operation.type === "create_folder"),
-    move_file: operations.filter((operation) => operation.type === "move_file"),
-    copy_file: operations.filter((operation) => operation.type === "copy_file"),
-    rename_file: operations.filter((operation) => operation.type === "rename_file"),
-  };
-}
-
-function OperationGroup({ title, operations, rootPath }: { title: string; operations: FileOperation[]; rootPath: string }) {
+function ScanSummary({ result, categories, stale, source }: { result: FileSnapshotResponse; categories: CategorySummary[]; stale: boolean; source: ScanSource }) {
+  const displayName = result.display_name || result.root_name || result.root_path || "Selected folder";
   return (
-    <div className="rounded-md border border-app-border bg-zinc-900/60 p-3">
-      <p className="text-xs uppercase text-app-muted">{title}</p>
-      {operations.length === 0 ? (
-        <p className="mt-2 text-sm text-app-muted">None</p>
-      ) : (
-        <div className="mt-2 max-h-48 space-y-2 overflow-auto text-xs leading-5 text-app-text">
-          {operations.map((operation, index) => (
-            <div key={`${operation.type}:${operation.path ?? operation.from_path}:${operation.to_path}:${index}`}>
-              <p>{relativeDisplay(operation.path ?? operation.from_path ?? "", rootPath)}</p>
-              {operation.to_path ? <p className="text-app-muted">→ {relativeDisplay(operation.to_path, rootPath)}</p> : null}
-              {operation.reason ? <p className="text-app-muted">{operation.reason}</p> : null}
-            </div>
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-mono text-sm text-app-text">{displayName}</p>
+          <p className="mt-1 text-xs text-app-muted">
+            {result.total_files} files - {result.total_folders} folders - {formatBytes(result.total_size_bytes)}
+          </p>
+          {source === "browser_handle" ? <p className="mt-1 text-xs text-violet-200">Browser-selected folder</p> : null}
+        </div>
+        {stale ? <Badge variant="warning">Scan needs refresh</Badge> : result.truncated ? <Badge variant="warning">Limited to {result.max_files} files</Badge> : <Badge variant="success">Scan ready</Badge>}
+      </div>
+      {stale ? <p className="mt-2 text-xs text-amber-200">Folder path changed. Scan again before preparing a fresh plan.</p> : null}
+      {categories.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {categories.map((category) => (
+            <span key={category.label} className="rounded-full border border-app-border bg-zinc-900 px-2.5 py-1 text-xs text-app-muted">
+              {category.label}: {category.count}
+            </span>
           ))}
         </div>
-      )}
+      ) : null}
+      {result.warnings.length ? <CompactList title="Warnings" items={result.warnings.map((warning) => ({ label: warning }))} tone="warning" /> : null}
     </div>
   );
 }
 
-function WarningList({ title, items, danger = false }: { title: string; items: string[]; danger?: boolean }) {
-  return (
-    <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${danger ? "border-red-500/30 bg-red-500/10 text-red-100" : "border-amber-500/30 bg-amber-500/10 text-amber-100"}`}>
-      <p className="font-medium">{title}</p>
-      <ul className="mt-1 list-disc space-y-1 pl-5">
-        {items.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function relativeDisplay(path: string, rootPath: string) {
-  if (!path) return "";
-  return path.startsWith(rootPath) ? path.slice(rootPath.length).replace(/^[/\\]+/, "") || "." : path;
-}
-
-function PendingTaskCard({
-  task,
-  highlighted,
-  onConfirm,
-  onCancel,
-  confirmLoading,
-  cancelLoading,
+function TaskPlanCard({
+  plan,
+  source,
+  executionPhase,
+  onEdit,
+  onRun,
 }: {
-  task: TaskHistoryItem;
-  highlighted: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-  confirmLoading: boolean;
-  cancelLoading: boolean;
+  plan: FileTaskPlan;
+  source: ScanSource;
+  executionPhase: ExecutionPhase;
+  onEdit: () => void;
+  onRun: () => void;
 }) {
+  const canRun = source === "browser_handle" && plan.status === "awaiting_confirmation" && plan.total_operations > 0 && plan.blocked_reasons.length === 0 && executionPhase !== "running";
+  const statusLabel = plan.status === "unsupported" ? "unsupported" : plan.status === "empty" ? "no operations" : `${plan.total_operations} operations`;
   return (
-    <div
-      className={`rounded-md border bg-zinc-950 px-4 py-3 transition ${
-        highlighted ? "border-violet-400 shadow-sm shadow-violet-950/60" : "border-app-border"
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <Badge variant="warning">{task.task_type}</Badge>
-        <Badge>confirmation_required</Badge>
-        <span className="ml-auto text-xs text-app-muted">{formatTimestamp(task.created_at)}</span>
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-app-text">Plan for {plan.root_path}</h2>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={plan.status === "blocked" || plan.status === "unsupported" ? "danger" : plan.status === "empty" ? "default" : "info"}>
+            {statusLabel}
+          </Badge>
+          <Badge variant={plan.planner_provider ? "success" : isFallbackPlan(plan) ? "warning" : "default"}>
+            {plan.planner_provider ? "AI-assisted plan" : isFallbackPlan(plan) ? "Fallback plan" : "Deterministic plan"}
+          </Badge>
+        </div>
       </div>
-      <p className="mt-3 text-sm font-medium text-app-text">{task.instruction}</p>
-      <PlannerMeta task={task} />
-      <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} compact />
-      <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-        <AlertTriangle size={16} />
-        <span>Review the details before confirming. Current execution is mock-only.</span>
-      </div>
-      <div className="mt-4 flex gap-3">
-        <Button variant="primary" onClick={onConfirm} loading={confirmLoading} disabled={!task.confirmation_token}>
-          Confirm
+      <p className="mt-2 text-sm text-app-muted">{plan.summary}</p>
+      {plan.planner_warning ? <p className="mt-1 text-xs text-amber-200">{plan.planner_warning}</p> : null}
+      {plan.status === "empty" ? <EmptyPlanState plan={plan} /> : null}
+      {plan.status === "unsupported" ? <UnsupportedPlanState plan={plan} /> : null}
+
+      {plan.blocked_reasons.length ? <CompactList title="Blocked" items={plan.blocked_reasons.map((reason) => ({ label: reason }))} tone="danger" /> : null}
+      {plan.warnings.length ? <CompactList title="Warnings" items={plan.warnings.map((warning) => ({ label: warning }))} tone="warning" /> : null}
+
+      {plan.status === "awaiting_confirmation" ? <OperationPreview plan={plan} /> : null}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit
         </Button>
-        <Button variant="secondary" onClick={onCancel} loading={cancelLoading}>
+        <Button type="button" variant="primary" className="h-9 px-3" disabled={!canRun} onClick={onRun} title={canRun ? "Run this browser-selected folder plan." : "Execution currently requires a browser-selected folder with runnable operations."}>
+          <Play size={15} />
+          Run plan
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function EmptyPlanState({ plan }: { plan: FileTaskPlan }) {
+  return (
+    <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+      <p className="text-xs font-medium text-app-text">No matching files found</p>
+      <p className="mt-1 text-xs text-app-muted">{plan.summary}</p>
+      {Object.keys(plan.category_counts).length ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {Object.entries(plan.category_counts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([category, count]) => (
+              <span key={category} className="rounded-full border border-app-border px-2 py-0.5 text-[11px] text-app-muted">
+                {category}: {count}
+              </span>
+            ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UnsupportedPlanState({ plan }: { plan: FileTaskPlan }) {
+  return (
+    <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+      <p className="text-xs font-medium text-amber-100">This task is not supported safely yet.</p>
+      {plan.blocked_reasons[0] ? <p className="mt-1 text-xs text-amber-100">{plan.blocked_reasons[0]}</p> : null}
+    </div>
+  );
+}
+
+function DocumentSelectionCard({
+  selection,
+  outputFilename,
+  outputFormat,
+  summaryStyle,
+  loading,
+  cloudWarning,
+  onSelectedPathsChange,
+  onOutputFilenameChange,
+  onOutputFormatChange,
+  onSummaryStyleChange,
+  onCancelCloudWarning,
+  onContinueCloudWarning,
+  onEdit,
+  onPrepare,
+}: {
+  selection: DocumentSummarySelection;
+  outputFilename: string;
+  outputFormat: "markdown" | "text";
+  summaryStyle: DocumentSummaryStyle;
+  loading: boolean;
+  cloudWarning: CloudSummaryWarning;
+  onSelectedPathsChange: (paths: string[]) => void;
+  onOutputFilenameChange: (filename: string) => void;
+  onOutputFormatChange: (format: "markdown" | "text") => void;
+  onSummaryStyleChange: (style: DocumentSummaryStyle) => void;
+  onCancelCloudWarning: () => void;
+  onContinueCloudWarning: () => void;
+  onEdit: () => void;
+  onPrepare: () => void;
+}) {
+  const [showSkipped, setShowSkipped] = useState(false);
+  const selected = new Set(selection.selectedPaths);
+  const markdownFiles = selection.candidates.filter((file) => file.extension.toLowerCase() === ".md").map((file) => file.relative_path);
+  const textFiles = selection.candidates
+    .filter((file) => [".txt", ".log", ".csv", ".json"].includes(file.extension.toLowerCase()))
+    .map((file) => file.relative_path);
+
+  function toggle(path: string) {
+    const next = new Set(selected);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    onSelectedPathsChange([...next]);
+  }
+
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-app-text">Documents to summarize</h2>
+          <p className="mt-1 text-xs text-app-muted">
+            {selection.selectedPaths.length} readable files selected - {selection.candidates.length} readable - {selection.skipped.length} skipped
+          </p>
+        </div>
+        <Badge variant={selection.candidates.length ? "success" : "default"}>{selection.candidates.length} readable</Badge>
+      </div>
+
+      {selection.warnings.length ? <CompactList title="Notes" items={selection.warnings.map((warning) => ({ label: warning }))} tone="warning" /> : null}
+
+      {selection.candidates.length ? (
+        <>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onSelectedPathsChange(selection.candidates.map((file) => file.relative_path))}>
+              Select all
+            </Button>
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onSelectedPathsChange([])}>
+              Clear
+            </Button>
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onSelectedPathsChange(textFiles)}>
+              Select text files
+            </Button>
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onSelectedPathsChange(markdownFiles)}>
+              Select markdown
+            </Button>
+          </div>
+
+          <div className="mt-3 max-h-56 space-y-1 overflow-y-auto rounded-md border border-app-border bg-zinc-900/50 p-2">
+            {selection.candidates.map((file) => (
+              <label key={file.relative_path} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-xs transition hover:bg-violet-500/10">
+                <input
+                  type="checkbox"
+                  checked={selected.has(file.relative_path)}
+                  onChange={() => toggle(file.relative_path)}
+                  className="h-4 w-4 accent-violet-500"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-app-text">{file.name}</span>
+                  <span className="mt-0.5 block truncate text-app-muted">{file.relative_path}</span>
+                </span>
+                <span className="rounded-full border border-app-border px-2 py-0.5 text-[11px] text-app-muted">{file.extension || "file"}</span>
+                <span className="w-16 text-right text-[11px] text-app-muted">{formatBytes(file.size_bytes)}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+          <p className="text-xs font-medium text-app-text">I couldn't find readable documents in this folder.</p>
+          <p className="mt-1 text-xs text-app-muted">MindOS can currently summarize txt, md, log, json, csv, PDF, and DOCX files.</p>
+        </div>
+      )}
+
+      {selection.skipped.length ? (
+        <div className="mt-3">
+          <button type="button" className="text-xs text-violet-300 hover:text-violet-200" onClick={() => setShowSkipped((current) => !current)}>
+            {showSkipped ? "Hide skipped files" : `Show ${selection.skipped.length} skipped files`}
+          </button>
+          {showSkipped ? (
+            <CompactList
+              title="Skipped"
+              items={selection.skipped.slice(0, 20).map((file) => ({ label: file.relative_path, detail: file.reason }))}
+              tone="muted"
+            />
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_150px_150px]">
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Output filename</span>
+          <input
+            value={outputFilename}
+            onChange={(event) => onOutputFilenameChange(event.target.value)}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
+          />
+          <span className="block text-[11px] text-app-muted">MindOS will suggest a filename after reading the documents.</span>
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Output format</span>
+          <select
+            value={outputFormat}
+            onChange={(event) => onOutputFormatChange(event.target.value as "markdown" | "text")}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+          >
+            <option value="markdown">Markdown (.md)</option>
+            <option value="text">Text (.txt)</option>
+          </select>
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Summary style</span>
+          <select
+            value={summaryStyle}
+            onChange={(event) => onSummaryStyleChange(event.target.value as DocumentSummaryStyle)}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+          >
+            <option value="brief">Brief</option>
+            <option value="detailed">Detailed</option>
+            <option value="file_by_file">File-by-file</option>
+          </select>
+        </label>
+      </div>
+
+      {cloudWarning ? (
+        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <p className="text-xs font-medium text-amber-100">Selected document text, including extracted PDF/DOCX text, will be sent to {cloudWarning.provider} to generate the summary.</p>
+          <p className="mt-1 text-xs text-amber-100">{cloudWarning.displayName}</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={onCancelCloudWarning}>
+              Cancel
+            </Button>
+            <Button type="button" variant="primary" className="h-8 px-3" onClick={onContinueCloudWarning}>
+              Continue
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button type="button" variant="primary" className="h-9 px-3" loading={loading} disabled={!selection.candidates.length || loading} onClick={onPrepare}>
+          Prepare Summary
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function DocumentSummaryPreviewCard({
+  summary,
+  readResult,
+  outputFilename,
+  saving,
+  saveMessage,
+  onOutputFilenameChange,
+  onEdit,
+  onSave,
+}: {
+  summary: DocumentSummaryPrepareResponse;
+  readResult: BrowserDocumentReadResult | null;
+  outputFilename: string;
+  saving: boolean;
+  saveMessage: string | null;
+  onOutputFilenameChange: (filename: string) => void;
+  onEdit: () => void;
+  onSave: () => void;
+}) {
+  const canSave = summary.status === "preview" && summary.summary_markdown.trim().length > 0;
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-app-text">Summary preview</h2>
+        <Badge variant={summary.status === "preview" ? "success" : summary.status === "empty" ? "default" : "danger"}>
+          {summary.status}
+        </Badge>
+      </div>
+      {summary.provider && summary.provider !== "ollama" && summary.provider !== "fake" ? (
+        <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Selected document text was sent to the cloud model provider for this preview.
+        </p>
+      ) : null}
+      <div className="mt-3 grid gap-2 text-xs text-app-muted sm:grid-cols-3">
+        <span>Files used: {summary.files_used.length}</span>
+        <span>Skipped: {summary.files_skipped.length}</span>
+        <span>Output: {outputFilename}</span>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_220px]">
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Summary title</span>
+          <div className="rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-xs text-app-text">
+            {summary.summary_title || "Created document summary"}
+          </div>
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Output filename</span>
+          <input
+            value={outputFilename}
+            onChange={(event) => onOutputFilenameChange(event.target.value)}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
+          />
+        </label>
+      </div>
+      {summary.topic ? (
+        <p className="mt-2 text-xs text-app-muted">
+          Topic: <span className="text-app-text">{summary.topic}</span>
+          {summary.naming_confidence ? ` · ${summary.naming_confidence} confidence` : ""}
+        </p>
+      ) : null}
+      {summary.files_used.length ? (
+        <CompactList title="Files used" items={summary.files_used.slice(0, 8).map((file) => ({ label: file }))} />
+      ) : null}
+      {summary.files_skipped.length ? (
+        <CompactList
+          title="Skipped"
+          items={summary.files_skipped.slice(0, 8).map((file) => ({ label: file.relative_path, detail: file.reason }))}
+          tone="muted"
+        />
+      ) : null}
+      {summary.warnings.length ? <CompactList title="Warnings" items={summary.warnings.map((warning) => ({ label: warning }))} tone="warning" /> : null}
+      {readResult ? (
+        <p className="mt-3 text-xs text-app-muted">
+          Read {readResult.files_read.length} files · {readResult.total_chars.toLocaleString()} characters extracted
+        </p>
+      ) : null}
+      <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-app-border bg-zinc-900/70 p-3">
+        <pre className="whitespace-pre-wrap break-words text-xs leading-5 text-app-text">{summary.summary_markdown}</pre>
+      </div>
+      {saveMessage ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{saveMessage}</p> : null}
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button type="button" variant="primary" className="h-9 px-3" loading={saving} disabled={!canSave} onClick={onSave}>
+          Save summary
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RunConfirmationCard({ plan, onCancel, onConfirm }: { plan: FileTaskPlan; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="rounded-lg border border-violet-500/30 bg-violet-500/10 p-3">
+      <p className="text-sm font-medium text-app-text">Run this plan?</p>
+      <p className="mt-1 text-xs text-app-muted">
+        MindOS will create {plan.create_folder_count} folders and move {plan.move_file_count} files inside the selected folder. No overwrites are allowed.
+      </p>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-8 px-3" onClick={onCancel}>
           Cancel
         </Button>
+        <Button type="button" variant="primary" className="h-8 px-3" onClick={onConfirm}>
+          Run safely
+        </Button>
       </div>
     </div>
   );
 }
 
-function TaskPreviewCard({ task, onConfirm, onCancel, loading }: { task: TaskResponse; onConfirm: () => void; onCancel: () => void; loading: boolean }) {
+function ExecutionProgressCard({ progress }: { progress: BrowserExecutionProgress }) {
   return (
-    <Card>
-      <div className="flex items-start gap-3">
-        <ClipboardCheck className="mt-1 text-violet-300" size={20} />
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <Badge variant="warning">{task.task_type}</Badge>
-            <Badge>{task.status}</Badge>
-          </div>
-          <h2 className="mt-3 text-base font-semibold text-app-text">Confirmation Required</h2>
-          <p className="mt-2 text-sm text-app-muted">{task.message}</p>
-          <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">
-            This task preview was saved to Memory.
-          </p>
-          <div className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-            <AlertTriangle size={16} />
-            <span>No real external action will happen. This is a mock execution.</span>
-          </div>
-          <PlannerMeta task={task} />
-          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} />
-          <div className="mt-4 flex gap-3">
-            <Button variant="primary" onClick={onConfirm} loading={loading} disabled={!task.confirmation_token}>
-              Confirm Mock Execution
-            </Button>
-            <Button variant="secondary" onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-app-text">Running plan</p>
+          <p className="mt-1 text-xs text-app-muted">{progress.message}</p>
         </div>
+        <Badge variant="info">{progress.percent}%</Badge>
       </div>
-    </Card>
-  );
-}
-
-function TaskResultCard({ task }: { task: TaskResponse }) {
-  const isMock = task.result?.mock === true;
-  return (
-    <Card>
-      <div className="flex items-start gap-3">
-        <CheckCircle2 className="mt-1 text-emerald-300" size={20} />
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <Badge variant={task.status === "completed" ? "success" : task.status === "failed" ? "danger" : "default"}>{task.status}</Badge>
-            <Badge variant="info">{task.task_type}</Badge>
-          </div>
-          <p className="mt-3 text-sm text-app-muted">{task.message}</p>
-          {task.status === "completed" ? (
-            <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">
-              This task was also saved to Memory.
-            </p>
-          ) : null}
-          {isMock ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">Mock result only. No real external action happened.</p> : null}
-          <PlannerMeta task={task} />
-          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} result={task.result} sourcesUsed={task.sources_used} />
-        </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-900">
+        <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${progress.percent}%` }} />
       </div>
-    </Card>
-  );
-}
-
-function PlannerMeta({ task }: { task: Pick<TaskResponse, "planner_model" | "planner_provider" | "planner_warning"> }) {
-  if (!task.planner_model && !task.planner_warning) {
-    return null;
-  }
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      {task.planner_model ? <Badge variant="info">Planned by {task.planner_model}</Badge> : null}
-      {task.planner_provider ? <Badge>{task.planner_provider}</Badge> : null}
-      {task.planner_warning ? <span className="text-xs text-amber-200">{task.planner_warning}</span> : null}
+      <div className="mt-3 grid gap-2 text-xs text-app-muted sm:grid-cols-2">
+        <span>Created folders: {progress.createdFolders}/{progress.totalFolders}</span>
+        <span>Moved files: {progress.movedFiles}/{progress.totalMoves}</span>
+      </div>
+      {progress.errors.length ? <CompactList title="Errors so far" items={progress.errors.map((error) => ({ label: error }))} tone="danger" /> : null}
     </div>
   );
 }
 
-function HistoryRow({
-  task,
-  onReview,
-  onConfirm,
-  onCancel,
-  hasPendingCard,
+function ExecutionResultCard({
+  result,
+  undoResult,
+  undoing,
+  onUndo,
 }: {
-  task: TaskHistoryItem;
-  onReview: () => void;
-  onConfirm: () => void;
-  onCancel: () => void;
-  hasPendingCard: boolean;
+  result: BrowserExecutionResult;
+  undoResult: BrowserUndoResult | null;
+  undoing: boolean;
+  onUndo: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const isPending = task.status === "confirmation_required";
+  const statusVariant = result.status === "completed" ? "success" : result.status === "partial" ? "warning" : "danger";
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
-      <div className="flex items-center gap-2">
-        <Badge variant="info">{task.task_type}</Badge>
-        <Badge variant={isPending ? "warning" : "default"}>{isPending ? "Confirmation required" : task.status}</Badge>
-        <span className="ml-auto text-xs text-app-muted">{formatTimestamp(task.created_at)}</span>
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium text-app-text">{result.status === "completed" ? "Completed" : result.status === "partial" ? "Partially completed" : "Failed"}</p>
+        <Badge variant={statusVariant}>{result.status}</Badge>
       </div>
-      <p className="mt-2 text-sm text-app-text">{task.instruction}</p>
-      {isPending ? (
-        <div className="mt-3 flex gap-2">
-          {hasPendingCard ? (
-            <Button
-              className="h-8 px-3"
-              variant="secondary"
-              onClick={() => {
-                setExpanded((value) => !value);
-                onReview();
-              }}
-            >
-              Review & Confirm
-            </Button>
-          ) : (
-            <>
-              <Button className="h-8 px-3" variant="primary" onClick={onConfirm} disabled={!task.confirmation_token}>
-                Confirm
-              </Button>
-              <Button className="h-8 px-3" variant="secondary" onClick={onCancel}>
-                Cancel
-              </Button>
-            </>
-          )}
+      <div className="mt-3 grid gap-2 text-xs text-app-muted sm:grid-cols-4">
+        <span>Created folders: {result.createdFolders}</span>
+        <span>Moved files: {result.movedFiles}</span>
+        <span>Skipped: {result.skipped.length}</span>
+        <span>Errors: {result.errors.length}</span>
+      </div>
+      {result.errors.length ? <CompactList title="Errors" items={result.errors.map((error) => ({ label: error }))} tone="danger" /> : null}
+      {undoResult ? (
+        <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2 text-xs text-app-muted">
+          Undo status: <span className="text-app-text">{undoResult.status}</span> - operations undone: {undoResult.undoneOperations}
+          {undoResult.errors.length ? <CompactList title="Undo errors" items={undoResult.errors.map((error) => ({ label: error }))} tone="danger" /> : null}
         </div>
-      ) : null}
-      {isPending && expanded ? (
-        <div className="mt-4 rounded-md border border-app-border bg-zinc-900/60 p-3">
-          <TaskPreviewDetails taskType={task.task_type} preview={task.preview} sourcesUsed={task.sources_used} compact />
-          <div className="mt-4 flex gap-2">
-            <Button className="h-8 px-3" variant="primary" onClick={onConfirm} disabled={!task.confirmation_token}>
-              Confirm
-            </Button>
-            <Button className="h-8 px-3" variant="secondary" onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
+      ) : result.undoAvailable ? (
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+          <span className="text-xs text-app-muted">Undo available for completed moves and created folders.</span>
+          <Button type="button" variant="secondary" className="h-8 px-3" loading={undoing} onClick={onUndo}>
+            Undo all
+          </Button>
         </div>
       ) : null}
     </div>
   );
 }
 
-function taskApiErrorDetails(error: unknown): Record<string, unknown> {
-  if (typeof error === "object" && error !== null && "response" in error) {
-    const response = (error as { response?: { status?: number; data?: unknown } }).response;
-    return {
-      endpoint: "/tasks/execute",
-      status: response?.status ?? null,
-      detail: response?.data ?? null,
-    };
+function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
+  if (!tasks.length) return null;
+  return (
+    <Card className="mt-4 space-y-3 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-app-text">Recent Tasks</p>
+          <p className="mt-1 text-xs text-app-muted">Local task history only. Operational file tasks are not added to Memory.</p>
+        </div>
+        <Badge variant="default">{tasks.length}</Badge>
+      </div>
+      <div className="space-y-2">
+        {tasks.slice(0, 6).map((task) => (
+          <div key={task.id} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-medium text-app-text">{task.title}</p>
+                <p className="mt-1 text-xs text-app-muted">{task.summary}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={task.type === "document_summary" ? "success" : "default"}>
+                  {task.type === "document_summary" ? "Summary" : "File task"}
+                </Badge>
+                <Badge variant={task.status === "completed" ? "success" : task.status === "partial" ? "warning" : "danger"}>
+                  {task.status}
+                </Badge>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] text-app-muted">
+              {task.folderName}
+              {task.outputFileName ? ` · ${task.outputFileName}` : ""}
+              {" · "}
+              {formatTimestamp(task.createdAt)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function OperationPreview({ plan }: { plan: FileTaskPlan }) {
+  const [showAll, setShowAll] = useState(false);
+  const visibleMoves = showAll ? plan.files_to_move : plan.files_to_move.slice(0, 8);
+  const hiddenMoves = plan.files_to_move.length - visibleMoves.length;
+  const visibleSkipped = showAll ? plan.skipped : plan.skipped.slice(0, 8);
+  const hiddenSkipped = plan.skipped.length - visibleSkipped.length;
+
+  return (
+    <div className="mt-3 space-y-3">
+      {plan.folders_to_create.length ? (
+        <CompactList
+          title="Folders to create"
+          items={plan.folders_to_create.map((operation) => ({
+            label: operation.relative_to ?? operation.path ?? "",
+            detail: operation.reason,
+          }))}
+        />
+      ) : null}
+
+      {plan.files_to_move.length ? (
+        <CompactList
+          title="Files to move"
+          items={visibleMoves.map((operation) => ({
+            label: `${operation.relative_from ?? operation.from_path} -> ${operation.relative_to ?? operation.to_path}`,
+            detail: operation.reason,
+          }))}
+        />
+      ) : null}
+
+      {plan.skipped.length ? (
+        <CompactList
+          title="Skipped"
+          items={visibleSkipped.map((item) => ({
+            label: item.relative_path ?? item.path,
+            detail: item.reason,
+          }))}
+          tone="muted"
+        />
+      ) : null}
+
+      {hiddenMoves > 0 || hiddenSkipped > 0 ? (
+        <button type="button" onClick={() => setShowAll(true)} className="text-xs text-violet-300 hover:text-violet-200">
+          + {hiddenMoves + hiddenSkipped} more
+        </button>
+      ) : showAll && (plan.files_to_move.length > 8 || plan.skipped.length > 8) ? (
+        <button type="button" onClick={() => setShowAll(false)} className="text-xs text-violet-300 hover:text-violet-200">
+          Show fewer
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function isFallbackPlan(plan: FileTaskPlan) {
+  const warning = plan.planner_warning?.toLowerCase() ?? "";
+  return warning.includes("fallback") || warning.includes("unavailable") || warning.includes("invalid json");
+}
+
+function CompactList({
+  title,
+  items,
+  tone = "default",
+}: {
+  title: string;
+  items: Array<{ label: string; detail?: string }>;
+  tone?: "default" | "warning" | "danger" | "muted";
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "border-red-500/30 bg-red-500/10"
+      : tone === "warning"
+        ? "border-amber-500/30 bg-amber-500/10"
+        : "border-app-border bg-zinc-900/70";
+  return (
+    <div className={`mt-3 rounded-md border px-3 py-2 ${toneClass}`}>
+      <p className="text-xs font-medium text-app-text">{title}</p>
+      <div className="mt-2 space-y-1">
+        {items.map((item, index) => (
+          <p key={`${item.label}:${index}`} className="text-xs text-app-muted">
+            <span className="text-app-text">{item.label}</span>
+            {item.detail ? <span> - {item.detail}</span> : null}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function loadRecentTasks(): RecentTaskItem[] {
+  try {
+    const raw = localStorage.getItem(recentTasksStorageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is RecentTaskItem => {
+        return (
+          item &&
+          typeof item.id === "string" &&
+          (item.type === "file_organize" || item.type === "document_summary") &&
+          typeof item.title === "string" &&
+          typeof item.summary === "string" &&
+          typeof item.folderName === "string" &&
+          typeof item.createdAt === "string"
+        );
+      })
+      .slice(0, 20);
+  } catch {
+    return [];
   }
-  if (typeof error === "object" && error !== null && "request" in error) {
-    return {
-      endpoint: "/tasks/execute",
-      status: null,
-      detail: "No response received from backend.",
-    };
-  }
-  return {
-    endpoint: "/tasks/execute",
-    status: null,
-    detail: error instanceof Error ? error.message : "Unknown error",
-  };
 }
 
 function formatTimestamp(value: string) {
@@ -749,4 +1580,207 @@ function formatTimestamp(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+async function getSelectedChatModel(): Promise<ModelConfig | null> {
+  try {
+    const settings = await getModelSettings();
+    return settings.models.find((model) => model.id === settings.selected_chat_model) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function buildCategorySummary(files: FileSnapshotItem[]): CategorySummary[] {
+  const counts: Record<string, number> = {};
+  for (const file of files) {
+    const category = categoryForExtension(file.extension);
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function categoryForExtension(extension: string) {
+  const normalized = extension.toLowerCase();
+  for (const category of extensionCategories) {
+    if (category.extensions.includes(normalized)) return category.label;
+  }
+  return "Other";
+}
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function normalizedSummaryFilename(filename: string, format: "markdown" | "text") {
+  const extension = format === "text" ? ".txt" : ".md";
+  const trimmed = filename.trim() || `mindos-summary${extension}`;
+  const withoutKnownExtension = trimmed.replace(/\.(md|txt)$/i, "");
+  return `${withoutKnownExtension}${extension}`;
+}
+
+function uniqueFileTypes(readResult: BrowserDocumentReadResult | null) {
+  if (!readResult) return [];
+  return [...new Set(readResult.files_read.map((file) => file.file_type || extensionToFileType(file.extension)))].sort();
+}
+
+function extensionToFileType(extension: string) {
+  const normalized = extension.toLowerCase();
+  if (normalized === ".pdf") return "pdf";
+  if (normalized === ".docx") return "docx";
+  return normalized.replace(/^\./, "") || "text";
+}
+
+function buildBrowserFileTaskPlan(scan: BrowserFolderScanResult, instruction: string, warning?: string): FileTaskPlan {
+  const includeOther = shouldIncludeOther(instruction);
+  const existingFolders = new Set(scan.folders.map((folder) => normalizeRelative(folder.relative_path)));
+  const existingFiles = new Set(scan.files.map((file) => normalizeRelative(file.relative_path)));
+  const categoryCounts: Record<string, number> = {};
+  const skipped: FileTaskPlan["skipped"] = [];
+  const destinationFolders = new Set<string>();
+  const filesToMove: FileOperation[] = [];
+
+  for (const file of scan.files) {
+    const category = categoryForExtension(file.extension);
+    if (category === "Other" && !includeOther) {
+      skipped.push({ path: file.path, relative_path: file.relative_path, reason: "Unknown file type." });
+      continue;
+    }
+
+    categoryCounts[category] = (categoryCounts[category] ?? 0) + 1;
+    const sourcePath = normalizeRelative(file.relative_path);
+    const destinationPath = normalizeRelative(`${category}/${file.name}`);
+
+    if (sourcePath === destinationPath || normalizeRelative(parentPath(sourcePath)) === category) {
+      skipped.push({ path: file.path, relative_path: file.relative_path, reason: "Already organized." });
+      continue;
+    }
+    if (existingFiles.has(destinationPath)) {
+      skipped.push({ path: file.path, relative_path: file.relative_path, reason: "Destination already exists. No overwrite allowed." });
+      continue;
+    }
+
+    destinationFolders.add(category);
+    filesToMove.push({
+      id: "",
+      type: "move_file",
+      tool: "file.move_file",
+      from_path: null,
+      to_path: null,
+      path: null,
+      relative_from: file.relative_path,
+      relative_to: destinationPath,
+      reason: `${categorySingular(category)} file should be grouped under ${category}.`,
+      status: "planned",
+    });
+  }
+
+  const foldersToCreate: FileOperation[] = [...destinationFolders]
+    .sort()
+    .filter((folder) => !existingFolders.has(folder))
+    .map((folder) => ({
+      id: "",
+      type: "create_folder",
+      tool: "file.create_folder",
+      from_path: null,
+      to_path: null,
+      path: null,
+      relative_from: null,
+      relative_to: folder,
+      reason: `Create ${folder} folder for organized files.`,
+      status: "planned",
+    }));
+
+  const operations = assignOperationIds([...foldersToCreate, ...filesToMove]);
+  const foldersWithIds = operations.filter((operation) => operation.type === "create_folder");
+  const movesWithIds = operations.filter((operation) => operation.type === "move_file");
+  const categories = Object.keys(categoryCounts).sort();
+  const summary = movesWithIds.length
+    ? `Organize ${movesWithIds.length} files into ${categories.length} folders by file type: ${categories.slice(0, 5).join(", ")}${categories.length > 5 ? `, and ${categories.length - 5} more` : ""}.`
+    : "No file moves are needed for this folder.";
+
+  return {
+    task_id: `browser-preview-${Date.now()}`,
+    task_type: "file_organize",
+    root_path: scan.display_name,
+    instruction,
+    summary,
+    risk_level: operations.length <= 100 ? "low" : "medium",
+    requires_confirmation: true,
+    operations,
+    folders_to_create: foldersWithIds,
+    files_to_move: movesWithIds,
+    skipped,
+    warnings: scan.warnings,
+    blocked_reasons: [],
+    status: operations.length ? "awaiting_confirmation" : "empty",
+    total_operations: operations.length,
+    create_folder_count: foldersWithIds.length,
+    move_file_count: movesWithIds.length,
+    copy_file_count: 0,
+    rename_file_count: 0,
+    category_counts: categoryCounts,
+    preview_only: true,
+    planner_model: null,
+    planner_provider: null,
+    planner_warning: warning ?? null,
+  };
+}
+
+function assignOperationIds(operations: FileOperation[]) {
+  return operations.map((operation, index) => ({ ...operation, id: `op_${String(index + 1).padStart(3, "0")}` }));
+}
+
+function normalizeRelative(path: string) {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function parentPath(path: string) {
+  const normalized = normalizeRelative(path);
+  const index = normalized.lastIndexOf("/");
+  return index === -1 ? "" : normalized.slice(0, index);
+}
+
+function shouldIncludeOther(instruction: string) {
+  const text = instruction.toLowerCase();
+  return text.includes("unknown") || text.includes("others") || text.includes("other files");
+}
+
+function categorySingular(category: string) {
+  if (category === "PDFs") return "PDF";
+  return category.endsWith("s") ? category.slice(0, -1) : category;
+}
+
+function toTaskErrorMessage(error: unknown) {
+  const message = getErrorMessage(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("does not exist")) return "Folder not found. Check the path and try again.";
+  if (lower.includes("protected") || lower.includes("system") || lower.includes("drive roots")) return "MindOS cannot scan protected system folders.";
+  if (lower.includes("directory")) return "That path is not a folder.";
+  return message;
+}
+
+function inferredPathFromCommand(command: string) {
+  const normalized = command.toLowerCase();
+  if (normalized.includes("download")) return "D:\\Downloads";
+  if (normalized.includes("document")) return "D:\\Documents";
+  if (normalized.includes("desktop")) return "D:\\Desktop";
+  if (normalized.includes("project")) return "D:\\Projects";
+  return "";
+}
+
+function extractPathLikeCommand(command: string) {
+  const trimmed = command.trim();
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed)) return trimmed;
+  return "";
 }

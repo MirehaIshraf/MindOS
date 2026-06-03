@@ -12,9 +12,14 @@ from app.schemas.tasks import (
     TaskResponse,
 )
 from app.schemas.file_tasks import (
+    DocumentSummaryCompleteRequest,
+    DocumentSummaryCompleteResponse,
+    DocumentSummaryPrepareRequest,
+    DocumentSummaryPrepareResponse,
     FileSnapshotResponse,
     FileTaskExecuteRequest,
     FileTaskExecutionResult,
+    FileTaskLlmPlanRequest,
     FileTaskPlan,
     FileTaskPrepareRequest,
     FileTaskRecentResponse,
@@ -22,7 +27,11 @@ from app.schemas.file_tasks import (
     FileTaskScanRequest,
     FileTaskUndoResult,
 )
+from app.services.document_summary_task_service import document_summary_task_service
 from app.services.file_task_execution_service import file_task_execution_service
+from app.services.file_task_llm_planner_service import file_task_llm_planner_service
+from app.services.file_task_planner_service import file_task_planner_service
+from app.services.file_snapshot_service import file_snapshot_service
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -80,17 +89,61 @@ def task_history(limit: int = Query(default=20, ge=1, le=100)) -> TaskHistoryRes
 @router.post("/file/scan", response_model=FileSnapshotResponse)
 def scan_file_task(request: FileTaskScanRequest) -> FileSnapshotResponse:
     try:
-        return file_task_execution_service.scan(request)
+        return file_snapshot_service.scan_folder(
+            root_path=request.root_path,
+            max_depth=request.max_depth,
+            max_files=request.max_files,
+            include_hidden=request.include_hidden,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to scan file task folder")
+        raise HTTPException(status_code=500, detail=f"Folder scan failed: {error}") from error
 
 
 @router.post("/file/prepare", response_model=FileTaskPlan)
 def prepare_file_task(request: FileTaskPrepareRequest) -> FileTaskPlan:
     try:
-        return file_task_execution_service.prepare(request)
+        return file_task_planner_service.prepare_deterministic_file_plan(request)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare file task preview")
+        raise HTTPException(status_code=500, detail=f"File task preview failed: {error}") from error
+
+
+@router.post("/file/plan-with-llm", response_model=FileTaskPlan)
+def plan_browser_file_task_with_llm(request: FileTaskLlmPlanRequest) -> FileTaskPlan:
+    try:
+        return file_task_llm_planner_service.plan_browser_file_task(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare AI-assisted file task preview")
+        raise HTTPException(status_code=500, detail=f"AI file task planning failed: {error}") from error
+
+
+@router.post("/document/summary/prepare", response_model=DocumentSummaryPrepareResponse)
+def prepare_document_summary_task(request: DocumentSummaryPrepareRequest) -> DocumentSummaryPrepareResponse:
+    try:
+        return document_summary_task_service.prepare_summary(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare document summary")
+        raise HTTPException(status_code=500, detail=f"Document summary preparation failed: {error}") from error
+
+
+@router.post("/document/summary/complete", response_model=DocumentSummaryCompleteResponse)
+def complete_document_summary_task(request: DocumentSummaryCompleteRequest) -> DocumentSummaryCompleteResponse:
+    try:
+        return document_summary_task_service.complete_summary(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to record document summary completion")
+        raise HTTPException(status_code=500, detail=f"Document summary completion failed: {error}") from error
 
 
 @router.post("/file/{task_id}/execute", response_model=FileTaskExecutionResult)

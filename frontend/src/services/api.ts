@@ -29,12 +29,17 @@ import type {
   ConnectorToggleResponse,
   CollectorClientsResponse,
   DevState,
+  DocumentSummaryPrepareRequest,
+  DocumentSummaryPrepareResponse,
+  DocumentSummaryCompleteRequest,
+  DocumentSummaryCompleteResponse,
   EmbeddingReindexResponse,
   EmbeddingSettingsResponse,
   EmbeddingStatusResponse,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
+  FileTaskLlmPlanRequest,
   FileSnapshotResponse,
   FileTaskExecutionResult,
   FileTaskPlan,
@@ -480,8 +485,8 @@ export async function getTaskHistory(limit = 20): Promise<TaskHistoryResponse> {
   return response.data;
 }
 
-export async function scanFileTask(payload: { root_path: string; max_depth?: number; max_files?: number }): Promise<FileSnapshotResponse> {
-  const response = await api.post<FileSnapshotResponse>("/tasks/file/scan", payload);
+export async function scanFileTask(payload: { root_path: string; max_depth?: number; max_files?: number; include_hidden?: boolean }): Promise<FileSnapshotResponse> {
+  const response = await api.post<FileSnapshotResponse>("/tasks/file/scan", payload, { timeout: 30000 });
   return response.data;
 }
 
@@ -490,9 +495,28 @@ export async function prepareFileTask(payload: {
   instruction: string;
   max_depth?: number;
   max_files?: number;
+  include_hidden?: boolean;
+  mode?: string;
   dry_run?: boolean;
 }): Promise<FileTaskPlan> {
   const response = await api.post<FileTaskPlan>("/tasks/file/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export const prepareFileTaskPlan = prepareFileTask;
+
+export async function planFileTaskWithLlm(payload: FileTaskLlmPlanRequest): Promise<FileTaskPlan> {
+  const response = await api.post<FileTaskPlan>("/tasks/file/plan-with-llm", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function prepareDocumentSummary(payload: DocumentSummaryPrepareRequest): Promise<DocumentSummaryPrepareResponse> {
+  const response = await api.post<DocumentSummaryPrepareResponse>("/tasks/document/summary/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function completeDocumentSummary(payload: DocumentSummaryCompleteRequest): Promise<DocumentSummaryCompleteResponse> {
+  const response = await api.post<DocumentSummaryCompleteResponse>("/tasks/document/summary/complete", payload);
   return response.data;
 }
 

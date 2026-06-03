@@ -1,10 +1,9 @@
 from datetime import datetime, timezone
 
 from app.adapters.file_adapter import FileAdapter, file_adapter
-from app.core.dependencies import get_event_repository, get_file_task_repository
-from app.domain.enums import EmbeddingStatus, EventSource
+from app.core.dependencies import get_file_task_repository
 from app.domain.models import FileTaskLog
-from app.repositories.base import EventRepository, FileTaskRepository
+from app.repositories.base import FileTaskRepository
 from app.schemas.file_tasks import (
     FileOperation,
     FileSnapshotResponse,
@@ -28,18 +27,16 @@ class FileTaskExecutionService:
     def __init__(
         self,
         repository: FileTaskRepository | None = None,
-        events: EventRepository | None = None,
         adapter: FileAdapter | None = None,
     ) -> None:
         self._repository = repository or get_file_task_repository()
-        self._events = events or get_event_repository()
         self._adapter = adapter or file_adapter
 
     def scan(self, request: FileTaskScanRequest) -> FileSnapshotResponse:
         root, blocked = file_task_safety_service.validate_root(request.root_path)
         if blocked:
             raise ValueError("; ".join(blocked))
-        return file_snapshot_service.scan(str(root), request.max_depth, request.max_files)
+        return file_snapshot_service.scan(str(root), request.max_depth, request.max_files, request.include_hidden)
 
     def prepare(self, request: FileTaskPrepareRequest) -> FileTaskPlan:
         snapshot = self.scan(FileTaskScanRequest(root_path=request.root_path, max_depth=request.max_depth, max_files=request.max_files))
@@ -68,19 +65,6 @@ class FileTaskExecutionService:
                 "undo": [],
             }
         )
-        self._record_memory_event(
-            event_type="file_task_prepared",
-            title="Prepared file organization task",
-            content=f"{plan.summary}\nOperations planned: {len(plan.operations)}\nStatus: {plan.status}",
-            metadata={
-                "task_id": plan.task_id,
-                "root_path": plan.root_path,
-                "operation_count": len(plan.operations),
-                "risk_level": plan.risk_level,
-                "status": plan.status,
-            },
-            indexable=False,
-        )
         return plan
 
     def execute(self, task_id: str, request: FileTaskExecuteRequest) -> FileTaskExecutionResult:
@@ -92,7 +76,6 @@ class FileTaskExecutionService:
         if validation["blocked_reasons"]:
             result = FileTaskExecutionResult(task_id=task_id, status="failed", errors=validation["blocked_reasons"], undo_available=False)
             self._repository.update(task_id, {"status": "failed", "execution": result.model_dump(mode="json"), "validation": validation, "executed_at": datetime.now(timezone.utc)})
-            self._record_file_task_failed(task_id, plan, result)
             return result
 
         counts = {"created_folders": 0, "moved_files": 0, "copied_files": 0, "renamed_files": 0}
@@ -115,10 +98,6 @@ class FileTaskExecutionService:
                 "executed_at": datetime.now(timezone.utc),
             },
         )
-        if status == "failed":
-            self._record_file_task_failed(task_id, plan, result)
-        else:
-            self._record_file_task_completed(task_id, plan, result)
         return result
 
     def undo(self, task_id: str) -> FileTaskUndoResult:
@@ -142,13 +121,6 @@ class FileTaskExecutionService:
         status = "undone" if not errors else "partial" if undone else "failed"
         result = FileTaskUndoResult(task_id=task_id, status=status, undone_operations=undone, errors=errors)
         self._repository.update(task_id, {"status": status, "undone_at": datetime.now(timezone.utc)})
-        self._record_memory_event(
-            event_type="file_task_undone",
-            title="Undid file organization task",
-            content=f"Undo status: {status}. Operations undone: {undone}.",
-            metadata={"task_id": task_id, "status": status, "undone_operations": undone},
-            indexable=True,
-        )
         return result
 
     def get(self, task_id: str) -> FileTaskRecordResponse:
@@ -201,44 +173,6 @@ class FileTaskExecutionService:
             executed_at=task.executed_at,
             undone_at=task.undone_at,
         )
-
-    def _record_file_task_completed(self, task_id: str, plan: FileTaskPlan, result: FileTaskExecutionResult) -> None:
-        self._record_memory_event(
-            event_type="file_task_completed",
-            title="Completed file organization task",
-            content=(
-                f"{plan.summary}\nCreated folders: {result.created_folders}\nMoved files: {result.moved_files}\n"
-                f"Copied files: {result.copied_files}\nRenamed files: {result.renamed_files}"
-            ),
-            metadata={**result.model_dump(mode="json"), "task_id": task_id, "root_path": plan.root_path},
-            indexable=True,
-        )
-
-    def _record_file_task_failed(self, task_id: str, plan: FileTaskPlan, result: FileTaskExecutionResult) -> None:
-        self._record_memory_event(
-            event_type="file_task_failed",
-            title="Failed file organization task",
-            content=f"{plan.summary}\nErrors: {'; '.join(result.errors)}",
-            metadata={**result.model_dump(mode="json"), "task_id": task_id, "root_path": plan.root_path},
-            indexable=True,
-        )
-
-    def _record_memory_event(self, *, event_type: str, title: str, content: str, metadata: dict, indexable: bool) -> None:
-        self._events.create_event(
-            {
-                "source": EventSource.mindos,
-                "type": event_type,
-                "title": title,
-                "content": content,
-                "metadata": {**metadata, "memory_category": "task", "hidden_from_default": False},
-                "timestamp": datetime.now(timezone.utc),
-                "embedding_status": EmbeddingStatus.not_required,
-                "is_indexable": indexable,
-                "is_relationship_eligible": False,
-                "is_context_eligible": indexable,
-            }
-        )
-
 
 def dedupe(values: list[str]) -> list[str]:
     output: list[str] = []
