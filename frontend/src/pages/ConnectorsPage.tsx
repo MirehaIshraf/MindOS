@@ -21,6 +21,7 @@ import {
   clearConnectorSourceEvents,
   clearFileSystemEvents,
   clearGitEvents,
+  clearGitHubEvents,
   clearLogEvents,
   createConnectorSource,
   deleteConnectorSource,
@@ -28,7 +29,9 @@ import {
   getConnectors,
   getConnectorConfig,
   getConnectorSources,
+  getGitHubStatus,
   getImportRuns,
+  listGitHubRepos,
   importFiles,
   importGitRepo,
   importLogs,
@@ -36,6 +39,10 @@ import {
   previewGitImport,
   previewLogImport,
   runConnectorSourceImport,
+  saveGitHubConfig,
+  saveGitHubSelection,
+  syncGitHubRepos,
+  testGitHubConnection,
   toggleConnector,
   updateConnectorConfig,
   updateConnectorSource,
@@ -50,6 +57,9 @@ import type {
   GitImportPayload,
   GitImportResult,
   GitPreviewResult,
+  GitHubRepo,
+  GitHubStatusResponse,
+  GitHubSyncResponse,
   ImportRun,
   LogImportPayload,
   LogImportResult,
@@ -445,6 +455,7 @@ export function ConnectorsPage() {
               onGitPreview={handleGitPreview}
               onGitImport={handleGitImport}
               onClearEvents={() => void handleClearEvents(selectedConnector.id as "file_system" | "logs" | "git")}
+              onRefresh={() => void refresh()}
               onSaveSource={() => openSavePanel(selectedConnector.id as "file_system" | "logs" | "git")}
               onRunSource={(source) => void handleRunSource(source)}
               onEditSource={(source) => openSavePanel(source.connector_type as "file_system" | "logs" | "git", source)}
@@ -478,6 +489,8 @@ function ConnectorCard({
 }) {
   const Icon = connectorIcon(connector.id);
   const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id));
+  const githubRepoCount = Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0);
+  const githubLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
   return (
     <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
@@ -499,16 +512,29 @@ function ConnectorCard({
         {connector.supports_manual_import ? <Badge>manual</Badge> : null}
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
-        <div>
-          <span className="block uppercase">Events</span>
-          <span className="mt-1 block text-sm font-medium text-app-text">{connector.event_count}</span>
+      {connector.id === "github" ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+          <div>
+            <span className="block uppercase">Repos</span>
+            <span className="mt-1 block text-sm font-medium text-app-text">{githubRepoCount}</span>
+          </div>
+          <div>
+            <span className="block uppercase">Last sync</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(githubLastSync)}</span>
+          </div>
         </div>
-        <div>
-          <span className="block uppercase">{connector.supports_live_events ? "Last seen" : "Last sync"}</span>
-          <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(connector.last_seen_at ?? connector.last_event_at)}</span>
+      ) : (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+          <div>
+            <span className="block uppercase">Events</span>
+            <span className="mt-1 block text-sm font-medium text-app-text">{connector.event_count}</span>
+          </div>
+          <div>
+            <span className="block uppercase">{connector.supports_live_events ? "Last seen" : "Last sync"}</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(connector.last_seen_at ?? connector.last_event_at)}</span>
+          </div>
         </div>
-      </div>
+      )}
 
       <Button className="mt-5 w-full" variant="secondary" onClick={onConfigure}>
         Configure
@@ -545,6 +571,7 @@ function ConfigurePanel(props: {
   onGitPreview: () => void;
   onGitImport: () => void;
   onClearEvents: () => void;
+  onRefresh: () => void;
   onSaveSource: () => void;
   onRunSource: (source: ConnectorSource) => void;
   onEditSource: (source: ConnectorSource) => void;
@@ -557,14 +584,25 @@ function ConfigurePanel(props: {
       <PanelHeader title={connector.name} onClose={props.onClose} />
       <div className="mt-3 flex flex-wrap gap-2">
         <StatusBadge status={connector.status} />
-        <Badge>events: {connector.event_count}</Badge>
-        <Badge>{connector.supports_live_events ? `last seen: ${formatDate(connector.last_seen_at)}` : `last sync: ${formatDate(connector.last_event_at)}`}</Badge>
+        {connector.id === "github" ? (
+          <>
+            <Badge>repos: {Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0)}</Badge>
+            <Badge>last sync: {formatDate(typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at)}</Badge>
+          </>
+        ) : (
+          <>
+            <Badge>events: {connector.event_count}</Badge>
+            <Badge>{connector.supports_live_events ? `last seen: ${formatDate(connector.last_seen_at)}` : `last sync: ${formatDate(connector.last_event_at)}`}</Badge>
+          </>
+        )}
       </div>
 
       {connector.id === "vscode" ? (
         <VSCodePanel connector={connector} onToggle={props.onToggleConnector} />
       ) : connector.id === "browser" ? (
         <BrowserPanel connector={connector} onToggle={props.onToggleConnector} />
+      ) : connector.id === "github" ? (
+        <GitHubPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
       ) : connector.id === "file_system" ? (
         <FileSystemPanel {...props} />
       ) : connector.id === "logs" ? (
@@ -819,6 +857,348 @@ function browserClampNumber(value: number, min: number, max: number, fallback: n
   }
   return Math.max(min, Math.min(max, Math.round(value)));
 }
+
+function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector; onToggle: (enabled: boolean) => void; onRefresh: () => void }) {
+  const [status, setStatus] = useState<GitHubStatusResponse | null>(null);
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [token, setToken] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState("https://api.github.com");
+  const [includeCommits, setIncludeCommits] = useState(true);
+  const [includeIssues, setIncludeIssues] = useState(true);
+  const [includePullRequests, setIncludePullRequests] = useState(true);
+  const [maxItems, setMaxItems] = useState(30);
+  const [syncResult, setSyncResult] = useState<GitHubSyncResponse | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStatus() {
+      setLoading("githubStatus");
+      try {
+        const response = await getGitHubStatus();
+        if (!cancelled) {
+          setStatus(response);
+          setApiBaseUrl(response.api_base_url || "https://api.github.com");
+          setSelectedRepos(response.selected_repos ?? []);
+          setIncludeCommits(response.sync_settings?.commits ?? true);
+          setIncludeIssues(response.sync_settings?.issues ?? true);
+          setIncludePullRequests(response.sync_settings?.pull_requests ?? true);
+          setMaxItems(response.sync_settings?.max_items_per_type ?? 30);
+        }
+      } catch (error) {
+        if (!cancelled) setMessage(getApiErrorMessage(error));
+      } finally {
+        if (!cancelled) setLoading(null);
+      }
+    }
+    void loadStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveToken() {
+    setLoading("githubSave");
+    setMessage(null);
+    try {
+      const response = await saveGitHubConfig({ token, api_base_url: apiBaseUrl });
+      setStatus(response);
+      setRepos([]);
+      setSelectedRepos(response.selected_repos ?? []);
+      setToken("");
+      setMessage(response.configured ? "GitHub token saved locally." : "GitHub token cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function clearToken() {
+    if (!window.confirm("Clear the saved GitHub token? Synced memory events will remain.")) return;
+    setToken("");
+    setLoading("githubClearToken");
+    setMessage(null);
+    try {
+      const response = await saveGitHubConfig({ token: "", api_base_url: apiBaseUrl });
+      setStatus(response);
+      setRepos([]);
+      setSelectedRepos([]);
+      setMessage("GitHub token cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function testConnection() {
+    setLoading("githubTest");
+    setMessage(null);
+    try {
+      if (token.trim()) {
+        await saveGitHubConfig({ token, api_base_url: apiBaseUrl });
+        setToken("");
+      }
+      const response = await testGitHubConnection();
+      setMessage(response.message);
+      setStatus(await getGitHubStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function loadRepos() {
+    if (!isConnected()) {
+      setMessage("Connect GitHub before loading repositories.");
+      return;
+    }
+    setLoading("githubRepos");
+    setMessage(null);
+    try {
+      const response = await listGitHubRepos();
+      setRepos(response.repos);
+      setMessage(`Loaded ${response.total} repositories.`);
+      setStatus(await getGitHubStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function syncSelectedRepos() {
+    if (!isConnected()) {
+      setMessage("Connect GitHub before syncing repositories.");
+      return;
+    }
+    setLoading("githubSync");
+    setMessage(null);
+    setSyncResult(null);
+    try {
+      const response = await syncGitHubRepos({
+        repo_full_names: selectedRepos.slice(0, 5),
+        include_commits: includeCommits,
+        include_issues: includeIssues,
+        include_pull_requests: includePullRequests,
+        max_items_per_type: maxItems,
+      });
+      setSyncResult(response);
+      setMessage(response.message);
+      setStatus(await getGitHubStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function clearEvents() {
+    if (!window.confirm("Clear GitHub memory events? The saved token and repo selection will remain.")) return;
+    setLoading("githubClearEvents");
+    setMessage(null);
+    try {
+      const response = await clearGitHubEvents();
+      setMessage(response.deleted_events === 0 ? "No GitHub events to clear." : `Cleared ${response.deleted_events} GitHub events.`);
+      setStatus(await getGitHubStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  function toggleRepo(fullName: string) {
+    setSelectedRepos((current) => {
+      if (current.includes(fullName)) return current.filter((repo) => repo !== fullName);
+      return [...current, fullName].slice(0, 5);
+    });
+  }
+
+  async function saveRepositories() {
+    if (!isConnected()) {
+      setMessage("Connect GitHub before saving repositories.");
+      return;
+    }
+    setLoading("githubSaveRepos");
+    setMessage(null);
+    try {
+      const response = await saveGitHubSelection(selectedRepos, {
+        commits: includeCommits,
+        issues: includeIssues,
+        pull_requests: includePullRequests,
+        max_items_per_type: maxItems,
+      });
+      setStatus(response);
+      setMessage(selectedRepos.length ? "Repositories saved." : "Repository selection cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  function toggleConnection() {
+    if (!configured && !token.trim()) {
+      setMessage("Save a GitHub token before connecting.");
+      return;
+    }
+    const nextEnabled = !currentEnabled;
+    onToggle(nextEnabled);
+    setStatus((current) => current ? { ...current, enabled: nextEnabled, connected: nextEnabled && Boolean(current.username), status: nextEnabled && current.username ? "connected" : nextEnabled ? "configured" : "off" } : current);
+  }
+
+  function isConnected() {
+    return Boolean((status?.enabled ?? connector.enabled) && status?.connected);
+  }
+
+  const configured = status?.configured ?? connector.configured;
+  const currentEnabled = status?.enabled ?? connector.enabled;
+  const connected = isConnected();
+  const selectedCount = selectedRepos.length;
+  return (
+    <div className="mt-5 space-y-4">
+      <div>
+        <p className="text-sm font-medium text-app-text">GitHub</p>
+        <p className="mt-1 text-sm text-app-muted">Connect GitHub so MindOS can read selected repositories when needed.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={connected ? "connected" : currentEnabled && status?.last_error ? "error" : currentEnabled && configured ? "configured" : configured ? "configured" : "off"} />
+        <Badge>Repositories: {selectedCount || status?.repo_count || 0}</Badge>
+        <Badge>Last sync: {formatDate(status?.last_sync_at ?? connector.last_event_at)}</Badge>
+      </div>
+      {connected && status?.username ? <p className="text-sm text-app-muted">Connected as {status.username}</p> : null}
+      {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
+
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-app-text">Connection</p>
+            <p className="mt-1 text-xs text-app-muted">{configured ? "Token saved. Enter a new token to replace it." : "Add a personal access token to configure GitHub."}</p>
+          </div>
+          <Toggle checked={currentEnabled} disabled={!configured} onChange={toggleConnection} />
+        </div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-xs font-medium uppercase text-app-muted">
+            Personal access token
+            <Input
+              className="mt-2"
+              type="password"
+              value={token}
+              placeholder={configured ? "Token saved. Enter a new token to replace it." : "github_pat_..."}
+              onChange={(event) => setToken(event.target.value)}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => void saveToken()} loading={loading === "githubSave"} disabled={!token.trim() && configured}>
+              Save token
+            </Button>
+            <Button variant="secondary" onClick={() => void testConnection()} loading={loading === "githubTest"} disabled={!configured && !token.trim()}>
+              Test connection
+            </Button>
+            <Button variant={currentEnabled ? "secondary" : "primary"} onClick={toggleConnection} disabled={!configured}>
+              {currentEnabled ? "Disconnect" : "Connect"}
+            </Button>
+            <Button variant="danger" onClick={() => void clearToken()} loading={loading === "githubClearToken"} disabled={!configured}>
+              Clear token
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {connected ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-app-text">Repositories</p>
+              <p className="mt-1 text-xs text-app-muted">Choose repositories MindOS can use for GitHub context. Select up to 5 repositories.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => void loadRepos()} loading={loading === "githubRepos"}>
+                Load repositories
+              </Button>
+              <Button variant="primary" onClick={() => void saveRepositories()} loading={loading === "githubSaveRepos"}>
+                Save repositories
+              </Button>
+            </div>
+          </div>
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {repos.length === 0 ? (
+              <p className="text-sm text-app-muted">Load repositories to choose what MindOS can use.</p>
+            ) : (
+              repos.map((repo) => (
+                <label key={repo.full_name} className="flex cursor-pointer items-start gap-3 rounded-md border border-app-border bg-zinc-900/60 px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectedRepos.includes(repo.full_name)}
+                    onChange={() => toggleRepo(repo.full_name)}
+                    className="mt-1 h-4 w-4 accent-violet-600"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-app-text">{repo.full_name}</span>
+                    <span className="mt-1 block truncate text-xs text-app-muted">{repo.description || "No description"}</span>
+                    <span className="mt-1 block text-xs text-app-muted">Updated {formatDate(repo.updated_at)}</span>
+                  </span>
+                  <Badge>{repo.private ? "private" : "public"}</Badge>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+          Connect GitHub to load and choose repositories.
+        </div>
+      )}
+
+      <details className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced sync settings</summary>
+        <div className="mt-4 space-y-3">
+          <LabeledInput label="API base URL" value={apiBaseUrl} onChange={setApiBaseUrl} placeholder="https://api.github.com" />
+          <Checkbox label="Sync recent commits" checked={includeCommits} onChange={setIncludeCommits} />
+          <Checkbox label="Sync open issues" checked={includeIssues} onChange={setIncludeIssues} />
+          <Checkbox label="Sync open pull requests" checked={includePullRequests} onChange={setIncludePullRequests} />
+          <LabeledInput label="Max items per type" type="number" value={String(maxItems)} onChange={(value) => setMaxItems(Math.max(1, Math.min(100, Number(value) || 30)))} />
+          <div className="flex flex-wrap gap-2">
+            {connected && selectedRepos.length > 0 ? (
+              <Button variant="secondary" onClick={() => void syncSelectedRepos()} loading={loading === "githubSync"}>
+                Sync now
+              </Button>
+            ) : null}
+            <Button variant="danger" onClick={() => void clearEvents()} loading={loading === "githubClearEvents"}>
+              Clear GitHub events
+            </Button>
+          </div>
+        </div>
+      </details>
+
+      {syncResult ? (
+        <CompactBlock title="Sync result">
+          <Badge variant={syncResult.status === "success" ? "success" : "warning"}>{syncResult.status}</Badge>
+          <Badge>imported: {syncResult.imported_count}</Badge>
+          <Badge>updated: {syncResult.updated_count}</Badge>
+          <Badge>skipped: {syncResult.skipped_count}</Badge>
+          <Badge variant={syncResult.failed_count ? "danger" : "default"}>failed: {syncResult.failed_count}</Badge>
+        </CompactBlock>
+      ) : null}
+      {syncResult?.warnings.length ? <StatusMessage message={syncResult.warnings.join(" ")} variant="warning" /> : null}
+      {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+    </div>
+  );
+}
+
 
 function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
   return (
@@ -1267,7 +1647,7 @@ function Toggle({ checked, disabled, onChange }: { checked: boolean; disabled: b
 
 function StatusBadge({ status }: { status: string }) {
   const label = status === "needs_configuration" ? "Needs setup" : status.charAt(0).toUpperCase() + status.slice(1);
-  const variant = status === "connected" ? "success" : status === "disconnected" || status === "needs_configuration" ? "warning" : status === "error" ? "danger" : "default";
+  const variant = status === "connected" ? "success" : status === "configured" ? "warning" : status === "disconnected" || status === "needs_configuration" ? "warning" : status === "error" ? "danger" : "default";
   return <Badge variant={variant}>{label}</Badge>;
 }
 

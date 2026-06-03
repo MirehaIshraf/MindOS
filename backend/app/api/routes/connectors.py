@@ -34,12 +34,22 @@ from app.schemas.connectors import (
     VSCodeHeartbeatResponse,
 )
 from app.schemas.ingest import CollectorClientsResponse
+from app.schemas.github import (
+    GitHubConfigRequest,
+    GitHubReposResponse,
+    GitHubSelectionRequest,
+    GitHubStatusResponse,
+    GitHubSyncRequest,
+    GitHubSyncResponse,
+    GitHubTestResponse,
+)
 from app.services.connector_source_service import connector_source_service
 from app.services.connector_registry_service import connector_registry_service
 from app.services.connector_service import ConnectorService
 from app.services.external_ingest_service import external_ingest_service
 from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
+from app.services.github_service import GitHubConnectorError, github_service
 from app.services.log_import_service import LogImportService
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -82,6 +92,53 @@ def record_browser_heartbeat(request: BrowserHeartbeatRequest) -> BrowserHeartbe
 @router.get("/browser/rules", response_model=BrowserRulesResponse)
 def get_browser_rules() -> BrowserRulesResponse:
     return connector_registry_service.get_browser_rules()
+
+
+@router.get("/github/status", response_model=GitHubStatusResponse)
+def get_github_status() -> GitHubStatusResponse:
+    return github_service.status()
+
+
+@router.post("/github/config", response_model=GitHubStatusResponse)
+def save_github_config(request: GitHubConfigRequest) -> GitHubStatusResponse:
+    return github_service.save_config(request)
+
+
+@router.post("/github/test", response_model=GitHubTestResponse)
+def test_github_connection() -> GitHubTestResponse:
+    try:
+        return github_service.test_connection()
+    except GitHubConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/github/repos", response_model=GitHubReposResponse)
+def list_github_repos() -> GitHubReposResponse:
+    try:
+        return github_service.list_repos()
+    except GitHubConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/github/selection", response_model=GitHubStatusResponse)
+def save_github_selection(request: GitHubSelectionRequest) -> GitHubStatusResponse:
+    try:
+        return github_service.save_selection(request)
+    except (GitHubConnectorError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/github/sync", response_model=GitHubSyncResponse)
+def sync_github(request: GitHubSyncRequest) -> GitHubSyncResponse:
+    try:
+        return github_service.sync(request)
+    except (GitHubConnectorError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.delete("/github/events")
+def clear_github_events() -> dict[str, object]:
+    return _clear_events_for_source("github")
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

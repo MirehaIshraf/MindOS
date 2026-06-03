@@ -92,6 +92,19 @@ Preferred browser event types:
 - `GET /connectors/browser/runtime`: runtime settings for the browser extension popup/background script.
 - `GET /connectors/browser/rules`: browser smart-capture rule summary, including important patterns, noisy/private patterns, and current ignored/important domain config.
 - `POST /connectors/browser/heartbeat`: updates Browser connector last-seen status; does not create a memory event.
+- `GET /connectors/github/status`: returns read-only GitHub connector status, configured/connected flags, username, last sync/error, selected repos, repo count, and event count. It never returns the token.
+- `POST /connectors/github/config`: save or clear local GitHub token configuration. Request:
+  `{ "token": "github_pat_...", "api_base_url": "https://api.github.com" }`.
+  Passing an empty token clears the saved token. The token is not returned.
+- `POST /connectors/github/test`: tests the saved token with `GET /user`. Returns connected status and username. Invalid/expired tokens return a clean JSON error.
+- `GET /connectors/github/repos`: lists accessible repositories for the saved token using GitHub REST API metadata only. Returns `400` with `GitHub connector is not connected.` when GitHub is Off or has not been successfully tested.
+- `POST /connectors/github/selection`: saves selected repositories without syncing. Request:
+  `{ "repo_full_names": ["owner/repo"], "sync_settings": { "commits": true, "issues": true, "pull_requests": true, "max_items_per_type": 30 } }`.
+  Selection is limited to 5 repositories. Returns GitHub connector status and does not create Memory events.
+- `POST /connectors/github/sync`: sync selected repositories read-only. Request:
+  `{ "repo_full_names": ["owner/repo"], "include_commits": true, "include_issues": true, "include_pull_requests": true, "max_items_per_type": 30 }`.
+  Sync is limited to 5 repositories per request and up to 100 items per type. It requires GitHub to be connected, creates or updates `github_commit`, `github_issue`, and `github_pull_request` memory events with dedupe keys, and does not fetch file contents or perform GitHub writes.
+- `DELETE /connectors/github/events`: clears GitHub memory events and related relationships/vectors only. It does not clear the token.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
 - `GET /connectors/{connector_id}/config`: read placeholder/stored connector config.

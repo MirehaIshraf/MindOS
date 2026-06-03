@@ -107,6 +107,7 @@ Before adding a new feature:
 
 - Connectors must be explicit user action.
 - Connector UX must use the same toggle/config/status pattern across connector types.
+- Connector UI should stay simple; advanced sync settings belong behind a collapsed advanced section unless the user explicitly needs them.
 - Do not put "upcoming" marketing text in product UI; unsupported connectors should appear as off or needing setup.
 - No automatic folder scanning.
 - No automatic browser tracking without extension/user permission.
@@ -125,6 +126,7 @@ Before adding a new feature:
 - No live watching unless explicitly implemented later.
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
+- GitHub connector is read-only until explicitly expanded. Do not add GitHub write actions such as creating issues, commenting, merging, pushing, or updating pull requests unless requested.
 - External collectors should use the external ingestion API.
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
 - VSCode connector should behave like an installed extension, not only a debug Extension Development Host.

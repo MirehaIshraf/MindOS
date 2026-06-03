@@ -358,6 +358,8 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
   const summaryStatus = typeof metadata.summary_status === "string" ? metadata.summary_status : null;
   const visitCount = typeof metadata.visit_count === "number" ? metadata.visit_count : null;
   const pageContextMissing = metadata.page_context_missing === true;
+  const githubRepo = source === "github" && typeof metadata.repo === "string" ? metadata.repo : null;
+  const githubState = source === "github" && typeof metadata.state === "string" ? metadata.state : null;
   const preview = source === "browser_extension" && type === "browser_page_captured"
     ? browserContentPreview(rawPreview)
     : rawPreview;
@@ -381,12 +383,20 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
         {pageContextMissing ? <Badge variant="warning">context missing</Badge> : null}
         {metadata.text_excerpt_included === true ? <Badge variant="success">context captured</Badge> : null}
         {visitCount && visitCount > 1 ? <Badge variant="info">visited {visitCount} times</Badge> : null}
+        {githubState ? <Badge variant="info">{githubState}</Badge> : null}
         <Badge>{embeddingStatus}</Badge>
         <span className="ml-auto text-xs text-app-muted">{formatTimestamp(timestamp)}</span>
       </div>
       <h3 className="mt-3 text-sm font-semibold text-app-text">{title}</h3>
+      {githubRepo ? <p className="mt-2 truncate text-xs text-app-muted">Repository: {githubRepo}</p> : null}
       {url || domain ? (
-        <p className="mt-2 truncate text-xs text-violet-200">{url ?? domain}</p>
+        url ? (
+          <a href={url} target="_blank" rel="noreferrer" className="mt-2 block truncate text-xs text-violet-200 hover:text-violet-100" onClick={(event) => event.stopPropagation()}>
+            {url}
+          </a>
+        ) : (
+          <p className="mt-2 truncate text-xs text-violet-200">{domain}</p>
+        )
       ) : null}
       {preview ? <p className="mt-2 text-sm leading-6 text-app-muted">{truncate(preview, 180)}</p> : null}
       {isSearch ? (
@@ -623,6 +633,14 @@ function formatCategoryLabel(category: string) {
 }
 
 function formatTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    github_commit: "Commit",
+    github_issue: "Issue",
+    github_pull_request: "PR",
+  };
+  if (labels[type]) {
+    return labels[type];
+  }
   if (type === "chat_message") {
     return "Chat Message";
   }

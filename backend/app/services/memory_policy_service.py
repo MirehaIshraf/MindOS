@@ -128,6 +128,11 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
             return _policy("captured_event", hidden=False)
         return _policy("captured_event", hidden=True)
 
+    if source_value == "github":
+        if event_type in {"github_commit", "github_issue", "github_pull_request"}:
+            return _policy("captured_event", hidden=False)
+        return _policy("captured_event", hidden=True)
+
     if source_value == "local_agent":
         if event_type in {"agent_summary", "agent_action_result"}:
             return _policy("agent", hidden=False)

@@ -48,6 +48,12 @@ import type {
   GitImportPayload,
   GitImportResult,
   GitPreviewResult,
+  GitHubConfigRequest,
+  GitHubReposResponse,
+  GitHubStatusResponse,
+  GitHubSyncRequest,
+  GitHubSyncResponse,
+  GitHubTestResponse,
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
@@ -636,6 +642,11 @@ export async function clearGitEvents(): Promise<ClearGitEventsResponse> {
   return response.data;
 }
 
+export async function clearGitHubEvents(): Promise<ClearGitEventsResponse> {
+  const response = await api.delete<ClearGitEventsResponse>("/connectors/github/events");
+  return response.data;
+}
+
 export async function previewGitImport(payload: Pick<GitImportPayload, "repo_path" | "max_commits">): Promise<GitPreviewResult> {
   const response = await api.post<GitPreviewResult>("/connectors/git/preview", payload);
   return response.data;
@@ -643,5 +654,44 @@ export async function previewGitImport(payload: Pick<GitImportPayload, "repo_pat
 
 export async function importGitRepo(payload: GitImportPayload): Promise<GitImportResult> {
   const response = await api.post<GitImportResult>("/connectors/git/import", payload);
+  return response.data;
+}
+
+export async function getGitHubStatus(): Promise<GitHubStatusResponse> {
+  const response = await api.get<GitHubStatusResponse>("/connectors/github/status");
+  return response.data;
+}
+
+export async function saveGitHubConfig(payload: GitHubConfigRequest): Promise<GitHubStatusResponse> {
+  const response = await api.post<GitHubStatusResponse>("/connectors/github/config", {
+    api_base_url: payload.api_base_url ?? "https://api.github.com",
+    token: payload.token ?? null,
+  });
+  return response.data;
+}
+
+export async function testGitHubConnection(): Promise<GitHubTestResponse> {
+  const response = await api.post<GitHubTestResponse>("/connectors/github/test", {});
+  return response.data;
+}
+
+export async function listGitHubRepos(): Promise<GitHubReposResponse> {
+  const response = await api.get<GitHubReposResponse>("/connectors/github/repos", { timeout: 30000 });
+  return response.data;
+}
+
+export async function saveGitHubSelection(
+  repoFullNames: string[],
+  syncSettings?: { commits?: boolean; issues?: boolean; pull_requests?: boolean; max_items_per_type?: number },
+): Promise<GitHubStatusResponse> {
+  const response = await api.post<GitHubStatusResponse>("/connectors/github/selection", {
+    repo_full_names: repoFullNames,
+    sync_settings: syncSettings ?? {},
+  });
+  return response.data;
+}
+
+export async function syncGitHubRepos(payload: GitHubSyncRequest): Promise<GitHubSyncResponse> {
+  const response = await api.post<GitHubSyncResponse>("/connectors/github/sync", payload, { timeout: 130000 });
   return response.data;
 }

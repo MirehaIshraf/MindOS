@@ -69,6 +69,12 @@ The frontend should render connector status from `GET /connectors` instead of ma
 
 External clients send events through `/ingest/external`. For implemented live connectors such as VSCode, the registry toggle has enforcement: disabled connectors should reject or ignore events cleanly rather than silently collecting data.
 
+## GitHub Connector Flow
+
+GitHub is read-only in the current POC: token config -> user connects the connector -> test connection with `/user` -> repository selection -> optional advanced manual sync -> GitHub REST API fetches recent commits, open issues, and open pull requests -> dedupe by repo plus sha/number -> create or update `github_commit`, `github_issue`, and `github_pull_request` memory events -> chat/search can retrieve GitHub context.
+
+The GitHub connector is primarily a configuration and context source. It stores selected repositories and read permissions; user-facing GitHub tasks/actions should be triggered later from Chat or Tasks, not exposed as a busy connector control panel. The token is stored locally in connector settings for now, hidden from config responses, never written to Memory, never logged intentionally, and never sent to the model. GitHub write actions such as creating issues, commenting, merging, pushing, or PR updates are not implemented.
+
 ## VSCode Extension Runtime Flow
 
 Installed VSCode extension -> polls `/connectors/vscode/runtime` -> sends `/connectors/vscode/heartbeat` -> sends events only if the backend VSCode connector is enabled -> backend ingests through `/ingest/external`.

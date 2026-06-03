@@ -96,8 +96,9 @@ SOURCE_DETAIL_TERMS = [
     "what is this page",
 ]
 SOURCE_ENTITY_TERMS = ["model", "dataset", "patent", "page", "document", "repo", "repository", "paper"]
-TASK_TERMS = ["create a jira", "jira ticket", "draft an email", "send an email", "create pr", "pull request", "commit message", "branch name"]
+TASK_TERMS = ["create a jira", "jira ticket", "draft an email", "send an email", "create pr", "create pull request", "commit message", "branch name"]
 CODE_SOURCE_TERMS = ["vscode", "workspace", "editor", "file", "code", "repo", "repository", "commit", "branch"]
+GITHUB_LOOKUP_TERMS = ["github", "pull request", "pull requests", "pr", "prs", "issue", "issues", "commit", "commits"]
 STOP_WORDS = {
     "about",
     "anything",
@@ -153,6 +154,19 @@ class QueryIntentService:
                 allow_general_model_knowledge=True,
                 answer_style="conversational",
             )
+        if self._is_github_lookup(text):
+            return QueryIntent(
+                intent="memory_lookup",
+                confidence=0.86,
+                search_terms=self.extract_search_terms(query),
+                preferred_sources=["github"],
+                excluded_types=list(PRECISION_EXCLUDED_TYPES),
+                retrieval_profile="precision_lookup",
+                needs_local_memory=True,
+                allow_general_model_knowledge=False,
+                answer_style="memory_lookup",
+            )
+
         task_hint = any(term in text for term in TASK_TERMS)
         if task_hint:
             return QueryIntent(
@@ -306,6 +320,13 @@ class QueryIntentService:
         if any(term in text for term in TASK_TERMS):
             return True
         return bool(re.search(r"\b(did|have|has).{0,30}\b(search|save|saved|visit|visited|open|opened)\b", text))
+
+    def _is_github_lookup(self, text: str) -> bool:
+        if not any(term in text for term in GITHUB_LOOKUP_TERMS):
+            return False
+        if "github" in text:
+            return True
+        return any(term in text for term in ["what", "show", "summarize", "recent", "open", "active", "did i", "have i"])
 
 
 def normalize(value: str) -> str:

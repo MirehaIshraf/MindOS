@@ -980,6 +980,75 @@ export type GitImportResult = {
   message: string;
 };
 
+export type GitHubStatusResponse = {
+  enabled: boolean;
+  configured: boolean;
+  connected: boolean;
+  status: string;
+  username?: string | null;
+  api_base_url: string;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  repo_count: number;
+  event_count: number;
+  selected_repos: string[];
+  selected_repositories?: string[];
+  sync_settings?: {
+    commits?: boolean;
+    issues?: boolean;
+    pull_requests?: boolean;
+    max_items_per_type?: number;
+  };
+};
+
+export type GitHubConfigRequest = {
+  token?: string | null;
+  api_base_url?: string;
+};
+
+export type GitHubTestResponse = {
+  status: string;
+  connected: boolean;
+  username?: string | null;
+  message: string;
+};
+
+export type GitHubRepo = {
+  full_name: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  html_url?: string | null;
+  updated_at?: string | null;
+  description?: string | null;
+};
+
+export type GitHubReposResponse = {
+  repos: GitHubRepo[];
+  total: number;
+};
+
+export type GitHubSyncRequest = {
+  repo_full_names: string[];
+  include_commits?: boolean;
+  include_issues?: boolean;
+  include_pull_requests?: boolean;
+  max_items_per_type?: number;
+};
+
+export type GitHubSyncResponse = {
+  status: string;
+  repos_synced: number;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  events_created: string[];
+  warnings: string[];
+  message: string;
+  details: Record<string, unknown>;
+};
+
 export type Relationship = {
   id: string;
   from_event_id: string;

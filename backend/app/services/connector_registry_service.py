@@ -184,7 +184,7 @@ CONNECTOR_DEFINITIONS = [
         id="github",
         name="GitHub",
         type="github",
-        description="Import repositories, issues, pull requests, and reviews.",
+        description="Sync selected repositories, commits, issues, and pull requests.",
         default_enabled=False,
         configured_by_default=False,
         supports_toggle=True,
@@ -277,7 +277,7 @@ class ConnectorRegistryService:
         definition = self._definition(connector_id)
         enabled = self.is_enabled(definition.id)
         config = self.get_config_dict(definition.id)
-        configured = definition.configured_by_default or bool(config)
+        configured = bool(config.get("token")) if definition.id == "github" else definition.configured_by_default or bool(config)
         events = self._events_for_source(definition.event_source)
         last_event_at = max((event.timestamp for event in events), default=None)
         heartbeat = self._get_heartbeat(definition.id) if definition.supports_live_events else {}
@@ -285,6 +285,8 @@ class ConnectorRegistryService:
         last_seen_at = _latest_datetime([heartbeat_seen_at, last_event_at]) if definition.supports_live_events else None
         connected = self._connected(definition, enabled, configured, last_seen_at)
         status = self._status(definition, enabled, configured, connected, last_seen_at)
+        if definition.id == "github" and enabled and configured and self._get_heartbeat("github").get("last_error"):
+            status = "error"
         saved_sources = [
             source for source in self._source_repository.list_sources() if source.connector_type == definition.id
         ] if definition.supports_manual_import else []
@@ -300,7 +302,23 @@ class ConnectorRegistryService:
             summary["last_import_at"] = latest_import[0].last_import_at.isoformat()
             summary["last_import_status"] = latest_import[0].last_import_status
         if config:
-            summary["configured_keys"] = sorted(config.keys())
+            summary["configured_keys"] = sorted(key for key in config.keys() if key != "token")
+        if definition.id == "github":
+            heartbeat = self._get_heartbeat("github")
+            selected_repos = config.get("selected_repos") or []
+            summary.update(
+                {
+                    "has_token": bool(config.get("token")),
+                    "username": heartbeat.get("username"),
+                    "repo_count": len(selected_repos),
+                    "repos_available_count": heartbeat.get("repos_available_count"),
+                    "selected_repos": selected_repos,
+                    "selected_repositories": selected_repos,
+                    "selected_repos_count": len(selected_repos),
+                    "last_sync_at": heartbeat.get("last_sync_at"),
+                    "last_error": heartbeat.get("last_error"),
+                }
+            )
         if heartbeat:
             summary["client_id"] = heartbeat.get("client_id")
             summary["extension_version"] = heartbeat.get("extension_version")
@@ -342,10 +360,12 @@ class ConnectorRegistryService:
     def get_config(self, connector_id: str) -> ConnectorConfigResponse:
         definition = self._definition(connector_id)
         config = self.get_config_dict(definition.id)
+        if definition.id == "github":
+            config = self._safe_github_config(config)
         return ConnectorConfigResponse(
             id=definition.id,
             config=config,
-            configured=definition.configured_by_default or bool(config),
+            configured=bool(self.get_config_dict("github").get("token")) if definition.id == "github" else definition.configured_by_default or bool(config),
         )
 
     def save_config(self, connector_id: str, config: dict[str, Any]) -> ConnectorConfigResponse:
@@ -445,6 +465,15 @@ class ConnectorRegistryService:
         value = self._get_setting(f"connector.{connector_id}.heartbeat", {})
         return value if isinstance(value, dict) else {}
 
+    def _safe_github_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "api_base_url": config.get("api_base_url", "https://api.github.com"),
+            "has_token": bool(config.get("token")),
+            "selected_repos": config.get("selected_repos") or [],
+            "selected_repositories": config.get("selected_repos") or [],
+            "sync_settings": config.get("sync_settings") or {},
+        }
+
     def _events_for_source(self, source: str | None) -> list[Any]:
         if not source:
             return []
@@ -463,6 +492,8 @@ class ConnectorRegistryService:
     ) -> bool:
         if not enabled or not configured:
             return False
+        if definition.id == "github":
+            return bool(self._get_heartbeat("github").get("username"))
         if definition.supports_manual_import:
             return True
         if definition.supports_live_events and last_seen_at:
@@ -483,6 +514,8 @@ class ConnectorRegistryService:
             return "needs_configuration"
         if connected:
             return "connected"
+        if definition.id == "github":
+            return "configured"
         if definition.id in {"vscode", "browser"}:
             return "disconnected"
         if definition.supports_live_events:
