@@ -127,6 +127,7 @@ Before adding a new feature:
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
 - GitHub connector is read-only until explicitly expanded. Do not add GitHub write actions such as creating issues, commenting, merging, pushing, or updating pull requests unless requested.
+- Email connector is read-only until explicitly expanded. Do not add email send, reply, forward, delete, archive, mark-read/unread, or draft actions unless explicitly requested. Do not store full email bodies or attachment contents. Do not log or expose credentials.
 - External collectors should use the external ingestion API.
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
 - VSCode connector should behave like an installed extension, not only a debug Extension Development Host.

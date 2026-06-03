@@ -1049,6 +1049,77 @@ export type GitHubSyncResponse = {
   details: Record<string, unknown>;
 };
 
+export type EmailStatusResponse = {
+  enabled: boolean;
+  configured: boolean;
+  connected: boolean;
+  status: string;
+  provider: string;
+  account_email?: string | null;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  selected_scope: string;
+  event_count: number;
+  has_credentials: boolean;
+};
+
+export type EmailConfigRequest = {
+  provider?: string;
+  email_address?: string | null;
+  imap_host?: string;
+  imap_port?: number;
+  imap_ssl?: boolean;
+  username?: string | null;
+  password?: string | null;
+  sync_scope?: string;
+  folder_name?: string;
+  max_items?: number;
+};
+
+export type EmailTestResponse = {
+  status: string;
+  connected: boolean;
+  account_email?: string | null;
+  message: string;
+};
+
+export type EmailFolder = {
+  name: string;
+  display_name: string;
+  message_count: number;
+};
+
+export type EmailFoldersResponse = {
+  folders: EmailFolder[];
+  total: number;
+};
+
+export type EmailSyncRequest = {
+  scope?: string;
+  folder_name?: string;
+  max_items?: number;
+  include_body_excerpt?: boolean;
+};
+
+export type EmailSyncResponse = {
+  status: string;
+  emails_seen: number;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  events_created: string[];
+  warnings: string[];
+  message: string;
+};
+
+export type ClearEmailEventsResponse = {
+  status: "cleared";
+  deleted_events: number;
+  deleted_relationships: number;
+  deleted_vectors?: number | null;
+};
+
 export type Relationship = {
   id: string;
   from_event_id: string;

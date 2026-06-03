@@ -133,6 +133,17 @@ def get_memory_policy_for_event(source: str, type: str, metadata: dict | None = 
             return _policy("captured_event", hidden=False)
         return _policy("captured_event", hidden=True)
 
+    if source_value == "email":
+        if event_type == "email_message":
+            return {
+                "memory_category": "captured_event",
+                "hidden_from_default": False,
+                "is_indexable": True,
+                "is_relationship_eligible": True,
+                "is_context_eligible": True,
+            }
+        return _policy("captured_event", hidden=True)
+
     if source_value == "local_agent":
         if event_type in {"agent_summary", "agent_action_result"}:
             return _policy("agent", hidden=False)

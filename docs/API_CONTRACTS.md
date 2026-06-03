@@ -105,6 +105,17 @@ Preferred browser event types:
   `{ "repo_full_names": ["owner/repo"], "include_commits": true, "include_issues": true, "include_pull_requests": true, "max_items_per_type": 30 }`.
   Sync is limited to 5 repositories per request and up to 100 items per type. It requires GitHub to be connected, creates or updates `github_commit`, `github_issue`, and `github_pull_request` memory events with dedupe keys, and does not fetch file contents or perform GitHub writes.
 - `DELETE /connectors/github/events`: clears GitHub memory events and related relationships/vectors only. It does not clear the token.
+- `GET /connectors/email/status`: returns read-only Email connector status including configured/connected flags, account email, last sync/error, selected scope, and event count. It never returns the app password.
+- `POST /connectors/email/config`: save or clear local IMAP credential configuration. Request:
+  `{ "provider": "imap", "email_address": "you@gmail.com", "imap_host": "imap.gmail.com", "imap_port": 993, "imap_ssl": true, "username": "you@gmail.com", "password": "app-password", "sync_scope": "recent", "folder_name": "INBOX", "max_items": 25 }`.
+  Passing an empty/null password clears credentials. The password is never returned.
+- `POST /connectors/email/test`: tests the saved IMAP credentials by connecting and authenticating. Returns connected status and account email. Invalid credentials return a clean JSON `400` error.
+- `GET /connectors/email/folders`: lists available IMAP folders for the saved credentials. Returns `400` when credentials are not configured.
+- `POST /connectors/email/sync`: sync emails read-only. Request:
+  `{ "scope": "recent", "folder_name": "INBOX", "max_items": 25, "include_body_excerpt": true }`.
+  Scope values: `recent` (all, most recent N), `unread` (UNSEEN), `starred` (FLAGGED), `folder` (ALL in named folder).
+  Fetches subject, sender, date, message-id, recipient list, and body excerpt up to 1000 chars. Attachment contents are not fetched; only filename, MIME type, and size metadata are stored. Deduplicates by account_email plus message_id. Does not send, reply, delete, archive, or modify any email.
+- `DELETE /connectors/email/events`: clears Email memory events and related relationships/vectors only. It does not clear credentials.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
 - `GET /connectors/{connector_id}/config`: read placeholder/stored connector config.

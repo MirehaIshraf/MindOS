@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-Last updated: 2026-06-03
+Last updated: 2026-06-04
 
 ## Backend Status
 
@@ -32,6 +32,7 @@ Last updated: 2026-06-03
 | VSCode extension | Working | MVP exists in `extensions/vscode`; installable local VSIX flow with backend-controlled runtime polling. |
 | Browser extension | Working/Partial | MVP exists in `extensions/browser`; manual page/selection save plus privacy-first smart capture with hard DOM access diagnostics, Hugging Face cleanup in generic visible-text extraction, backend content-quality validation, normalized URL upsert, and manual deterministic summaries. |
 | GitHub connector | POC | Read-only connector with local token config, connect/disconnect state, connection test, repository selection, and optional advanced sync for recent commits, open issues, and open pull requests. No write actions are implemented. |
+| Email connector | POC | Read-only IMAP connector with local credential config (app password), connection test, sync scope selection (recent/unread/starred/folder), and manual sync of email metadata and excerpts into memory. No sending, replying, deleting, archiving, or drafting. Credentials are stored locally, never returned in responses, never logged, and never sent to the LLM. |
 | Model registry | Working/Partial | Local Ollama discovery, cloud provider config, FakeLLM fallback. |
 | Embedding registry | Working/Partial | Curated and discovered local embedding models; changing model requires reindex. |
 | Dev tools | Working/Partial | Useful but should not be treated as product UI. |
@@ -56,6 +57,7 @@ Last updated: 2026-06-03
 - VSCode extension MVP: working; packaged local install flow, polls MindOS runtime, sends workspace/file-save events after the MindOS VSCode connector toggle is enabled.
 - Browser extension MVP: working; manual popup save flow for pages, selected text, and notes after the MindOS Browser connector toggle is enabled. Smart capture can record hidden search evidence and visible important work/research pages with readable context when enabled. Captured pages are upserted by normalized URL, repeat visits update visit metadata, and Hugging Face model/dataset/docs pages are classified as important.
 - GitHub connector POC: simplified read-only token configuration, connect/disconnect, connection testing, repository selection, and optional advanced manual sync of recent commits, open issues, and open pull requests into GitHub memory events. Repositories and sync are disabled while the connector is Off. Tokens are stored locally in connector settings, are not displayed after saving, and are not stored in Memory or sent to the LLM.
+- Email connector POC: IMAP read-only connector with local credential storage (app password), connection test, configurable sync scope (recent/unread/starred/folder), and manual sync of email subjects, senders, dates, and body excerpts into `email_message` memory events. Gmail IMAP with app passwords and generic IMAP servers are supported. Credentials are stored in connector settings only, are never returned in responses, never logged, and never sent to the LLM. No email write actions (send, reply, delete, archive, draft) are implemented.
 - Saved connector sources: working/partial for file system, logs, and Git.
 - Import history: working/partial for saved source imports.
 - External ingestion API: working/partial; collector clients are derived from event metadata.
@@ -65,7 +67,7 @@ Last updated: 2026-06-03
 - Activity tracker
 - Local agent collector
 
-Jira and Email appear as disabled/unconfigured connector placeholders. They do not perform real integration work yet. GitHub is now a read-only POC connector.
+Jira appears as a disabled/unconfigured connector placeholder and does not perform real integration work yet. GitHub and Email are now read-only POC connectors.
 
 These should send data to `/ingest/external` or `/ingest/external/bulk`.
 

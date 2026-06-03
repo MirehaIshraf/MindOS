@@ -75,6 +75,12 @@ GitHub is read-only in the current POC: token config -> user connects the connec
 
 The GitHub connector is primarily a configuration and context source. It stores selected repositories and read permissions; user-facing GitHub tasks/actions should be triggered later from Chat or Tasks, not exposed as a busy connector control panel. The token is stored locally in connector settings for now, hidden from config responses, never written to Memory, never logged intentionally, and never sent to the model. GitHub write actions such as creating issues, commenting, merging, pushing, or PR updates are not implemented.
 
+## Email Connector Flow
+
+Email is read-only in the current POC: IMAP credentials config (app password) -> user saves credentials -> test connection via IMAP login -> user selects sync scope (recent/unread/starred/folder) -> user clicks Sync now -> IMAP connection fetches email headers and body excerpts up to configured max items -> dedupe by account_email plus message_id (or subject+sender+date hash when no stable message_id) -> create or update `email_message` memory events with subject, sender, date, and excerpt -> chat/search can retrieve email context.
+
+Email credentials (app password) are stored in connector settings, stripped from all config responses, never written to Memory events, never logged, and never sent to the model. Only subject, sender, date, and excerpt are stored. Attachment contents are never fetched; only attachment filenames, MIME types, and sizes are recorded as metadata. Email write actions (send, reply, delete, archive, forward, mark as read/unread, create drafts) are not implemented.
+
 ## VSCode Extension Runtime Flow
 
 Installed VSCode extension -> polls `/connectors/vscode/runtime` -> sends `/connectors/vscode/heartbeat` -> sends events only if the backend VSCode connector is enabled -> backend ingests through `/ingest/external`.

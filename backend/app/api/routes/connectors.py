@@ -34,6 +34,14 @@ from app.schemas.connectors import (
     VSCodeHeartbeatResponse,
 )
 from app.schemas.ingest import CollectorClientsResponse
+from app.schemas.email import (
+    EmailConfigRequest,
+    EmailFoldersResponse,
+    EmailStatusResponse,
+    EmailSyncRequest,
+    EmailSyncResponse,
+    EmailTestResponse,
+)
 from app.schemas.github import (
     GitHubConfigRequest,
     GitHubReposResponse,
@@ -46,6 +54,7 @@ from app.schemas.github import (
 from app.services.connector_source_service import connector_source_service
 from app.services.connector_registry_service import connector_registry_service
 from app.services.connector_service import ConnectorService
+from app.services.email_service import EmailConnectorError, email_service
 from app.services.external_ingest_service import external_ingest_service
 from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
@@ -139,6 +148,45 @@ def sync_github(request: GitHubSyncRequest) -> GitHubSyncResponse:
 @router.delete("/github/events")
 def clear_github_events() -> dict[str, object]:
     return _clear_events_for_source("github")
+
+
+@router.get("/email/status", response_model=EmailStatusResponse)
+def get_email_status() -> EmailStatusResponse:
+    return email_service.status()
+
+
+@router.post("/email/config", response_model=EmailStatusResponse)
+def save_email_config(request: EmailConfigRequest) -> EmailStatusResponse:
+    return email_service.save_config(request)
+
+
+@router.post("/email/test", response_model=EmailTestResponse)
+def test_email_connection() -> EmailTestResponse:
+    try:
+        return email_service.test_connection()
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/email/folders", response_model=EmailFoldersResponse)
+def list_email_folders() -> EmailFoldersResponse:
+    try:
+        return email_service.list_folders()
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/email/sync", response_model=EmailSyncResponse)
+def sync_email(request: EmailSyncRequest) -> EmailSyncResponse:
+    try:
+        return email_service.sync(request)
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.delete("/email/events")
+def clear_email_events() -> dict[str, object]:
+    return _clear_events_for_source("email")
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

@@ -17,6 +17,7 @@ import type {
   ChatSessionsResponse,
   ContextPackage,
   ClearAllDevDataResponse,
+  ClearEmailEventsResponse,
   ClearFileSystemEventsResponse,
   ClearLogEventsResponse,
   ClearGitEventsResponse,
@@ -33,6 +34,12 @@ import type {
   DocumentSummaryPrepareResponse,
   DocumentSummaryCompleteRequest,
   DocumentSummaryCompleteResponse,
+  EmailConfigRequest,
+  EmailFoldersResponse,
+  EmailStatusResponse,
+  EmailSyncRequest,
+  EmailSyncResponse,
+  EmailTestResponse,
   EmbeddingReindexResponse,
   EmbeddingSettingsResponse,
   EmbeddingStatusResponse,
@@ -693,5 +700,35 @@ export async function saveGitHubSelection(
 
 export async function syncGitHubRepos(payload: GitHubSyncRequest): Promise<GitHubSyncResponse> {
   const response = await api.post<GitHubSyncResponse>("/connectors/github/sync", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function getEmailStatus(): Promise<EmailStatusResponse> {
+  const response = await api.get<EmailStatusResponse>("/connectors/email/status");
+  return response.data;
+}
+
+export async function saveEmailConfig(payload: EmailConfigRequest): Promise<EmailStatusResponse> {
+  const response = await api.post<EmailStatusResponse>("/connectors/email/config", payload);
+  return response.data;
+}
+
+export async function testEmailConnection(): Promise<EmailTestResponse> {
+  const response = await api.post<EmailTestResponse>("/connectors/email/test", {}, { timeout: 30000 });
+  return response.data;
+}
+
+export async function listEmailFolders(): Promise<EmailFoldersResponse> {
+  const response = await api.get<EmailFoldersResponse>("/connectors/email/folders", { timeout: 30000 });
+  return response.data;
+}
+
+export async function syncEmailMessages(payload: EmailSyncRequest): Promise<EmailSyncResponse> {
+  const response = await api.post<EmailSyncResponse>("/connectors/email/sync", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function clearEmailEvents(): Promise<ClearEmailEventsResponse> {
+  const response = await api.delete<ClearEmailEventsResponse>("/connectors/email/events");
   return response.data;
 }

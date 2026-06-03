@@ -19,6 +19,7 @@ import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
 import {
   clearConnectorSourceEvents,
+  clearEmailEvents,
   clearFileSystemEvents,
   clearGitEvents,
   clearGitHubEvents,
@@ -29,8 +30,10 @@ import {
   getConnectors,
   getConnectorConfig,
   getConnectorSources,
+  getEmailStatus,
   getGitHubStatus,
   getImportRuns,
+  listEmailFolders,
   listGitHubRepos,
   importFiles,
   importGitRepo,
@@ -39,9 +42,12 @@ import {
   previewGitImport,
   previewLogImport,
   runConnectorSourceImport,
+  saveEmailConfig,
   saveGitHubConfig,
   saveGitHubSelection,
+  syncEmailMessages,
   syncGitHubRepos,
+  testEmailConnection,
   testGitHubConnection,
   toggleConnector,
   updateConnectorConfig,
@@ -51,6 +57,9 @@ import type {
   Connector,
   ConnectorSource,
   ConnectorSourceUpdateRequest,
+  EmailFolder,
+  EmailStatusResponse,
+  EmailSyncResponse,
   FileImportPayload,
   FileImportResult,
   FilePreviewResult,
@@ -491,6 +500,8 @@ function ConnectorCard({
   const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id));
   const githubRepoCount = Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0);
   const githubLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
+  const emailAccount = typeof connector.config_summary?.account_email === "string" ? connector.config_summary.account_email : null;
+  const emailLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
   return (
     <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
@@ -521,6 +532,17 @@ function ConnectorCard({
           <div>
             <span className="block uppercase">Last sync</span>
             <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(githubLastSync)}</span>
+          </div>
+        </div>
+      ) : connector.id === "email" ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+          <div>
+            <span className="block uppercase">Account</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{emailAccount ?? "--"}</span>
+          </div>
+          <div>
+            <span className="block uppercase">Last sync</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(emailLastSync)}</span>
           </div>
         </div>
       ) : (
@@ -589,6 +611,11 @@ function ConfigurePanel(props: {
             <Badge>repos: {Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0)}</Badge>
             <Badge>last sync: {formatDate(typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at)}</Badge>
           </>
+        ) : connector.id === "email" ? (
+          <>
+            <Badge>events: {connector.event_count}</Badge>
+            <Badge>last sync: {formatDate(typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at)}</Badge>
+          </>
         ) : (
           <>
             <Badge>events: {connector.event_count}</Badge>
@@ -603,6 +630,8 @@ function ConfigurePanel(props: {
         <BrowserPanel connector={connector} onToggle={props.onToggleConnector} />
       ) : connector.id === "github" ? (
         <GitHubPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
+      ) : connector.id === "email" ? (
+        <EmailPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
       ) : connector.id === "file_system" ? (
         <FileSystemPanel {...props} />
       ) : connector.id === "logs" ? (
@@ -1199,6 +1228,329 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
   );
 }
 
+
+function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; onToggle: (enabled: boolean) => void; onRefresh: () => void }) {
+  const [status, setStatus] = useState<EmailStatusResponse | null>(null);
+  const [emailAddress, setEmailAddress] = useState("");
+  const [imapHost, setImapHost] = useState("imap.gmail.com");
+  const [imapPort, setImapPort] = useState(993);
+  const [imapSsl, setImapSsl] = useState(true);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [scope, setScope] = useState<"recent" | "unread" | "starred" | "folder">("recent");
+  const [folderName, setFolderName] = useState("INBOX");
+  const [maxItems, setMaxItems] = useState(25);
+  const [folders, setFolders] = useState<EmailFolder[]>([]);
+  const [syncResult, setSyncResult] = useState<EmailSyncResponse | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStatus() {
+      setLoading("emailStatus");
+      try {
+        const response = await getEmailStatus();
+        if (!cancelled) {
+          setStatus(response);
+          setScope((response.selected_scope as typeof scope) ?? "recent");
+        }
+      } catch (error) {
+        if (!cancelled) setMessage(getApiErrorMessage(error));
+      } finally {
+        if (!cancelled) setLoading(null);
+      }
+    }
+    void loadStatus();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveCredentials() {
+    setLoading("emailSave");
+    setMessage(null);
+    try {
+      const response = await saveEmailConfig({
+        provider: "imap",
+        email_address: emailAddress || undefined,
+        imap_host: imapHost,
+        imap_port: imapPort,
+        imap_ssl: imapSsl,
+        username: username || undefined,
+        password: password || undefined,
+        sync_scope: scope,
+        folder_name: folderName,
+        max_items: maxItems,
+      });
+      setStatus(response);
+      setPassword("");
+      setMessage(response.configured ? "Email credentials saved." : "Email credentials cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function clearCredentials() {
+    if (!window.confirm("Clear saved email credentials? Synced memory events will remain.")) return;
+    setPassword("");
+    setLoading("emailClear");
+    setMessage(null);
+    try {
+      const response = await saveEmailConfig({ password: "" });
+      setStatus(response);
+      setMessage("Email credentials cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function testConnection() {
+    setLoading("emailTest");
+    setMessage(null);
+    try {
+      if (password.trim()) {
+        await saveEmailConfig({
+          provider: "imap",
+          email_address: emailAddress || undefined,
+          imap_host: imapHost,
+          imap_port: imapPort,
+          imap_ssl: imapSsl,
+          username: username || undefined,
+          password,
+          sync_scope: scope,
+          folder_name: folderName,
+          max_items: maxItems,
+        });
+        setPassword("");
+      }
+      const response = await testEmailConnection();
+      setMessage(response.message);
+      setStatus(await getEmailStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function loadFolders() {
+    setLoading("emailFolders");
+    setMessage(null);
+    try {
+      const response = await listEmailFolders();
+      setFolders(response.folders);
+      setMessage(`Loaded ${response.total} folders.`);
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function syncNow() {
+    setLoading("emailSync");
+    setMessage(null);
+    setSyncResult(null);
+    try {
+      const response = await syncEmailMessages({
+        scope,
+        folder_name: folderName,
+        max_items: maxItems,
+        include_body_excerpt: true,
+      });
+      setSyncResult(response);
+      setMessage(response.message);
+      setStatus(await getEmailStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function clearEvents() {
+    if (!window.confirm("Clear email memory events? Saved credentials will remain.")) return;
+    setLoading("emailClearEvents");
+    setMessage(null);
+    try {
+      const response = await clearEmailEvents();
+      setMessage(response.deleted_events === 0 ? "No email events to clear." : `Cleared ${response.deleted_events} email events.`);
+      setStatus(await getEmailStatus());
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  function toggleConnection() {
+    const configured = status?.configured ?? connector.configured;
+    if (!configured) {
+      setMessage("Save credentials before connecting.");
+      return;
+    }
+    const nextEnabled = !(status?.enabled ?? connector.enabled);
+    onToggle(nextEnabled);
+    setStatus((current) => current ? { ...current, enabled: nextEnabled } : current);
+  }
+
+  const configured = status?.configured ?? connector.configured;
+  const currentEnabled = status?.enabled ?? connector.enabled;
+  const connected = Boolean(currentEnabled && configured && status?.connected);
+
+  return (
+    <div className="mt-5 space-y-4">
+      <div>
+        <p className="text-sm font-medium text-app-text">Email</p>
+        <p className="mt-1 text-sm text-app-muted">Connect your inbox so MindOS can find and summarize relevant emails.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={connected ? "connected" : currentEnabled && status?.last_error ? "error" : configured ? "configured" : "off"} />
+        <Badge>events: {status?.event_count ?? connector.event_count}</Badge>
+        <Badge>last sync: {formatDate(status?.last_sync_at ?? connector.last_event_at)}</Badge>
+      </div>
+      {connected && status?.account_email ? <p className="text-sm text-app-muted">Connected as {status.account_email}</p> : null}
+      {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
+
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-app-text">Connection</p>
+            <p className="mt-1 text-xs text-app-muted">
+              {configured ? "Credentials saved. Enter a new app password to replace." : "Enter IMAP credentials to connect."}
+            </p>
+          </div>
+          <Toggle checked={currentEnabled} disabled={!configured} onChange={toggleConnection} />
+        </div>
+        <div className="mt-4 space-y-3">
+          <LabeledInput label="Email address" value={emailAddress} placeholder="you@gmail.com" onChange={setEmailAddress} />
+          <LabeledInput label="Username" value={username} placeholder="you@gmail.com" onChange={setUsername} />
+          <label className="block text-xs font-medium uppercase text-app-muted">
+            App password
+            <Input
+              className="mt-2"
+              type="password"
+              value={password}
+              placeholder={configured ? "Saved. Enter a new app password to replace." : "Gmail app password"}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <p className="text-xs leading-5 text-app-muted">
+            Use a Gmail app password, not your regular password. Generate one in Google Account → Security → 2-Step Verification → App passwords.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => void saveCredentials()} loading={loading === "emailSave"} disabled={!password.trim() && configured}>
+              Save credentials
+            </Button>
+            <Button variant="secondary" onClick={() => void testConnection()} loading={loading === "emailTest"} disabled={!configured && !password.trim()}>
+              Test connection
+            </Button>
+            <Button variant={currentEnabled ? "secondary" : "primary"} onClick={toggleConnection} disabled={!configured}>
+              {currentEnabled ? "Disconnect" : "Connect"}
+            </Button>
+            <Button variant="danger" onClick={() => void clearCredentials()} loading={loading === "emailClear"} disabled={!configured}>
+              Clear credentials
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {connected ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+          <p className="text-sm font-medium text-app-text">Sync scope</p>
+          <p className="mt-1 text-xs text-app-muted">Choose what to sync into MindOS memory.</p>
+          <div className="mt-3 space-y-3">
+            <label className="block text-xs font-medium uppercase text-app-muted">
+              Scope
+              <select
+                className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+                value={scope}
+                onChange={(event) => setScope(event.target.value as typeof scope)}
+              >
+                <option value="recent">Recent emails</option>
+                <option value="unread">Unread emails</option>
+                <option value="starred">Starred emails</option>
+                <option value="folder">Specific folder</option>
+              </select>
+            </label>
+            {scope === "folder" ? (
+              <div className="space-y-2">
+                <LabeledInput label="Folder name" value={folderName} placeholder="INBOX" onChange={setFolderName} />
+                <Button variant="secondary" onClick={() => void loadFolders()} loading={loading === "emailFolders"}>
+                  Load folders
+                </Button>
+                {folders.length > 0 ? (
+                  <div className="max-h-40 space-y-1 overflow-y-auto">
+                    {folders.map((folder) => (
+                      <button
+                        key={folder.name}
+                        type="button"
+                        onClick={() => setFolderName(folder.name)}
+                        className={`w-full rounded-md border px-3 py-2 text-left text-sm ${folderName === folder.name ? "border-violet-500/60 bg-violet-950/30 text-app-text" : "border-app-border bg-zinc-900/60 text-app-muted hover:text-app-text"}`}
+                      >
+                        {folder.display_name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <LabeledInput
+              label="Max emails"
+              type="number"
+              value={String(maxItems)}
+              onChange={(value) => setMaxItems(Math.max(1, Math.min(100, Number(value) || 25)))}
+            />
+            <Button variant="primary" onClick={() => void syncNow()} loading={loading === "emailSync"}>
+              Sync now
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+          Connect email to sync messages into MindOS memory.
+        </div>
+      )}
+
+      <details className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced settings</summary>
+        <div className="mt-4 space-y-3">
+          <LabeledInput label="IMAP host" value={imapHost} placeholder="imap.gmail.com" onChange={setImapHost} />
+          <div className="grid grid-cols-2 gap-3">
+            <LabeledInput label="Port" type="number" value={String(imapPort)} onChange={(value) => setImapPort(Number(value) || 993)} />
+            <div className="flex items-end pb-1">
+              <Checkbox label="SSL" checked={imapSsl} onChange={setImapSsl} />
+            </div>
+          </div>
+          <Button variant="danger" onClick={() => void clearEvents()} loading={loading === "emailClearEvents"}>
+            Clear email events
+          </Button>
+        </div>
+      </details>
+
+      {syncResult ? (
+        <CompactBlock title="Sync result">
+          <Badge variant={syncResult.status === "success" ? "success" : "warning"}>{syncResult.status}</Badge>
+          <Badge>seen: {syncResult.emails_seen}</Badge>
+          <Badge>imported: {syncResult.imported_count}</Badge>
+          <Badge>updated: {syncResult.updated_count}</Badge>
+          <Badge variant={syncResult.failed_count ? "danger" : "default"}>failed: {syncResult.failed_count}</Badge>
+        </CompactBlock>
+      ) : null}
+      {syncResult?.warnings.length ? <StatusMessage message={syncResult.warnings.join(" ")} variant="warning" /> : null}
+      {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+    </div>
+  );
+}
 
 function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
   return (
