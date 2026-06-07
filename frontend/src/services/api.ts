@@ -97,6 +97,12 @@ import type {
   TaskPlanningResponse,
   TaskResponse,
   TestLLMResponse,
+  PlaybookListResponse,
+  PlaybookResponse,
+  PlaybookCreateRequest,
+  RecordStartResponse,
+  RecordStopResponse,
+  PlaybookRunResponse,
 } from "../types";
 
 export const api = axios.create({
@@ -560,9 +566,6 @@ export async function getRecentFileTasks(limit = 20): Promise<FileTaskRecentResp
   return response.data;
 }
 
-export async function getPlaybooks(): Promise<never> {
-  throw new Error("Not implemented yet");
-}
 
 export async function getConnectors(): Promise<ConnectorListResponse> {
   const response = await api.get<ConnectorListResponse>("/connectors");
@@ -810,5 +813,60 @@ export async function createEmailDraft(payload: EmailDraftRequest): Promise<Emai
 
 export async function clearEmailEvents(): Promise<ClearEmailEventsResponse> {
   const response = await api.delete<ClearEmailEventsResponse>("/connectors/email/events");
+  return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Playbooks
+// ---------------------------------------------------------------------------
+
+export async function getPlaybooks(): Promise<PlaybookListResponse> {
+  const response = await api.get<PlaybookListResponse>("/playbooks");
+  return response.data;
+}
+
+export async function getPlaybook(id: string): Promise<PlaybookResponse> {
+  const response = await api.get<PlaybookResponse>(`/playbooks/${id}`);
+  return response.data;
+}
+
+export async function savePlaybook(payload: PlaybookCreateRequest): Promise<PlaybookResponse> {
+  const response = await api.post<PlaybookResponse>("/playbooks", payload);
+  return response.data;
+}
+
+export async function deletePlaybook(id: string): Promise<{ deleted: string }> {
+  const response = await api.delete<{ deleted: string }>(`/playbooks/${id}`);
+  return response.data;
+}
+
+export async function getRecordingStatus(): Promise<{ recording: boolean }> {
+  const response = await api.get<{ recording: boolean }>("/playbooks/status");
+  return response.data;
+}
+
+export async function checkPlaybookDeps(): Promise<{
+  pynput_available: boolean;
+  pywinauto_available: boolean;
+  pillow_available: boolean;
+  recording_active: boolean;
+}> {
+  const response = await api.get("/playbooks/check");
+  return response.data;
+}
+
+export async function startRecording(): Promise<RecordStartResponse> {
+  const response = await api.post<RecordStartResponse>("/playbooks/record/start", {}, { timeout: 20000 });
+  return response.data;
+}
+
+export async function stopRecording(): Promise<RecordStopResponse> {
+  const response = await api.post<RecordStopResponse>("/playbooks/record/stop", {}, { timeout: 60000 });
+  return response.data;
+}
+
+export async function runPlaybook(id: string, confirmStep?: number): Promise<PlaybookRunResponse> {
+  const params = confirmStep !== undefined ? { confirm_step: confirmStep } : {};
+  const response = await api.post<PlaybookRunResponse>(`/playbooks/${id}/run`, {}, { params, timeout: 120000 });
   return response.data;
 }

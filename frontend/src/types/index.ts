@@ -1087,6 +1087,80 @@ export type GmailDraftRequest = {
   body: string;
 };
 
+// ---------------------------------------------------------------------------
+// Playbooks
+// ---------------------------------------------------------------------------
+
+export type SkillStep = {
+  step_index: number;
+  action: string;        // click | type | hotkey | navigate_url | open_app | key | scroll | focus | close_window | switch_window
+  description: string;   // LLM-generated human-readable description
+  app_name: string;
+  window_title: string;
+  element_type: string;
+  element_name: string;
+  text: string;          // text to type
+  url: string;           // URL for navigate_url steps
+  keys: string[];        // key combo for hotkey steps
+  value: string;         // legacy key name
+  coordinates: { x?: number; y?: number };
+  screenshot_b64: string;
+  is_destructive: boolean;
+  requires_confirmation: boolean;
+};
+
+export type Playbook = {
+  id: string;
+  name: string;
+  description: string;
+  steps: SkillStep[];
+  run_count: number;
+  last_run_at: string | null;
+  created_at: string;
+};
+
+export type PlaybookListResponse = {
+  playbooks: Playbook[];
+};
+
+export type PlaybookResponse = {
+  playbook: Playbook;
+};
+
+export type PlaybookCreateRequest = {
+  name: string;
+  description: string;
+  steps: SkillStep[];
+};
+
+export type RecordStartResponse = {
+  session_id: string;
+  status: string;
+};
+
+export type RecordStopResponse = {
+  session_id: string;
+  steps: SkillStep[];
+  step_count: number;
+};
+
+export type PlaybookRunStepLog = {
+  step_index: number;
+  action: string;
+  description: string;
+  status: "ok" | "failed" | "paused" | "skipped";
+  message: string;
+};
+
+export type PlaybookRunResponse = {
+  playbook_id: string;
+  status: "completed" | "paused" | "failed";
+  steps_total: number;
+  steps_completed: number;
+  steps_failed: number;
+  log: PlaybookRunStepLog[];
+};
+
 export type GmailDraftResponse = {
   status: string;
   draft_id: string;
