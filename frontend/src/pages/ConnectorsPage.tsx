@@ -26,14 +26,20 @@ import {
   clearLogEvents,
   createConnectorSource,
   deleteConnectorSource,
+  connectEmail,
+  connectGmail,
+  createGmailDraft,
+  createGmailTestDraft,
+  disconnectEmail,
+  disconnectGmail,
   getApiErrorMessage,
   getConnectors,
   getConnectorConfig,
   getConnectorSources,
   getEmailStatus,
+  getGmailStatus,
   getGitHubStatus,
   getImportRuns,
-  listEmailFolders,
   listGitHubRepos,
   importFiles,
   importGitRepo,
@@ -45,19 +51,22 @@ import {
   saveEmailConfig,
   saveGitHubConfig,
   saveGitHubSelection,
+  removeGmailCredentials,
+  sendGmailDraft,
   syncEmailMessages,
   syncGitHubRepos,
   testEmailConnection,
+  testGmailConnection,
   testGitHubConnection,
   toggleConnector,
   updateConnectorConfig,
   updateConnectorSource,
+  uploadGmailCredentials,
 } from "../services/api";
 import type {
   Connector,
   ConnectorSource,
   ConnectorSourceUpdateRequest,
-  EmailFolder,
   EmailStatusResponse,
   EmailSyncResponse,
   FileImportPayload,
@@ -69,13 +78,15 @@ import type {
   GitHubRepo,
   GitHubStatusResponse,
   GitHubSyncResponse,
+  GmailDraftResponse,
+  GmailStatusResponse,
   ImportRun,
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
 } from "../types";
 
-const connectorOrder = ["vscode", "browser", "github", "jira", "email", "file_system", "logs", "git"];
+const connectorOrder = ["vscode", "browser", "github", "gmail", "jira", "email", "file_system", "logs", "git"];
 
 const emptyFileForm = { folderPath: "", recursive: true, maxFiles: 100, maxFileSizeKb: 256, allowedExtensions: "" };
 const emptyLogForm = { filePath: "", maxLines: 1000, onlyErrors: false, groupSimilar: true };
@@ -497,10 +508,13 @@ function ConnectorCard({
   onConfigure: () => void;
 }) {
   const Icon = connectorIcon(connector.id);
-  const toggleDisabled = !connector.supports_toggle || (!connector.configured && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id));
+  const toggleDisabled = connector.id === "gmail" || !connector.supports_toggle || (!connector.configured && !["vscode", "browser", "file_system", "logs", "git"].includes(connector.id));
   const githubRepoCount = Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0);
   const githubLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
-  const emailAccount = typeof connector.config_summary?.account_email === "string" ? connector.config_summary.account_email : null;
+  const gmailEmail = typeof connector.config_summary?.email_address === "string" ? connector.config_summary.email_address : null;
+  const gmailConnectedAt = typeof connector.config_summary?.connected_at === "string" ? connector.config_summary.connected_at : null;
+  const emailProvider = typeof connector.config_summary?.provider_name === "string" ? connector.config_summary.provider_name : null;
+  const emailAccount = typeof connector.config_summary?.account_label === "string" ? connector.config_summary.account_label : null;
   const emailLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
   return (
     <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
@@ -534,11 +548,22 @@ function ConnectorCard({
             <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(githubLastSync)}</span>
           </div>
         </div>
+      ) : connector.id === "gmail" ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+          <div>
+            <span className="block uppercase">Account</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{gmailEmail || "--"}</span>
+          </div>
+          <div>
+            <span className="block uppercase">Connected</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(gmailConnectedAt)}</span>
+          </div>
+        </div>
       ) : connector.id === "email" ? (
         <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
           <div>
             <span className="block uppercase">Account</span>
-            <span className="mt-1 block truncate text-sm font-medium text-app-text">{emailAccount ?? "--"}</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{emailAccount || emailProvider || "--"}</span>
           </div>
           <div>
             <span className="block uppercase">Last sync</span>
@@ -611,6 +636,11 @@ function ConfigurePanel(props: {
             <Badge>repos: {Number(connector.config_summary?.selected_repos_count ?? connector.config_summary?.repo_count ?? 0)}</Badge>
             <Badge>last sync: {formatDate(typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at)}</Badge>
           </>
+        ) : connector.id === "gmail" ? (
+          <>
+            <Badge>{typeof connector.config_summary?.email_address === "string" ? connector.config_summary.email_address : "local OAuth"}</Badge>
+            <Badge>connected: {formatDate(typeof connector.config_summary?.connected_at === "string" ? connector.config_summary.connected_at : null)}</Badge>
+          </>
         ) : connector.id === "email" ? (
           <>
             <Badge>events: {connector.event_count}</Badge>
@@ -630,6 +660,8 @@ function ConfigurePanel(props: {
         <BrowserPanel connector={connector} onToggle={props.onToggleConnector} />
       ) : connector.id === "github" ? (
         <GitHubPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
+      ) : connector.id === "gmail" ? (
+        <GmailPanel onRefresh={props.onRefresh} />
       ) : connector.id === "email" ? (
         <EmailPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
       ) : connector.id === "file_system" ? (
@@ -1228,19 +1260,289 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
   );
 }
 
+function GmailPanel({ onRefresh }: { onRefresh: () => void }) {
+  const [status, setStatus] = useState<GmailStatusResponse | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [draftTo, setDraftTo] = useState("");
+  const [draftSubject, setDraftSubject] = useState("MindOS Gmail draft");
+  const [draftBody, setDraftBody] = useState("Draft created by MindOS.");
+  const [lastDraft, setLastDraft] = useState<(GmailDraftResponse & { to: string; subject: string; body: string }) | null>(null);
+  const [confirmSend, setConfirmSend] = useState(false);
+
+  useEffect(() => {
+    void loadStatus();
+  }, []);
+
+  async function loadStatus() {
+    setLoading("gmailStatus");
+    try {
+      const response = await getGmailStatus();
+      setStatus(response);
+      if (response.email_address && !draftTo) {
+        setDraftTo(response.email_address);
+      }
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleUpload(file: File | undefined) {
+    if (!file) return;
+    setLoading("gmailUpload");
+    setMessage(null);
+    setLastDraft(null);
+    try {
+      const response = await uploadGmailCredentials(file);
+      setStatus(response);
+      setMessage("OAuth credentials added.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleConnect() {
+    setLoading("gmailConnect");
+    setMessage(null);
+    try {
+      const response = await connectGmail();
+      window.open(response.auth_url, "_blank", "noopener,noreferrer");
+      setMessage("Google sign-in opened. Return here after Gmail says connected.");
+      setTimeout(() => void loadStatus(), 3000);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleTest() {
+    setLoading("gmailTest");
+    setMessage(null);
+    try {
+      const response = await testGmailConnection();
+      setMessage(response.message);
+      await loadStatus();
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleTestDraft() {
+    setLoading("gmailTestDraft");
+    setMessage(null);
+    try {
+      const response = await createGmailTestDraft();
+      setLastDraft({ ...response, to: status?.email_address || "", subject: "MindOS Gmail test draft", body: "This is a test draft created by MindOS." });
+      setMessage(response.message);
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleCreateDraft() {
+    setLoading("gmailDraft");
+    setMessage(null);
+    try {
+      const response = await createGmailDraft({ to: draftTo, subject: draftSubject, body: draftBody });
+      setLastDraft({ ...response, to: draftTo, subject: draftSubject, body: draftBody });
+      setMessage(response.message);
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleSendDraft() {
+    if (!lastDraft) return;
+    setLoading("gmailSend");
+    setMessage(null);
+    try {
+      const response = await sendGmailDraft(lastDraft.draft_id);
+      setMessage(response.message);
+      setLastDraft(null);
+      setConfirmSend(false);
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleDisconnect() {
+    setLoading("gmailDisconnect");
+    setMessage(null);
+    try {
+      const response = await disconnectGmail();
+      setStatus(response);
+      setLastDraft(null);
+      setMessage("Gmail disconnected. OAuth credentials remain saved.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleRemoveCredentials() {
+    if (!window.confirm("Remove Gmail OAuth credentials and token from this computer?")) return;
+    setLoading("gmailRemove");
+    setMessage(null);
+    try {
+      const response = await removeGmailCredentials();
+      setStatus(response);
+      setLastDraft(null);
+      setMessage("Gmail credentials removed.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  const configured = Boolean(status?.credentials_configured);
+  const connected = Boolean(status?.connected);
+  const busy = Boolean(loading);
+  return (
+    <div className="mt-5 space-y-4">
+      <div>
+        <p className="text-sm font-medium text-app-text">Gmail</p>
+        <p className="mt-1 text-sm text-app-muted">Connect Gmail using your own Google OAuth credentials.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={connected ? "connected" : configured ? "configured" : "needs_configuration"} />
+        {status?.email_address ? <Badge>{status.email_address}</Badge> : null}
+        {status?.credential_file_name ? <Badge>{status.credential_file_name}</Badge> : null}
+      </div>
+      {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
+
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <p className="text-sm font-medium text-app-text">Connection</p>
+        <p className="mt-1 text-xs text-app-muted">
+          Upload a Google OAuth desktop client credentials file. MindOS stores it locally and never shows the secret after upload.
+        </p>
+        <label className="mt-4 block text-xs font-medium uppercase text-app-muted">
+          OAuth credentials
+          <Input
+            className="mt-2"
+            type="file"
+            accept="application/json,.json"
+            disabled={busy}
+            onChange={(event) => void handleUpload(event.target.files?.[0])}
+          />
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="primary" onClick={() => void handleConnect()} loading={loading === "gmailConnect"} disabled={!configured || busy}>
+            Connect Gmail
+          </Button>
+          <Button variant="secondary" onClick={() => void handleTest()} loading={loading === "gmailTest"} disabled={!connected || busy}>
+            Test connection
+          </Button>
+          <Button variant="secondary" onClick={() => void handleDisconnect()} loading={loading === "gmailDisconnect"} disabled={!configured || busy}>
+            Disconnect Gmail
+          </Button>
+          <Button variant="danger" onClick={() => void handleRemoveCredentials()} loading={loading === "gmailRemove"} disabled={!configured || busy}>
+            Remove credentials
+          </Button>
+        </div>
+      </div>
+
+      {connected ? (
+        <>
+          <CompactBlock title="Granted scopes">
+            {(status?.scopes.length ? status.scopes : status?.required_scopes || []).map((scope) => (
+              <Badge key={scope}>{scope.replace("https://www.googleapis.com/auth/", "")}</Badge>
+            ))}
+          </CompactBlock>
+
+          <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+            <p className="text-sm font-medium text-app-text">Draft tools</p>
+            <p className="mt-1 text-xs text-app-muted">MindOS can create drafts. Sending always requires confirmation.</p>
+            <div className="mt-4 grid gap-3">
+              <LabeledInput label="To" value={draftTo} onChange={setDraftTo} placeholder={status?.email_address || "you@example.com"} />
+              <LabeledInput label="Subject" value={draftSubject} onChange={setDraftSubject} />
+              <LabeledTextarea label="Body" value={draftBody} onChange={setDraftBody} />
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => void handleTestDraft()} loading={loading === "gmailTestDraft"} disabled={busy}>
+                  Create test draft
+                </Button>
+                <Button variant="primary" onClick={() => void handleCreateDraft()} loading={loading === "gmailDraft"} disabled={busy}>
+                  Create draft
+                </Button>
+                {lastDraft ? (
+                  <Button variant="danger" onClick={() => setConfirmSend(true)} disabled={busy}>
+                    Send draft
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {lastDraft ? (
+        <CompactBlock title="Draft ready">
+          <Badge>draft: {lastDraft.draft_id}</Badge>
+          <Badge>{lastDraft.subject}</Badge>
+          <Badge>{lastDraft.to}</Badge>
+        </CompactBlock>
+      ) : null}
+
+      {confirmSend && lastDraft ? (
+        <div className="rounded-md border border-red-500/40 bg-red-950/20 p-4">
+          <p className="text-sm font-medium text-app-text">Send this email?</p>
+          <div className="mt-3 space-y-2 text-sm text-app-muted">
+            <p><span className="text-app-text">To:</span> {lastDraft.to}</p>
+            <p><span className="text-app-text">Subject:</span> {lastDraft.subject}</p>
+            <p className="whitespace-pre-wrap rounded-md border border-app-border bg-zinc-950 p-3">{lastDraft.body}</p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setConfirmSend(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => void handleSendDraft()} loading={loading === "gmailSend"} disabled={busy}>
+              Send email
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+    </div>
+  );
+}
+
 
 function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; onToggle: (enabled: boolean) => void; onRefresh: () => void }) {
   const [status, setStatus] = useState<EmailStatusResponse | null>(null);
-  const [emailAddress, setEmailAddress] = useState("");
-  const [imapHost, setImapHost] = useState("imap.gmail.com");
-  const [imapPort, setImapPort] = useState(993);
-  const [imapSsl, setImapSsl] = useState(true);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [scope, setScope] = useState<"recent" | "unread" | "starred" | "folder">("recent");
-  const [folderName, setFolderName] = useState("INBOX");
+  const [providerName, setProviderName] = useState("Corporate Email MCP");
+  const [apiBaseUrl, setApiBaseUrl] = useState("mock");
+  const [authType, setAuthType] = useState<"bearer" | "api_key_header" | "none">("none");
+  const [authHeaderName, setAuthHeaderName] = useState("Authorization");
+  const [apiKey, setApiKey] = useState("");
+  const [accountLabel, setAccountLabel] = useState("");
+  const [testTool, setTestTool] = useState("email.test");
+  const [searchTool, setSearchTool] = useState("email.search");
+  const [getTool, setGetTool] = useState("email.get");
+  const [foldersTool, setFoldersTool] = useState("email.list_folders");
+  const [scope, setScope] = useState<"recent" | "unread" | "search">("recent");
+  const [query, setQuery] = useState("");
   const [maxItems, setMaxItems] = useState(25);
-  const [folders, setFolders] = useState<EmailFolder[]>([]);
   const [syncResult, setSyncResult] = useState<EmailSyncResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -1253,7 +1555,12 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
         const response = await getEmailStatus();
         if (!cancelled) {
           setStatus(response);
-          setScope((response.selected_scope as typeof scope) ?? "recent");
+          setProviderName(response.provider_name || "Corporate Email MCP");
+          setApiBaseUrl(response.api_base_url || "mock");
+          setAuthType(response.auth_type || "none");
+          setAuthHeaderName(response.auth_header_name || "Authorization");
+          setAccountLabel(response.account_label || "");
+          if (response.selected_scope === "recent" || response.selected_scope === "unread" || response.selected_scope === "search") setScope(response.selected_scope);
         }
       } catch (error) {
         if (!cancelled) setMessage(getApiErrorMessage(error));
@@ -1265,42 +1572,28 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
     return () => { cancelled = true; };
   }, []);
 
-  async function saveCredentials() {
+  async function saveConfig() {
     setLoading("emailSave");
     setMessage(null);
     try {
       const response = await saveEmailConfig({
-        provider: "imap",
-        email_address: emailAddress || undefined,
-        imap_host: imapHost,
-        imap_port: imapPort,
-        imap_ssl: imapSsl,
-        username: username || undefined,
-        password: password || undefined,
-        sync_scope: scope,
-        folder_name: folderName,
-        max_items: maxItems,
+        provider_type: "email_mcp",
+        provider_name: providerName,
+        api_base_url: apiBaseUrl,
+        auth_type: authType,
+        auth_header_name: authHeaderName,
+        api_key: apiKey || undefined,
+        account_label: accountLabel,
+        tool_mapping: {
+          test: testTool,
+          search: searchTool,
+          get: getTool,
+          list_folders: foldersTool,
+        },
       });
       setStatus(response);
-      setPassword("");
-      setMessage(response.configured ? "Email credentials saved." : "Email credentials cleared.");
-      onRefresh();
-    } catch (error) {
-      setMessage(getApiErrorMessage(error));
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function clearCredentials() {
-    if (!window.confirm("Clear saved email credentials? Synced memory events will remain.")) return;
-    setPassword("");
-    setLoading("emailClear");
-    setMessage(null);
-    try {
-      const response = await saveEmailConfig({ password: "" });
-      setStatus(response);
-      setMessage("Email credentials cleared.");
+      setApiKey("");
+      setMessage("Email MCP provider saved.");
       onRefresh();
     } catch (error) {
       setMessage(getApiErrorMessage(error));
@@ -1313,24 +1606,12 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
     setLoading("emailTest");
     setMessage(null);
     try {
-      if (password.trim()) {
-        await saveEmailConfig({
-          provider: "imap",
-          email_address: emailAddress || undefined,
-          imap_host: imapHost,
-          imap_port: imapPort,
-          imap_ssl: imapSsl,
-          username: username || undefined,
-          password,
-          sync_scope: scope,
-          folder_name: folderName,
-          max_items: maxItems,
-        });
-        setPassword("");
+      if (apiKey.trim() || !status?.configured) {
+        await saveConfig();
       }
       const response = await testEmailConnection();
-      setMessage(response.message);
       setStatus(await getEmailStatus());
+      setMessage(response.message);
       onRefresh();
     } catch (error) {
       setMessage(getApiErrorMessage(error));
@@ -1339,13 +1620,30 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
     }
   }
 
-  async function loadFolders() {
-    setLoading("emailFolders");
+  async function connectProvider() {
+    setLoading("emailConnect");
     setMessage(null);
     try {
-      const response = await listEmailFolders();
-      setFolders(response.folders);
-      setMessage(`Loaded ${response.total} folders.`);
+      const response = await connectEmail();
+      setStatus(await getEmailStatus());
+      setMessage(response.message);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!window.confirm("Disconnect Email? Synced memory events will remain.")) return;
+    setLoading("emailDisconnect");
+    setMessage(null);
+    try {
+      await disconnectEmail();
+      setStatus(await getEmailStatus());
+      setMessage("Email connector disconnected.");
+      onRefresh();
     } catch (error) {
       setMessage(getApiErrorMessage(error));
     } finally {
@@ -1354,16 +1652,15 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
   }
 
   async function syncNow() {
+    if (!connected) {
+      setMessage("Connect Email before syncing.");
+      return;
+    }
     setLoading("emailSync");
     setMessage(null);
     setSyncResult(null);
     try {
-      const response = await syncEmailMessages({
-        scope,
-        folder_name: folderName,
-        max_items: maxItems,
-        include_body_excerpt: true,
-      });
+      const response = await syncEmailMessages({ scope, query: scope === "search" ? query : undefined, max_items: maxItems });
       setSyncResult(response);
       setMessage(response.message);
       setStatus(await getEmailStatus());
@@ -1375,8 +1672,8 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
     }
   }
 
-  async function clearEvents() {
-    if (!window.confirm("Clear email memory events? Saved credentials will remain.")) return;
+  async function handleClearEvents() {
+    if (!window.confirm("Clear email memory events? Email provider configuration will remain.")) return;
     setLoading("emailClearEvents");
     setMessage(null);
     try {
@@ -1391,83 +1688,107 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
     }
   }
 
-  function toggleConnection() {
-    const configured = status?.configured ?? connector.configured;
-    if (!configured) {
-      setMessage("Save credentials before connecting.");
-      return;
-    }
-    const nextEnabled = !(status?.enabled ?? connector.enabled);
-    onToggle(nextEnabled);
-    setStatus((current) => current ? { ...current, enabled: nextEnabled } : current);
-  }
-
-  const configured = status?.configured ?? connector.configured;
+  const connected = Boolean(status?.connected ?? connector.connected);
+  const configured = Boolean(status?.configured ?? connector.configured);
+  const currentProviderName = status?.provider_name ?? (typeof connector.config_summary?.provider_name === "string" ? connector.config_summary.provider_name : null);
+  const currentAccountLabel = status?.account_label ?? (typeof connector.config_summary?.account_label === "string" ? connector.config_summary.account_label : null);
+  const capabilities = status?.capabilities;
   const currentEnabled = status?.enabled ?? connector.enabled;
-  const connected = Boolean(currentEnabled && configured && status?.connected);
 
   return (
     <div className="mt-5 space-y-4">
       <div>
         <p className="text-sm font-medium text-app-text">Email</p>
-        <p className="mt-1 text-sm text-app-muted">Connect your inbox so MindOS can find and summarize relevant emails.</p>
+        <p className="mt-1 text-sm text-app-muted">Connect an email MCP provider so MindOS can read email context.</p>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <StatusBadge status={connected ? "connected" : currentEnabled && status?.last_error ? "error" : configured ? "configured" : "off"} />
+        <StatusBadge status={connected ? "connected" : status?.last_error ? "error" : configured ? "configured" : "off"} />
         <Badge>events: {status?.event_count ?? connector.event_count}</Badge>
         <Badge>last sync: {formatDate(status?.last_sync_at ?? connector.last_event_at)}</Badge>
       </div>
-      {connected && status?.account_email ? <p className="text-sm text-app-muted">Connected as {status.account_email}</p> : null}
+      {connected ? <p className="text-sm text-app-muted">Connected to {currentProviderName || "Email MCP"}{currentAccountLabel ? ` (${currentAccountLabel})` : ""}</p> : null}
       {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
 
       <div className="rounded-md border border-app-border bg-zinc-950 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-app-text">Connection</p>
-            <p className="mt-1 text-xs text-app-muted">
-              {configured ? "Credentials saved. Enter a new app password to replace." : "Enter IMAP credentials to connect."}
-            </p>
+            <p className="mt-1 text-xs text-app-muted">Use a managed, internal, local, or custom email MCP endpoint. Mock provider is available for demos.</p>
           </div>
-          <Toggle checked={currentEnabled} disabled={!configured} onChange={toggleConnection} />
+          <Toggle checked={currentEnabled} disabled={!configured} onChange={onToggle} />
         </div>
         <div className="mt-4 space-y-3">
-          <LabeledInput label="Email address" value={emailAddress} placeholder="you@gmail.com" onChange={setEmailAddress} />
-          <LabeledInput label="Username" value={username} placeholder="you@gmail.com" onChange={setUsername} />
+          <LabeledInput label="Provider name" value={providerName} placeholder="Corporate Email MCP" onChange={setProviderName} />
+          <LabeledInput label="MCP/API base URL" value={apiBaseUrl} placeholder="https://email-mcp.company.com or mock" onChange={setApiBaseUrl} />
           <label className="block text-xs font-medium uppercase text-app-muted">
-            App password
-            <Input
-              className="mt-2"
-              type="password"
-              value={password}
-              placeholder={configured ? "Saved. Enter a new app password to replace." : "Gmail app password"}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+            Authentication type
+            <select
+              className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+              value={authType}
+              onChange={(event) => setAuthType(event.target.value as typeof authType)}
+            >
+              <option value="bearer">Bearer token</option>
+              <option value="api_key_header">API key header</option>
+              <option value="none">No auth</option>
+            </select>
           </label>
-          <p className="text-xs leading-5 text-app-muted">
-            Use a Gmail app password, not your regular password. Generate one in Google Account → Security → 2-Step Verification → App passwords.
-          </p>
+          {authType !== "none" ? (
+            <>
+              <LabeledInput label="Header name" value={authHeaderName} placeholder="Authorization" onChange={setAuthHeaderName} />
+              <label className="block text-xs font-medium uppercase text-app-muted">
+                Token / API key
+                <Input
+                  className="mt-2"
+                  type="password"
+                  value={apiKey}
+                  placeholder={status?.has_api_key ? "Key saved. Enter a new key to replace it." : "Paste token or API key"}
+                  onChange={(event) => setApiKey(event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          <LabeledInput label="Account label" value={accountLabel} placeholder="work email / personal gmail" onChange={setAccountLabel} />
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => void saveCredentials()} loading={loading === "emailSave"} disabled={!password.trim() && configured}>
-              Save credentials
+            <Button variant="secondary" onClick={() => void saveConfig()} loading={loading === "emailSave"}>
+              Save
             </Button>
-            <Button variant="secondary" onClick={() => void testConnection()} loading={loading === "emailTest"} disabled={!configured && !password.trim()}>
+            <Button variant="secondary" onClick={() => void testConnection()} loading={loading === "emailTest"} disabled={!configured && !providerName.trim()}>
               Test connection
             </Button>
-            <Button variant={currentEnabled ? "secondary" : "primary"} onClick={toggleConnection} disabled={!configured}>
-              {currentEnabled ? "Disconnect" : "Connect"}
-            </Button>
-            <Button variant="danger" onClick={() => void clearCredentials()} loading={loading === "emailClear"} disabled={!configured}>
+            {connected ? (
+              <Button variant="secondary" onClick={() => void handleDisconnect()} loading={loading === "emailDisconnect"}>
+                Disconnect
+              </Button>
+            ) : (
+              <Button variant="primary" onClick={() => void connectProvider()} loading={loading === "emailConnect"} disabled={!configured}>
+                Connect
+              </Button>
+            )}
+            <Button variant="danger" onClick={() => void clearCredentials()} loading={loading === "emailClearCredentials"} disabled={!configured}>
               Clear credentials
             </Button>
           </div>
         </div>
       </div>
 
+      {capabilities ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+          <p className="text-sm font-medium text-app-text">Capabilities</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <CapabilityRow label="Search emails" enabled={capabilities.search_emails} />
+            <CapabilityRow label="Read email" enabled={capabilities.read_email} />
+            <CapabilityRow label="List labels/folders" enabled={capabilities.list_folders} />
+            <CapabilityRow label="Send email" enabled={false} note={capabilities.send_email ? "Provider exposes it; disabled in MindOS" : undefined} />
+            <CapabilityRow label="Delete/modify email" enabled={false} note={capabilities.delete_email || capabilities.modify_email ? "Provider exposes it; disabled in MindOS" : undefined} />
+          </div>
+        </div>
+      ) : null}
+
       {connected ? (
         <div className="rounded-md border border-app-border bg-zinc-950 p-4">
-          <p className="text-sm font-medium text-app-text">Sync scope</p>
-          <p className="mt-1 text-xs text-app-muted">Choose what to sync into MindOS memory.</p>
+          <p className="text-sm font-medium text-app-text">Sync</p>
+          <p className="mt-1 text-xs text-app-muted">Fetch read-only email context into MindOS memory. Attachments are listed but not downloaded.</p>
           <div className="mt-3 space-y-3">
             <label className="block text-xs font-medium uppercase text-app-muted">
               Scope
@@ -1478,32 +1799,10 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
               >
                 <option value="recent">Recent emails</option>
                 <option value="unread">Unread emails</option>
-                <option value="starred">Starred emails</option>
-                <option value="folder">Specific folder</option>
+                <option value="search">Search query</option>
               </select>
             </label>
-            {scope === "folder" ? (
-              <div className="space-y-2">
-                <LabeledInput label="Folder name" value={folderName} placeholder="INBOX" onChange={setFolderName} />
-                <Button variant="secondary" onClick={() => void loadFolders()} loading={loading === "emailFolders"}>
-                  Load folders
-                </Button>
-                {folders.length > 0 ? (
-                  <div className="max-h-40 space-y-1 overflow-y-auto">
-                    {folders.map((folder) => (
-                      <button
-                        key={folder.name}
-                        type="button"
-                        onClick={() => setFolderName(folder.name)}
-                        className={`w-full rounded-md border px-3 py-2 text-left text-sm ${folderName === folder.name ? "border-violet-500/60 bg-violet-950/30 text-app-text" : "border-app-border bg-zinc-900/60 text-app-muted hover:text-app-text"}`}
-                      >
-                        {folder.display_name}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+            {scope === "search" ? <LabeledInput label="Search query" value={query} placeholder="deployment" onChange={setQuery} /> : null}
             <LabeledInput
               label="Max emails"
               type="number"
@@ -1515,23 +1814,19 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
             </Button>
           </div>
         </div>
-      ) : (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
-          Connect email to sync messages into MindOS memory.
-        </div>
-      )}
+      ) : null}
 
       <details className="rounded-md border border-app-border bg-zinc-950 p-4">
-        <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced settings</summary>
+        <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced tool mapping</summary>
         <div className="mt-4 space-y-3">
-          <LabeledInput label="IMAP host" value={imapHost} placeholder="imap.gmail.com" onChange={setImapHost} />
-          <div className="grid grid-cols-2 gap-3">
-            <LabeledInput label="Port" type="number" value={String(imapPort)} onChange={(value) => setImapPort(Number(value) || 993)} />
-            <div className="flex items-end pb-1">
-              <Checkbox label="SSL" checked={imapSsl} onChange={setImapSsl} />
-            </div>
-          </div>
-          <Button variant="danger" onClick={() => void clearEvents()} loading={loading === "emailClearEvents"}>
+          <p className="text-xs leading-5 text-app-muted">
+            MindOS calls read-only tools only. If your provider uses custom MCP tool names, map them here.
+          </p>
+          <LabeledInput label="Test tool" value={testTool} onChange={setTestTool} />
+          <LabeledInput label="Search tool" value={searchTool} onChange={setSearchTool} />
+          <LabeledInput label="Read tool" value={getTool} onChange={setGetTool} />
+          <LabeledInput label="List folders tool" value={foldersTool} onChange={setFoldersTool} />
+          <Button variant="danger" onClick={() => void handleClearEvents()} loading={loading === "emailClearEvents"}>
             Clear email events
           </Button>
         </div>
@@ -1546,8 +1841,52 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
           <Badge variant={syncResult.failed_count ? "danger" : "default"}>failed: {syncResult.failed_count}</Badge>
         </CompactBlock>
       ) : null}
-      {syncResult?.warnings.length ? <StatusMessage message={syncResult.warnings.join(" ")} variant="warning" /> : null}
+      {syncResult?.warnings.length ? <StatusMessage message={syncResult.warnings.slice(0, 2).join(" ")} variant="warning" /> : null}
       {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+    </div>
+  );
+
+  async function clearCredentials() {
+    if (!window.confirm("Clear Email MCP credentials and configuration? Synced memory events will remain.")) return;
+    setLoading("emailClearCredentials");
+    setMessage(null);
+    try {
+      await disconnectEmail();
+      const response = await saveEmailConfig({
+        provider_type: "email_mcp",
+        provider_name: providerName,
+        api_base_url: apiBaseUrl,
+        auth_type: authType,
+        auth_header_name: authHeaderName,
+        api_key: "",
+        account_label: accountLabel,
+        tool_mapping: {
+          test: testTool,
+          search: searchTool,
+          get: getTool,
+          list_folders: foldersTool,
+        },
+      });
+      setStatus(response);
+      setApiKey("");
+      setMessage("Email MCP credentials cleared.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+}
+
+function CapabilityRow({ label, enabled, note }: { label: string; enabled: boolean; note?: string }) {
+  return (
+    <div className="rounded-md border border-app-border bg-zinc-900/60 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-app-text">{label}</span>
+        <Badge variant={enabled ? "success" : "default"}>{enabled ? "available" : "disabled"}</Badge>
+      </div>
+      {note ? <p className="mt-1 text-xs text-app-muted">{note}</p> : null}
     </div>
   );
 }
@@ -2017,6 +2356,7 @@ function connectorIcon(id: string) {
     vscode: Code2,
     browser: Globe,
     github: Github,
+    gmail: Mail,
     jira: Ticket,
     email: Mail,
     file_system: FolderOpen,

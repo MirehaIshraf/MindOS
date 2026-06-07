@@ -105,17 +105,36 @@ Preferred browser event types:
   `{ "repo_full_names": ["owner/repo"], "include_commits": true, "include_issues": true, "include_pull_requests": true, "max_items_per_type": 30 }`.
   Sync is limited to 5 repositories per request and up to 100 items per type. It requires GitHub to be connected, creates or updates `github_commit`, `github_issue`, and `github_pull_request` memory events with dedupe keys, and does not fetch file contents or perform GitHub writes.
 - `DELETE /connectors/github/events`: clears GitHub memory events and related relationships/vectors only. It does not clear the token.
-- `GET /connectors/email/status`: returns read-only Email connector status including configured/connected flags, account email, last sync/error, selected scope, and event count. It never returns the app password.
-- `POST /connectors/email/config`: save or clear local IMAP credential configuration. Request:
-  `{ "provider": "imap", "email_address": "you@gmail.com", "imap_host": "imap.gmail.com", "imap_port": 993, "imap_ssl": true, "username": "you@gmail.com", "password": "app-password", "sync_scope": "recent", "folder_name": "INBOX", "max_items": 25 }`.
-  Passing an empty/null password clears credentials. The password is never returned.
-- `POST /connectors/email/test`: tests the saved IMAP credentials by connecting and authenticating. Returns connected status and account email. Invalid credentials return a clean JSON `400` error.
-- `GET /connectors/email/folders`: lists available IMAP folders for the saved credentials. Returns `400` when credentials are not configured.
-- `POST /connectors/email/sync`: sync emails read-only. Request:
-  `{ "scope": "recent", "folder_name": "INBOX", "max_items": 25, "include_body_excerpt": true }`.
-  Scope values: `recent` (all, most recent N), `unread` (UNSEEN), `starred` (FLAGGED), `folder` (ALL in named folder).
-  Fetches subject, sender, date, message-id, recipient list, and body excerpt up to 1000 chars. Attachment contents are not fetched; only filename, MIME type, and size metadata are stored. Deduplicates by account_email plus message_id. Does not send, reply, delete, archive, or modify any email.
-- `DELETE /connectors/email/events`: clears Email memory events and related relationships/vectors only. It does not clear credentials.
+- `GET /connectors/gmail/status`: returns local Gmail connector status: `credentials_configured`, `connected`, `reconnect_required`, `email_address`, granted `scopes`, `last_error`, `connected_at`, `credential_file_name`, and required scopes. It never returns client secrets or tokens.
+- `POST /connectors/gmail/credentials/upload`: saves a user-provided Google OAuth desktop credentials JSON locally. Request:
+  `{ "filename": "credentials.json", "content": "{...json...}" }`.
+  The backend validates `installed` or compatible OAuth fields and stores the original file at `~/.mindos/connectors/gmail/credentials.json`. Client secret is never returned.
+- `POST /connectors/gmail/connect`: starts local OAuth by returning an `auth_url` for the frontend to open. The URL uses localhost callback, CSRF state, `access_type=offline`, and only `gmail.compose` plus `gmail.readonly` scopes.
+- `GET /connectors/gmail/oauth/callback`: localhost Google OAuth redirect target. Verifies state, exchanges code for token, validates required scopes, stores `token.json`, fetches the Gmail profile, and returns a small HTML success/error page.
+- `POST /connectors/gmail/test`: refreshes token if needed and calls Gmail profile. Returns connected status and email address.
+- `GET /connectors/gmail/recent?limit=5`: reads recent Gmail message metadata/snippets only. It does not fetch full message bodies or attachments.
+- `POST /connectors/gmail/drafts/test`: creates a Gmail draft addressed to the connected account. It never sends the draft.
+- `POST /connectors/gmail/drafts`: creates a Gmail draft using `{ "to": "...", "subject": "...", "body": "..." }`. It never sends the draft.
+- `POST /connectors/gmail/drafts/{draft_id}/send`: sends an existing Gmail draft. The frontend must show explicit confirmation before calling this endpoint.
+- `POST /connectors/gmail/disconnect`: deletes `token.json`, keeps credentials, and marks Gmail disconnected.
+- `DELETE /connectors/gmail/credentials`: deletes local Gmail credentials and token state.
+- `GET /connectors/email/status`: returns Email MCP connector status including configured/connected flags, provider name, API base URL, auth type/header name, account label, last sync/error, selected scope, event count, `has_api_key`, and normalized capabilities. It never returns API keys/tokens.
+- `POST /connectors/email/config`: save or replace provider-agnostic MCP config. Request:
+  `{ "provider_type": "email_mcp", "provider_name": "Corporate Email MCP", "api_base_url": "https://email-mcp.company.com", "auth_type": "bearer", "auth_header_name": "Authorization", "api_key": "...", "account_label": "work email", "tool_mapping": { "test": "email.test", "search": "email.search", "get": "email.get", "list_folders": "email.list_folders" } }`.
+  Use `api_base_url: "mock"` and `auth_type: "none"` for demo mode. Passing an empty `api_key` clears the saved credential. Credentials are not returned.
+- `POST /connectors/email/test`: tests the configured MCP provider and discovers capabilities through `/health`, `/status`, `/capabilities`, `/email/capabilities`, `/tools/list`, or configured tool calls. Returns normalized capability booleans. Send/delete/modify capabilities may be reported but remain disabled in MindOS.
+- `POST /connectors/email/connect`: enables the configured/tested Email MCP connector. Returns connected status.
+- `POST /connectors/email/disconnect`: disables the Email MCP connector. Provider config and synced memory events remain. Returns `{ "status": "disconnected", "message": "..." }`.
+- `GET /connectors/email/capabilities`: refreshes normalized provider capabilities without creating Memory events.
+- `POST /connectors/email/sync`: sync emails read-only through the configured MCP provider. Request:
+  `{ "scope": "recent", "query": "deployment", "max_items": 25 }`.
+  Scope values: `recent`, `unread`, and `search`. Default max is 25; hard max is 100. Normalized message fields include `id`, `thread_id`, `subject`, `from`, `to`, `cc`, `date`, `snippet`, `body_excerpt`, `labels`, `folder`, `has_attachments`, `attachments`, and `url`. Attachments are metadata only; contents are never fetched. Deduplicates by `email_mcp + provider_name + account_label + provider_message_id`, falling back to a hash when provider id is missing. Does not send, reply, delete, archive, or modify any email. Returns `400` when connector is not connected.
+- `POST /connectors/email/drafts`: create a draft through a connected MCP email provider only when `create_draft` capability is available. Request:
+  `{ "to": "someone@example.com", "subject": "...", "body": "...", "provider": "email_mcp" }`.
+  Response:
+  `{ "ok": true, "draft_id": "...", "url": null, "message": "Draft created." }`.
+  The adapter tries normalized REST `/email/drafts` and MCP tool names such as `email.create_draft`, `gmail.create_draft`, `gmail.draft`, and `create_draft`. It never sends email and does not create Memory events.
+- `DELETE /connectors/email/events`: clears Email memory events and related relationships/vectors only. It does not clear provider config or credentials.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
 - `GET /connectors/{connector_id}/config`: read placeholder/stored connector config.
@@ -174,6 +193,9 @@ File System Task Adapter routes:
   `{ "task_id": "...", "folder_name": "Notes", "output_file_name": "capsule-networks-summary.md", "files_used_count": 3, "files_skipped_count": 1, "summary_style": "detailed", "output_format": "markdown", "file_types_used": ["pdf", "docx", "md"], "summary_title": "Summarized Capsule Networks documents", "topic": "Capsule Networks", "naming_confidence": "high" }`.
   Response includes `status`, `task_type`, optional `memory_event_id`, and optional `warning`.
   This endpoint creates the only task-related Memory event for the File Task POC: `mindos/document_summary_created`. It stores lightweight dynamic title/topic plus filename/folder/count/style/format/file-type metadata only, not full source document text.
+- `POST /tasks/gmail/draft/prepare`: prepare an editable Gmail draft preview from user instruction and recent task-history facts. Request:
+  `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "model_id": null }`.
+  Response includes `to`, `subject`, `body`, `tone`, `source_summary`, warnings, model/provider metadata, and an optional planner warning. The selected LLM returns structured JSON when available; otherwise MindOS returns a clean deterministic fallback. The endpoint does not create a Gmail draft, send email, or create Memory events.
 - `POST /tasks/file/{task_id}/execute`: execute a prepared plan only when `{ "confirmation": true }` is provided.
 - `POST /tasks/file/{task_id}/undo`: run safe undo operations when available.
 - `GET /tasks/file/{task_id}`: fetch file task plan, execution result, and undo state.

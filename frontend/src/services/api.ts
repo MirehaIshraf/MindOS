@@ -21,6 +21,13 @@ import type {
   ClearFileSystemEventsResponse,
   ClearLogEventsResponse,
   ClearGitEventsResponse,
+  EmailCapabilityResponse,
+  EmailConnectResponse,
+  EmailDisconnectResponse,
+  EmailDraftRequest,
+  EmailDraftResponse,
+  EmailMcpConfigRequest,
+  EmailTestResponse,
   ConnectorConfigResponse,
   ConnectorListResponse,
   ConnectorSource,
@@ -34,12 +41,9 @@ import type {
   DocumentSummaryPrepareResponse,
   DocumentSummaryCompleteRequest,
   DocumentSummaryCompleteResponse,
-  EmailConfigRequest,
-  EmailFoldersResponse,
   EmailStatusResponse,
   EmailSyncRequest,
   EmailSyncResponse,
-  EmailTestResponse,
   EmbeddingReindexResponse,
   EmbeddingSettingsResponse,
   EmbeddingStatusResponse,
@@ -61,6 +65,14 @@ import type {
   GitHubSyncRequest,
   GitHubSyncResponse,
   GitHubTestResponse,
+  GmailConnectResponse,
+  GmailDraftPrepareRequest,
+  GmailDraftPrepareResponse,
+  GmailDraftRequest,
+  GmailDraftResponse,
+  GmailSendDraftResponse,
+  GmailStatusResponse,
+  GmailTestResponse,
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
@@ -703,28 +715,96 @@ export async function syncGitHubRepos(payload: GitHubSyncRequest): Promise<GitHu
   return response.data;
 }
 
+export async function getGmailStatus(): Promise<GmailStatusResponse> {
+  const response = await api.get<GmailStatusResponse>("/connectors/gmail/status");
+  return response.data;
+}
+
+export async function uploadGmailCredentials(file: File): Promise<GmailStatusResponse> {
+  const response = await api.post<GmailStatusResponse>("/connectors/gmail/credentials/upload", {
+    filename: file.name,
+    content: await file.text(),
+  });
+  return response.data;
+}
+
+export async function connectGmail(): Promise<GmailConnectResponse> {
+  const response = await api.post<GmailConnectResponse>("/connectors/gmail/connect", {});
+  return response.data;
+}
+
+export async function testGmailConnection(): Promise<GmailTestResponse> {
+  const response = await api.post<GmailTestResponse>("/connectors/gmail/test", {});
+  return response.data;
+}
+
+export async function createGmailTestDraft(): Promise<GmailDraftResponse> {
+  const response = await api.post<GmailDraftResponse>("/connectors/gmail/drafts/test", {});
+  return response.data;
+}
+
+export async function createGmailDraft(payload: GmailDraftRequest): Promise<GmailDraftResponse> {
+  const response = await api.post<GmailDraftResponse>("/connectors/gmail/drafts", payload);
+  return response.data;
+}
+
+export async function prepareGmailDraft(payload: GmailDraftPrepareRequest): Promise<GmailDraftPrepareResponse> {
+  const response = await api.post<GmailDraftPrepareResponse>("/tasks/gmail/draft/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function sendGmailDraft(draftId: string): Promise<GmailSendDraftResponse> {
+  const response = await api.post<GmailSendDraftResponse>(`/connectors/gmail/drafts/${encodeURIComponent(draftId)}/send`, {});
+  return response.data;
+}
+
+export async function disconnectGmail(): Promise<GmailStatusResponse> {
+  const response = await api.post<GmailStatusResponse>("/connectors/gmail/disconnect", {});
+  return response.data;
+}
+
+export async function removeGmailCredentials(): Promise<GmailStatusResponse> {
+  const response = await api.delete<GmailStatusResponse>("/connectors/gmail/credentials");
+  return response.data;
+}
+
 export async function getEmailStatus(): Promise<EmailStatusResponse> {
   const response = await api.get<EmailStatusResponse>("/connectors/email/status");
   return response.data;
 }
 
-export async function saveEmailConfig(payload: EmailConfigRequest): Promise<EmailStatusResponse> {
+export async function saveEmailConfig(payload: EmailMcpConfigRequest): Promise<EmailStatusResponse> {
   const response = await api.post<EmailStatusResponse>("/connectors/email/config", payload);
   return response.data;
 }
 
 export async function testEmailConnection(): Promise<EmailTestResponse> {
-  const response = await api.post<EmailTestResponse>("/connectors/email/test", {}, { timeout: 30000 });
+  const response = await api.post<EmailTestResponse>("/connectors/email/test", {});
   return response.data;
 }
 
-export async function listEmailFolders(): Promise<EmailFoldersResponse> {
-  const response = await api.get<EmailFoldersResponse>("/connectors/email/folders", { timeout: 30000 });
+export async function connectEmail(): Promise<EmailConnectResponse> {
+  const response = await api.post<EmailConnectResponse>("/connectors/email/connect", {});
+  return response.data;
+}
+
+export async function getEmailCapabilities(): Promise<EmailCapabilityResponse> {
+  const response = await api.get<EmailCapabilityResponse>("/connectors/email/capabilities");
+  return response.data;
+}
+
+export async function disconnectEmail(): Promise<EmailDisconnectResponse> {
+  const response = await api.post<EmailDisconnectResponse>("/connectors/email/disconnect", {});
   return response.data;
 }
 
 export async function syncEmailMessages(payload: EmailSyncRequest): Promise<EmailSyncResponse> {
   const response = await api.post<EmailSyncResponse>("/connectors/email/sync", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function createEmailDraft(payload: EmailDraftRequest): Promise<EmailDraftResponse> {
+  const response = await api.post<EmailDraftResponse>("/connectors/email/drafts", payload);
   return response.data;
 }
 

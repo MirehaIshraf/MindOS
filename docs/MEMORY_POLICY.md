@@ -28,7 +28,7 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 | github/github_commit | Yes | Yes | Yes | Yes | Read-only GitHub sync commit context. |
 | github/github_issue | Yes | Yes | Yes | Yes | Read-only open issue context. |
 | github/github_pull_request | Yes | Yes | Yes | Yes | Read-only open pull request context. |
-| email/email_message | Yes | Yes | Yes | Yes | Read-only email sync. Stores subject, sender, date, and excerpt only. No full body, no attachment contents, no credentials. |
+| email/email_message | Yes | Yes | Yes | Yes | Read-only Email MCP sync. Stores normalized message metadata and excerpt only. No full body, no attachment contents, no credentials. |
 | vscode_extension/editor_file_saved | Yes | Yes | Yes | Yes | Useful editor event, especially when safe content snippets are included. |
 | vscode_extension/editor_file_opened | No | No | No | No | Open events are noisy and hidden/non-indexable by default. |
 | vscode_extension/editor_workspace_opened | Yes | Yes | Yes | Yes | Useful session/workspace context. |
@@ -64,7 +64,8 @@ The current policy is implemented in `backend/app/services/memory_policy_service
 - Activity summaries are intended to become indexable, but the current source-level code treats all `activity_tracker` events as hidden/non-indexable.
 - File, log, Git, VSCode saved/workspace, manually saved browser extension events, and useful captured events are indexable/context eligible by default.
 - GitHub connector events for commits, issues, and pull requests are visible, indexable, relationship eligible, and context eligible. GitHub connector token save, test connection, repo listing, sync start, and sync completion are not Memory events.
-- Email connector `email_message` events are visible, indexable, relationship eligible, and context eligible. They store subject, sender, date, and body excerpt only. Email credentials, full email bodies, and attachment contents are never stored in Memory. Email connector credential save, connection test, folder listing, sync start, and sync completion are not Memory events.
+- Gmail connector OAuth setup, profile tests, draft preparation, draft creation, and draft sending are not Memory events. Gmail client secrets, access tokens, refresh tokens, authorization codes, and draft bodies must never be stored in Memory or indexed by default. Gmail draft creation may appear in local Task History with lightweight title/status only.
+- Email MCP connector `email_message` events are visible, indexable, relationship eligible, and context eligible. They store subject, sender, recipients, date, labels/folder, URL, attachment metadata, and body excerpt only. Email API keys/tokens, provider config secrets, full email bodies, and attachment contents are never stored in Memory. Email connector credential save, connection test, capability discovery, folder listing, sync start, and sync completion are not Memory events.
 - VSCode file-opened events are stored but hidden/non-indexable by default to avoid open-file noise.
 - Browser manual saves are visible and indexable. Smart capture can create hidden `browser_page_seen` history, hidden/indexable `browser_search_query` lookup evidence, and visible/indexable `browser_page_captured` memory for important work/research pages. Captured page events should include readable page context when extraction succeeds.
 - `browser_page_captured` events are upserted by normalized URL. Repeat visits increment `visit_count` and update `last_seen_at` instead of creating duplicate visible memory.

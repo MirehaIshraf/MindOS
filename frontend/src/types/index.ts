@@ -1049,56 +1049,161 @@ export type GitHubSyncResponse = {
   details: Record<string, unknown>;
 };
 
+export type GmailStatusResponse = {
+  credentials_configured: boolean;
+  connected: boolean;
+  reconnect_required: boolean;
+  status: string;
+  email_address?: string | null;
+  scopes: string[];
+  last_error?: string | null;
+  connected_at?: string | null;
+  credential_file_name?: string | null;
+  required_scopes: string[];
+  capabilities?: {
+    read_email?: boolean;
+    search_email?: boolean;
+    create_draft?: boolean;
+    send_email?: boolean;
+  };
+};
+
+export type GmailConnectResponse = {
+  status: string;
+  auth_url: string;
+  message: string;
+};
+
+export type GmailTestResponse = {
+  status: string;
+  connected: boolean;
+  email_address?: string | null;
+  message: string;
+};
+
+export type GmailDraftRequest = {
+  to: string;
+  subject: string;
+  body: string;
+};
+
+export type GmailDraftResponse = {
+  status: string;
+  draft_id: string;
+  message_id?: string | null;
+  message: string;
+};
+
+export type GmailDraftPrepareSourceItem = {
+  type: string;
+  title: string;
+  summary?: string;
+  status?: string | null;
+  created_at?: string | null;
+  context_name?: string | null;
+  output_file_name?: string | null;
+  details?: Record<string, string | number | boolean | null>;
+};
+
+export type GmailDraftPrepareRequest = {
+  instruction: string;
+  connected_email?: string | null;
+  recent_tasks?: GmailDraftPrepareSourceItem[];
+  memory_items?: GmailDraftPrepareSourceItem[];
+  model_id?: string | null;
+};
+
+export type GmailDraftPrepareResponse = {
+  to: string;
+  subject: string;
+  body: string;
+  tone: string;
+  source_summary: string;
+  warnings: string[];
+  model?: string | null;
+  provider?: string | null;
+  model_display_name?: string | null;
+  planner_warning?: string | null;
+};
+
+export type GmailSendDraftResponse = {
+  status: string;
+  draft_id: string;
+  message_id?: string | null;
+  message: string;
+};
+
 export type EmailStatusResponse = {
   enabled: boolean;
   configured: boolean;
   connected: boolean;
   status: string;
-  provider: string;
-  account_email?: string | null;
+  provider_type: "email_mcp";
+  provider_name?: string | null;
+  api_base_url?: string | null;
+  auth_type: "bearer" | "api_key_header" | "none";
+  auth_header_name: string;
+  account_label?: string | null;
   last_sync_at?: string | null;
   last_error?: string | null;
-  selected_scope: string;
+  selected_scope: "recent" | "unread" | "search" | string;
   event_count: number;
-  has_credentials: boolean;
+  has_api_key: boolean;
+  capabilities: EmailCapabilityResponse;
 };
 
-export type EmailConfigRequest = {
-  provider?: string;
-  email_address?: string | null;
-  imap_host?: string;
-  imap_port?: number;
-  imap_ssl?: boolean;
-  username?: string | null;
-  password?: string | null;
-  sync_scope?: string;
-  folder_name?: string;
-  max_items?: number;
+export type EmailCapabilityResponse = {
+  search_emails: boolean;
+  read_email: boolean;
+  list_folders: boolean;
+  create_draft: boolean;
+  send_email: boolean;
+  delete_email: boolean;
+  modify_email: boolean;
+  raw?: Record<string, unknown>;
 };
+
+export type EmailMcpConfigRequest = {
+  provider_type?: "email_mcp";
+  provider_name: string;
+  api_base_url: string;
+  auth_type: "bearer" | "api_key_header" | "none";
+  auth_header_name?: string;
+  api_key?: string | null;
+  account_label?: string | null;
+  tool_mapping?: {
+      test?: string;
+      search?: string;
+      get?: string;
+      list_folders?: string;
+      create_draft?: string;
+    };
+  };
 
 export type EmailTestResponse = {
   status: string;
   connected: boolean;
-  account_email?: string | null;
+  provider_name?: string | null;
+  account_label?: string | null;
+  capabilities: EmailCapabilityResponse;
   message: string;
 };
 
-export type EmailFolder = {
-  name: string;
-  display_name: string;
-  message_count: number;
+export type EmailConnectResponse = {
+  status: string;
+  connected: boolean;
+  message: string;
 };
 
-export type EmailFoldersResponse = {
-  folders: EmailFolder[];
-  total: number;
+export type EmailDisconnectResponse = {
+  status: string;
+  message: string;
 };
 
 export type EmailSyncRequest = {
-  scope?: string;
-  folder_name?: string;
+  scope?: "recent" | "unread" | "search" | string;
+  query?: string | null;
   max_items?: number;
-  include_body_excerpt?: boolean;
 };
 
 export type EmailSyncResponse = {
@@ -1110,6 +1215,20 @@ export type EmailSyncResponse = {
   failed_count: number;
   events_created: string[];
   warnings: string[];
+  message: string;
+};
+
+export type EmailDraftRequest = {
+  to?: string;
+  subject: string;
+  body: string;
+  provider?: "email_mcp" | string;
+};
+
+export type EmailDraftResponse = {
+  ok: boolean;
+  draft_id: string;
+  url?: string | null;
   message: string;
 };
 

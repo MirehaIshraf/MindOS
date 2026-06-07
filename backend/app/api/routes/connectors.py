@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
+import html
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.schemas.connectors import (
     BrowserConnectorRuntimeResponse,
@@ -35,8 +37,12 @@ from app.schemas.connectors import (
 )
 from app.schemas.ingest import CollectorClientsResponse
 from app.schemas.email import (
-    EmailConfigRequest,
-    EmailFoldersResponse,
+    EmailCapabilityResponse,
+    EmailConnectResponse,
+    EmailDisconnectResponse,
+    EmailDraftRequest,
+    EmailDraftResponse,
+    EmailMcpConfigRequest,
     EmailStatusResponse,
     EmailSyncRequest,
     EmailSyncResponse,
@@ -51,6 +57,16 @@ from app.schemas.github import (
     GitHubSyncResponse,
     GitHubTestResponse,
 )
+from app.schemas.gmail import (
+    GmailConnectResponse,
+    GmailCredentialsUploadRequest,
+    GmailDraftRequest,
+    GmailDraftResponse,
+    GmailRecentEmailsResponse,
+    GmailSendDraftResponse,
+    GmailStatusResponse,
+    GmailTestResponse,
+)
 from app.services.connector_source_service import connector_source_service
 from app.services.connector_registry_service import connector_registry_service
 from app.services.connector_service import ConnectorService
@@ -59,6 +75,7 @@ from app.services.external_ingest_service import external_ingest_service
 from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
 from app.services.github_service import GitHubConnectorError, github_service
+from app.services.gmail_service import GmailConnectorError, gmail_service
 from app.services.log_import_service import LogImportService
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -156,8 +173,11 @@ def get_email_status() -> EmailStatusResponse:
 
 
 @router.post("/email/config", response_model=EmailStatusResponse)
-def save_email_config(request: EmailConfigRequest) -> EmailStatusResponse:
-    return email_service.save_config(request)
+def save_email_config(request: EmailMcpConfigRequest) -> EmailStatusResponse:
+    try:
+        return email_service.save_config(request)
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/email/test", response_model=EmailTestResponse)
@@ -168,10 +188,23 @@ def test_email_connection() -> EmailTestResponse:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@router.get("/email/folders", response_model=EmailFoldersResponse)
-def list_email_folders() -> EmailFoldersResponse:
+@router.post("/email/connect", response_model=EmailConnectResponse)
+def connect_email() -> EmailConnectResponse:
     try:
-        return email_service.list_folders()
+        return email_service.connect()
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/email/disconnect", response_model=EmailDisconnectResponse)
+def disconnect_email() -> EmailDisconnectResponse:
+    return email_service.disconnect()
+
+
+@router.get("/email/capabilities", response_model=EmailCapabilityResponse)
+def get_email_capabilities() -> EmailCapabilityResponse:
+    try:
+        return email_service.capabilities()
     except EmailConnectorError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -184,9 +217,110 @@ def sync_email(request: EmailSyncRequest) -> EmailSyncResponse:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@router.post("/email/drafts", response_model=EmailDraftResponse)
+def create_email_draft(request: EmailDraftRequest) -> EmailDraftResponse:
+    try:
+        return email_service.create_draft(request)
+    except EmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.delete("/email/events")
 def clear_email_events() -> dict[str, object]:
     return _clear_events_for_source("email")
+
+
+@router.get("/gmail/status", response_model=GmailStatusResponse)
+def get_gmail_status() -> GmailStatusResponse:
+    return gmail_service.status()
+
+
+@router.post("/gmail/credentials/upload", response_model=GmailStatusResponse)
+def upload_gmail_credentials(request: GmailCredentialsUploadRequest) -> GmailStatusResponse:
+    try:
+        return gmail_service.upload_credentials(request.filename, request.content)
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/gmail/connect", response_model=GmailConnectResponse)
+def connect_gmail() -> GmailConnectResponse:
+    try:
+        auth_url = gmail_service.start_connect()
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return GmailConnectResponse(
+        status="connecting",
+        auth_url=auth_url,
+        message="Open the Google sign-in page to connect Gmail.",
+    )
+
+
+@router.get("/gmail/oauth/callback", response_class=HTMLResponse)
+def gmail_oauth_callback(code: str | None = None, state: str | None = None, error: str | None = None) -> HTMLResponse:
+    try:
+        status = gmail_service.complete_oauth_callback(code, state, error)
+    except GmailConnectorError as service_error:
+        return HTMLResponse(
+            content=f"<html><body><h1>Gmail connection failed</h1><p>{html.escape(str(service_error))}</p><p>You can return to MindOS and try again.</p></body></html>",
+            status_code=400,
+        )
+    email = status.email_address or "your account"
+    return HTMLResponse(
+        content=f"<html><body><h1>Gmail connected</h1><p>Connected {html.escape(email)}. You can return to MindOS.</p></body></html>"
+    )
+
+
+@router.post("/gmail/test", response_model=GmailTestResponse)
+def test_gmail_connection() -> GmailTestResponse:
+    try:
+        return gmail_service.test_connection()
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/gmail/recent", response_model=GmailRecentEmailsResponse)
+def list_recent_gmail(limit: int = 5) -> GmailRecentEmailsResponse:
+    try:
+        return gmail_service.list_recent_emails(limit=limit)
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/gmail/drafts/test", response_model=GmailDraftResponse)
+def create_gmail_test_draft() -> GmailDraftResponse:
+    try:
+        return gmail_service.create_test_draft()
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/gmail/drafts", response_model=GmailDraftResponse)
+def create_gmail_draft(request: GmailDraftRequest) -> GmailDraftResponse:
+    try:
+        return gmail_service.create_draft(request)
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/gmail/drafts/{draft_id}/send", response_model=GmailSendDraftResponse)
+def send_gmail_draft(draft_id: str) -> GmailSendDraftResponse:
+    try:
+        result = gmail_service.send_draft(draft_id)
+    except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    message_id = str(result.get("id") or "") or None
+    return GmailSendDraftResponse(status="sent", draft_id=draft_id, message_id=message_id, message="Draft sent.")
+
+
+@router.post("/gmail/disconnect", response_model=GmailStatusResponse)
+def disconnect_gmail() -> GmailStatusResponse:
+    return gmail_service.disconnect()
+
+
+@router.delete("/gmail/credentials", response_model=GmailStatusResponse)
+def remove_gmail_credentials() -> GmailStatusResponse:
+    return gmail_service.remove_credentials()
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

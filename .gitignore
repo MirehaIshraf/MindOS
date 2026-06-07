@@ -18,10 +18,15 @@ extensions/browser/*.zip
 .env
 .env.*
 !.env.example
+credentials.json
+client_secret*.json
+token.json
+*.secret.json
 
 # Local data
 backend/data/
 data/
+.mindos/connectors/gmail/
 
 # Logs
 *.log

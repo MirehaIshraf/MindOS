@@ -39,3 +39,14 @@ The VSCode connector lives in [extensions/vscode/README.md](extensions/vscode/RE
 ## Browser Extension MVP
 
 The Browser connector lives in [extensions/browser/README.md](extensions/browser/README.md). It manually saves the current page, optional selected text, and an optional note to `/ingest/external`. It does not track browsing history, tabs, or full page content automatically.
+
+## Gmail Connector POC
+
+MindOS can connect Gmail locally using your own Google OAuth desktop credentials. In Google Cloud Console, create an OAuth client for a desktop app, enable the Gmail API, and download the `credentials.json` file. In MindOS, open Connectors -> Gmail, upload that file, then click Connect Gmail.
+
+Required scopes are:
+
+- `https://www.googleapis.com/auth/gmail.compose`
+- `https://www.googleapis.com/auth/gmail.readonly`
+
+MindOS stores `credentials.json` and `token.json` locally under `~/.mindos/connectors/gmail/`. It can test the Gmail profile, read recent message metadata, and create drafts. Sending a draft requires explicit confirmation in the UI.

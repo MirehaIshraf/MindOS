@@ -27,11 +27,13 @@ from app.schemas.file_tasks import (
     FileTaskScanRequest,
     FileTaskUndoResult,
 )
+from app.schemas.gmail import GmailDraftPrepareRequest, GmailDraftPrepareResponse
 from app.services.document_summary_task_service import document_summary_task_service
 from app.services.file_task_execution_service import file_task_execution_service
 from app.services.file_task_llm_planner_service import file_task_llm_planner_service
 from app.services.file_task_planner_service import file_task_planner_service
 from app.services.file_snapshot_service import file_snapshot_service
+from app.services.gmail_draft_planner import gmail_draft_planner
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -144,6 +146,17 @@ def complete_document_summary_task(request: DocumentSummaryCompleteRequest) -> D
     except Exception as error:
         logger.exception("Failed to record document summary completion")
         raise HTTPException(status_code=500, detail=f"Document summary completion failed: {error}") from error
+
+
+@router.post("/gmail/draft/prepare", response_model=GmailDraftPrepareResponse)
+def prepare_gmail_draft_task(request: GmailDraftPrepareRequest) -> GmailDraftPrepareResponse:
+    try:
+        return gmail_draft_planner.prepare(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare Gmail draft")
+        raise HTTPException(status_code=500, detail=f"Gmail draft preparation failed: {error}") from error
 
 
 @router.post("/file/{task_id}/execute", response_model=FileTaskExecutionResult)

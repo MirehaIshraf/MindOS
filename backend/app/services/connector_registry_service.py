@@ -194,6 +194,19 @@ CONNECTOR_DEFINITIONS = [
         event_source="github",
     ),
     ConnectorDefinition(
+        id="gmail",
+        name="Gmail",
+        type="gmail",
+        description="Connect Gmail using your own Google OAuth credentials.",
+        default_enabled=False,
+        configured_by_default=False,
+        supports_toggle=True,
+        supports_config=True,
+        supports_manual_import=False,
+        supports_live_events=False,
+        event_source=None,
+    ),
+    ConnectorDefinition(
         id="jira",
         name="Jira",
         type="jira",
@@ -210,7 +223,7 @@ CONNECTOR_DEFINITIONS = [
         id="email",
         name="Email",
         type="email",
-        description="Import selected email context.",
+        description="Connect an email MCP provider so MindOS can read email context.",
         default_enabled=False,
         configured_by_default=False,
         supports_toggle=True,
@@ -279,7 +292,8 @@ class ConnectorRegistryService:
         config = self.get_config_dict(definition.id)
         configured = (
             bool(config.get("token")) if definition.id == "github"
-            else bool(config.get("password")) if definition.id == "email"
+            else bool(config.get("credentials_configured")) if definition.id == "gmail"
+            else self._email_configured(config) if definition.id == "email"
             else definition.configured_by_default or bool(config)
         )
         events = self._events_for_source(definition.event_source)
@@ -289,7 +303,10 @@ class ConnectorRegistryService:
         last_seen_at = _latest_datetime([heartbeat_seen_at, last_event_at]) if definition.supports_live_events else None
         connected = self._connected(definition, enabled, configured, last_seen_at)
         status = self._status(definition, enabled, configured, connected, last_seen_at)
-        if definition.id in {"github", "email"} and enabled and configured and self._get_heartbeat(definition.id).get("last_error"):
+        if definition.id == "gmail":
+            gmail_heartbeat = self._get_heartbeat("gmail")
+            status = "connected" if gmail_heartbeat.get("connected") else "configured" if configured else "needs_configuration"
+        if definition.id in {"github", "gmail", "email"} and enabled and configured and self._get_heartbeat(definition.id).get("last_error"):
             status = "error"
         saved_sources = [
             source for source in self._source_repository.list_sources() if source.connector_type == definition.id
@@ -306,7 +323,11 @@ class ConnectorRegistryService:
             summary["last_import_at"] = latest_import[0].last_import_at.isoformat()
             summary["last_import_status"] = latest_import[0].last_import_status
         if config:
-            summary["configured_keys"] = sorted(key for key in config.keys() if key != "token")
+            summary["configured_keys"] = sorted(
+                key
+                for key in config.keys()
+                if key not in {"token", "api_key", "access_token", "refresh_token", "token_expires_at", "oauth_state"}
+            )
         if definition.id == "github":
             heartbeat = self._get_heartbeat("github")
             selected_repos = config.get("selected_repos") or []
@@ -323,12 +344,29 @@ class ConnectorRegistryService:
                     "last_error": heartbeat.get("last_error"),
                 }
             )
+        if definition.id == "gmail":
+            heartbeat = self._get_heartbeat("gmail")
+            summary.update(
+                {
+                    "credentials_configured": bool(config.get("credentials_configured")),
+                    "credential_file_name": config.get("credential_file_name"),
+                    "email_address": heartbeat.get("email_address"),
+                    "connected_at": heartbeat.get("connected_at"),
+                    "last_error": heartbeat.get("last_error"),
+                }
+            )
         if definition.id == "email":
             heartbeat = self._get_heartbeat("email")
             summary.update(
                 {
-                    "has_credentials": bool(config.get("password")),
-                    "account_email": config.get("email_address") or heartbeat.get("account_email"),
+                    "provider_type": config.get("provider_type", "email_mcp"),
+                    "provider_name": config.get("provider_name"),
+                    "api_base_url": config.get("api_base_url"),
+                    "auth_type": config.get("auth_type", "none"),
+                    "auth_header_name": config.get("auth_header_name", "Authorization"),
+                    "has_api_key": bool(config.get("api_key")),
+                    "account_label": config.get("account_label"),
+                    "capabilities": heartbeat.get("capabilities") or config.get("capabilities") or {},
                     "last_sync_at": heartbeat.get("last_sync_at"),
                     "last_error": heartbeat.get("last_error"),
                     "selected_scope": config.get("sync_scope", "recent"),
@@ -377,11 +415,14 @@ class ConnectorRegistryService:
         config = self.get_config_dict(definition.id)
         if definition.id == "github":
             config = self._safe_github_config(config)
+        elif definition.id == "gmail":
+            config = self._safe_gmail_config(config)
         elif definition.id == "email":
             config = self._safe_email_config(config)
         configured = (
             bool(self.get_config_dict("github").get("token")) if definition.id == "github"
-            else bool(self.get_config_dict("email").get("password")) if definition.id == "email"
+            else bool(self.get_config_dict("gmail").get("credentials_configured")) if definition.id == "gmail"
+            else self._email_configured(self.get_config_dict("email")) if definition.id == "email"
             else definition.configured_by_default or bool(config)
         )
         return ConnectorConfigResponse(
@@ -496,18 +537,24 @@ class ConnectorRegistryService:
             "sync_settings": config.get("sync_settings") or {},
         }
 
+    def _safe_gmail_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "credentials_configured": bool(config.get("credentials_configured")),
+            "credential_file_name": config.get("credential_file_name"),
+        }
+
     def _safe_email_config(self, config: dict[str, Any]) -> dict[str, Any]:
         return {
-            "provider": config.get("provider", "imap"),
-            "email_address": config.get("email_address") or "",
-            "imap_host": config.get("imap_host", "imap.gmail.com"),
-            "imap_port": config.get("imap_port", 993),
-            "imap_ssl": config.get("imap_ssl", True),
-            "username": config.get("username") or "",
-            "has_credentials": bool(config.get("password")),
+            "provider_type": config.get("provider_type", "email_mcp"),
+            "provider_name": config.get("provider_name", ""),
+            "api_base_url": config.get("api_base_url", ""),
+            "auth_type": config.get("auth_type", "none"),
+            "auth_header_name": config.get("auth_header_name", "Authorization"),
+            "account_label": config.get("account_label", ""),
+            "has_api_key": bool(config.get("api_key")),
+            "tool_mapping": config.get("tool_mapping") or {},
+            "capabilities": config.get("capabilities") or {},
             "sync_scope": config.get("sync_scope", "recent"),
-            "folder_name": config.get("folder_name", "INBOX"),
-            "max_items": config.get("max_items", 25),
         }
 
     def _events_for_source(self, source: str | None) -> list[Any]:
@@ -530,8 +577,10 @@ class ConnectorRegistryService:
             return False
         if definition.id == "github":
             return bool(self._get_heartbeat("github").get("username"))
+        if definition.id == "gmail":
+            return bool(self._get_heartbeat("gmail").get("connected"))
         if definition.id == "email":
-            return bool(self._get_heartbeat("email").get("account_email"))
+            return bool(self._get_heartbeat("email").get("connected"))
         if definition.supports_manual_import:
             return True
         if definition.supports_live_events and last_seen_at:
@@ -552,7 +601,7 @@ class ConnectorRegistryService:
             return "needs_configuration"
         if connected:
             return "connected"
-        if definition.id in {"github", "email"}:
+        if definition.id in {"github", "gmail", "email"}:
             return "configured"
         if definition.id in {"vscode", "browser"}:
             return "disconnected"
@@ -566,6 +615,16 @@ class ConnectorRegistryService:
             if definition.id == normalized:
                 return definition
         raise KeyError(f"Unknown connector: {connector_id}")
+
+    def _email_configured(self, config: dict[str, Any]) -> bool:
+        if str(config.get("provider_type") or "email_mcp") != "email_mcp":
+            return False
+        auth_type = str(config.get("auth_type") or "none")
+        return bool(
+            config.get("provider_name")
+            and config.get("api_base_url")
+            and (auth_type == "none" or config.get("api_key"))
+        )
 
     def _get_setting(self, key: str, default: Any) -> Any:
         initialize_database()

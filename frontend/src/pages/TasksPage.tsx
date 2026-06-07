@@ -1,10 +1,10 @@
-import { ChevronRight, FolderOpen, ListChecks, Play, Sparkles } from "lucide-react";
-import { KeyboardEvent, RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, FileText, FolderOpen, Github, ListChecks, Mail, Play, Search, Sparkles } from "lucide-react";
+import { KeyboardEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
-import { completeDocumentSummary, getErrorMessage, getModelSettings, prepareFileTaskPlan, scanFileTask } from "../services/api";
+import { completeDocumentSummary, createGmailDraft, getErrorMessage, getGmailStatus, getModelSettings, prepareFileTaskPlan, prepareGmailDraft, scanFileTask } from "../services/api";
 import {
   executeBrowserFilePlan,
   undoBrowserFilePlan,
@@ -25,9 +25,31 @@ import {
   validateBrowserFilePlan,
   type FileTaskIntent,
 } from "../services/fileTaskLlmPlanner";
-import type { DocumentSummaryPrepareResponse, DocumentSummaryStyle, FileOperation, FileSnapshotItem, FileSnapshotResponse, FileTaskPlan, ModelConfig } from "../types";
+import type { DocumentSummaryPrepareResponse, DocumentSummaryStyle, FileOperation, FileSnapshotItem, FileSnapshotResponse, FileTaskPlan, GmailDraftResponse, GmailStatusResponse, ModelConfig } from "../types";
 
-type TaskUiState = "resting" | "typing" | "context" | "document_options" | "plan";
+type TaskUiState = "resting" | "typing" | "context" | "document_options" | "plan" | "action_preview";
+type TaskActionType = "file.organize" | "document.summary" | "gmail.createDraft" | "gmail.search" | "memory.report" | "github.lookup" | "unsupported";
+
+type ClassifiedTaskAction = {
+  actionType: TaskActionType;
+  label: string;
+  supported: boolean;
+  reason?: string;
+};
+
+type PreparedAction = ClassifiedTaskAction & {
+  riskLevel: "low" | "medium" | "high";
+  requiresConfirmation: boolean;
+  sources: Array<{ type: string; status: "available" | "missing" | "connected" | "disconnected" }>;
+  preview?: {
+    to?: string;
+    subject?: string;
+    body?: string;
+    note?: string;
+    warning?: string;
+    sourceSummary?: string;
+  };
+};
 
 type CategorySummary = {
   label: string;
@@ -39,11 +61,12 @@ type ExecutionPhase = "idle" | "confirming" | "running" | "completed" | "undoing
 
 type RecentTaskItem = {
   id: string;
-  type: "file_organize" | "document_summary";
+  type: "file_organize" | "document_summary" | "gmail_draft";
   title: string;
   summary: string;
   status: "completed" | "partial" | "failed";
-  folderName: string;
+  folderName?: string;
+  contextName?: string;
   outputFileName?: string;
   createdAt: string;
   details: Record<string, number | string | boolean | null>;
@@ -95,6 +118,12 @@ export function TasksPage() {
   const [documentSelection, setDocumentSelection] = useState<DocumentSummarySelection | null>(null);
   const [documentSummary, setDocumentSummary] = useState<DocumentSummaryPrepareResponse | null>(null);
   const [documentReadResult, setDocumentReadResult] = useState<BrowserDocumentReadResult | null>(null);
+  const [preparedAction, setPreparedAction] = useState<PreparedAction | null>(null);
+  const [gmailStatus, setGmailStatus] = useState<GmailStatusResponse | null>(null);
+  const [gmailDraft, setGmailDraft] = useState({ to: "", subject: "", body: "" });
+  const [gmailDraftResult, setGmailDraftResult] = useState<GmailDraftResponse | null>(null);
+  const [gmailDraftLoading, setGmailDraftLoading] = useState(false);
+  const [gmailDraftMessage, setGmailDraftMessage] = useState<string | null>(null);
   const [summaryOutputFilename, setSummaryOutputFilename] = useState("mindos-summary.md");
   const [summaryFilenameWasEdited, setSummaryFilenameWasEdited] = useState(false);
   const [summaryOutputFormat, setSummaryOutputFormat] = useState<"markdown" | "text">("markdown");
@@ -122,10 +151,13 @@ export function TasksPage() {
 
   const visiblePath = browserFolder?.name || rootPath || inferredPathFromCommand(command) || "D:\\Downloads";
   const detectedIntent = useMemo(() => classifyFileTaskIntent(command.trim()), [command]);
+  const detectedAction = useMemo(() => classifyTaskAction(command.trim()), [command]);
+  const activeAction = preparedAction?.actionType ?? detectedAction.actionType;
+  const isFolderAction = activeAction === "file.organize" || activeAction === "document.summary";
   const hasMeaningfulCommand = command.trim().split(/\s+/).filter(Boolean).length >= 2;
-  const showIntentHint = (uiState === "typing" || (uiState === "context" && command.trim().length > 0)) && !hasMeaningfulCommand;
-  const showDetectedIntent = (uiState === "typing" || uiState === "context") && hasMeaningfulCommand;
-  const showContext = uiState === "context" || uiState === "document_options" || uiState === "plan";
+  const showIntentHint = isFolderAction && (uiState === "typing" || (uiState === "context" && command.trim().length > 0)) && !hasMeaningfulCommand;
+  const showDetectedIntent = (uiState === "typing" || uiState === "context" || uiState === "action_preview") && hasMeaningfulCommand;
+  const showContext = isFolderAction && (uiState === "context" || uiState === "document_options" || uiState === "plan");
   const commandValue = command.trim();
   const categories = useMemo(() => buildCategorySummary(scanResult?.files ?? []), [scanResult]);
 
@@ -149,6 +181,9 @@ export function TasksPage() {
     setDocumentSelection(null);
     setDocumentSummary(null);
     setDocumentReadResult(null);
+    setPreparedAction(null);
+    setGmailDraftResult(null);
+    setGmailDraftMessage(null);
     setCloudSummaryWarning(null);
     setSummarySaveMessage(null);
     setPrepareError(null);
@@ -189,10 +224,15 @@ export function TasksPage() {
       void handleScan(pathFromCommand);
       return;
     }
-    continueFromCommand();
+    void continueFromCommand();
   }
 
-  function continueFromCommand() {
+  async function continueFromCommand() {
+    const action = classifyTaskAction(command.trim());
+    if (!isFolderTaskAction(action.actionType)) {
+      await prepareGeneralAction(action);
+      return;
+    }
     const nextPath = rootPath || inferredPathFromCommand(command);
     if (nextPath) {
       setBrowserFolder(null);
@@ -203,7 +243,9 @@ export function TasksPage() {
   }
 
   function handleSuggestionClick(suggestion: string) {
-    setCommand(suggestion.toLowerCase());
+    const nextCommand = suggestion.toLowerCase();
+    const action = classifyTaskAction(nextCommand);
+    setCommand(nextCommand);
     setScanError(null);
     setFolderPickerMessage(null);
     resetPlan();
@@ -212,7 +254,7 @@ export function TasksPage() {
       setBrowserFolder(null);
       setScanSource("backend_path");
     }
-    setUiState("context");
+    setUiState(isFolderTaskAction(action.actionType) ? "context" : "typing");
   }
 
   function handleFolderSelect(path: string) {
@@ -368,6 +410,102 @@ export function TasksPage() {
     }
   }
 
+  async function prepareGeneralAction(action = classifyTaskAction(command.trim())) {
+    setPrepareError(null);
+    setPrepareStatus(null);
+    setFilePlan(null);
+    setDocumentSelection(null);
+    setDocumentSummary(null);
+    setGmailDraftResult(null);
+    setGmailDraftMessage(null);
+    if (action.actionType === "gmail.createDraft") {
+      setPrepareLoading(true);
+      let status: GmailStatusResponse | null = null;
+      try {
+        status = await getGmailStatus();
+        setGmailStatus(status);
+        const history = recentTasksFromLastDays(recentTasks, 7);
+        const selectedModel = await getSelectedChatModel();
+        const planned = await prepareGmailDraft({
+          instruction: command.trim(),
+          connected_email: status.email_address ?? null,
+          recent_tasks: history.map(toGmailDraftSourceItem),
+          model_id: selectedModel?.id ?? null,
+        });
+        const draft = {
+          to: planned.to || "",
+          subject: planned.subject,
+          body: planned.body,
+        };
+        setGmailDraft(draft);
+        setPreparedAction({
+          ...action,
+          supported: true,
+          riskLevel: "medium",
+          requiresConfirmation: true,
+          sources: [
+            { type: "gmail", status: status.connected ? "connected" : "disconnected" },
+            { type: "task_history", status: history.length ? "available" : "missing" },
+            { type: "memory", status: "available" },
+          ],
+          preview: {
+            ...draft,
+            note: history.length ? "Based on task history from the last 7 days." : "I can draft the email, but I did not find task history from the last 7 days.",
+            warning: [planned.planner_warning, ...planned.warnings].filter(Boolean).join(" "),
+            sourceSummary: planned.source_summary,
+          },
+        });
+      } catch (error) {
+        const history = recentTasksFromLastDays(recentTasks, 7);
+        const draft = buildGmailDraftPreview(command.trim(), history);
+        setGmailDraft(draft);
+        setPreparedAction({
+          ...action,
+          supported: true,
+          riskLevel: "medium",
+          requiresConfirmation: true,
+          sources: [
+            { type: "gmail", status: status?.connected ? "connected" : "disconnected" },
+            { type: "task_history", status: history.length ? "available" : "missing" },
+          ],
+          preview: {
+            ...draft,
+            note: history.length ? "Based on task history from the last 7 days." : "I can draft the email, but I did not find task history from the last 7 days.",
+            warning: `AI drafting was unavailable, so MindOS used a safe basic draft. ${getErrorMessage(error)}`,
+            sourceSummary: history.length ? `Used ${history.length} task history items from the last 7 days.` : "No recent task history was available.",
+          },
+        });
+      } finally {
+        setPrepareLoading(false);
+        setUiState("action_preview");
+      }
+      return;
+    }
+
+    if (action.actionType === "gmail.search" || action.actionType === "memory.report" || action.actionType === "github.lookup") {
+      setPreparedAction({
+        ...action,
+        riskLevel: "low",
+        requiresConfirmation: false,
+        sources: actionSourcesFor(action.actionType, recentTasks),
+        preview: {
+          note: previewNoteFor(action.actionType),
+        },
+      });
+      setUiState("action_preview");
+      return;
+    }
+
+    setPreparedAction({
+      ...action,
+      riskLevel: "low",
+      requiresConfirmation: false,
+      sources: [],
+      reason: action.reason || "MindOS cannot safely prepare this task yet.",
+    });
+    setUiState("action_preview");
+  }
+
   async function handlePrepareBrowserPlan() {
     setPrepareError(null);
     setPrepareLoading(true);
@@ -406,6 +544,44 @@ export function TasksPage() {
     } finally {
       setPrepareLoading(false);
       setPrepareStatus(null);
+    }
+  }
+
+  async function handleCreateGmailDraft() {
+    if (!preparedAction || preparedAction.actionType !== "gmail.createDraft") return;
+    if (!gmailStatus?.connected) {
+      setGmailDraftMessage("Gmail is not connected. Connect Gmail from Connectors first.");
+      return;
+    }
+    if (!gmailStatus.capabilities?.create_draft) {
+      setGmailDraftMessage("Gmail draft creation is not connected yet.");
+      return;
+    }
+    if (!gmailDraft.to.trim()) {
+      setGmailDraftMessage("Add a recipient before creating the Gmail draft.");
+      return;
+    }
+    setGmailDraftLoading(true);
+    setGmailDraftMessage(null);
+    try {
+      const result = await createGmailDraft(gmailDraft);
+      setGmailDraftResult(result);
+      setGmailDraftMessage("Gmail draft created. Nothing was sent.");
+      addRecentTask({
+        type: "gmail_draft",
+        title: "Created Gmail draft",
+        summary: `Drafted "${gmailDraft.subject}"`,
+        status: "completed",
+        contextName: gmailStatus.email_address || "Gmail",
+        details: {
+          draft_id: result.draft_id,
+          message_id: result.message_id ?? "",
+        },
+      });
+    } catch (error) {
+      setGmailDraftMessage(getErrorMessage(error));
+    } finally {
+      setGmailDraftLoading(false);
     }
   }
 
@@ -644,7 +820,7 @@ export function TasksPage() {
               if (uiState !== "typing") setUiState("typing");
             }}
             onKeyDown={handleCommandKeyDown}
-            onPrepare={continueFromCommand}
+            onPrepare={() => void continueFromCommand()}
           />
 
           {uiState === "resting" ? (
@@ -662,7 +838,7 @@ export function TasksPage() {
               }}
             />
           ) : null}
-          {showDetectedIntent ? <DetectedIntentChip intent={detectedIntent} /> : null}
+          {showDetectedIntent ? <DetectedActionChip action={detectedAction} fileIntent={detectedIntent} /> : null}
 
           {showContext ? (
             <TaskContextPicker
@@ -696,18 +872,18 @@ export function TasksPage() {
           {scanError ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{scanError}</p> : null}
           {prepareError ? <p className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">{prepareError}</p> : null}
           {prepareStatus ? <p className="rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{prepareStatus}</p> : null}
-          {scanResult ? <ScanSummary result={scanResult} categories={categories} stale={pathIsStale} source={scanSource} /> : null}
+          {isFolderAction && scanResult ? <ScanSummary result={scanResult} categories={categories} stale={pathIsStale} source={scanSource} /> : null}
 
           {uiState === "typing" && commandValue ? (
             <div className="flex justify-end">
-              <Button type="button" variant="primary" className="h-9 px-3" onClick={continueFromCommand}>
+              <Button type="button" variant="primary" className="h-9 px-3" onClick={() => void continueFromCommand()} loading={prepareLoading}>
                 <ChevronRight size={15} />
-                Continue
+                Prepare
               </Button>
             </div>
           ) : null}
 
-          {uiState === "context" ? (
+          {uiState === "context" && isFolderAction ? (
             <div className="flex justify-end">
               <Button type="button" variant="primary" className="h-9 px-3" onClick={() => void handlePrepare()} loading={prepareLoading} disabled={scanLoading}>
                 <ListChecks size={15} />
@@ -766,6 +942,24 @@ export function TasksPage() {
               }}
               onEdit={handleEdit}
               onSave={() => void handleSaveSummary()}
+            />
+          ) : null}
+          {uiState === "action_preview" && preparedAction ? (
+            <ActionPreviewRenderer
+              action={preparedAction}
+              gmailStatus={gmailStatus}
+              gmailDraft={gmailDraft}
+              gmailDraftResult={gmailDraftResult}
+              gmailDraftLoading={gmailDraftLoading}
+              gmailDraftMessage={gmailDraftMessage}
+              recentTasks={recentTasks}
+              onGmailDraftChange={setGmailDraft}
+              onCreateGmailDraft={() => void handleCreateGmailDraft()}
+              onEdit={() => setUiState("typing")}
+              onCancel={() => {
+                setPreparedAction(null);
+                setUiState(command.trim() ? "typing" : "resting");
+              }}
             />
           ) : null}
           {executionMessage ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{executionMessage}</p> : null}
@@ -888,6 +1082,283 @@ function DetectedIntentChip({ intent }: { intent: FileTaskIntent }) {
       <span className={intent.supported ? "text-violet-200" : "text-amber-200"}>{intent.label}</span>
       <span className="text-app-muted">·</span>
       <span className="text-app-muted">{detail}</span>
+    </div>
+  );
+}
+
+function DetectedActionChip({ action, fileIntent }: { action: ClassifiedTaskAction; fileIntent: FileTaskIntent }) {
+  const detail =
+    action.actionType === "file.organize"
+      ? fileIntent.intent === "move_category"
+        ? fileIntent.targetCategory
+        : fileIntent.intent === "create_folders"
+          ? fileIntent.folderNames.length ? fileIntent.folderNames.join(", ") : "Folders"
+          : fileIntent.intent === "rename_files"
+            ? "Not connected"
+            : "By type"
+      : action.actionType === "document.summary"
+        ? "Readable files"
+        : action.actionType === "gmail.createDraft"
+          ? "Draft only"
+          : action.actionType === "gmail.search"
+            ? "Email context"
+            : action.actionType === "memory.report"
+              ? "Memory context"
+              : action.actionType === "github.lookup"
+                ? "GitHub context"
+                : "Safe preview";
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-zinc-950/80 px-3 py-2 text-xs">
+      <span className={action.supported ? "text-violet-200" : "text-amber-200"}>{action.label}</span>
+      <span className="text-app-muted">-</span>
+      <span className="text-app-muted">{detail}</span>
+    </div>
+  );
+}
+
+function ActionPreviewRenderer({
+  action,
+  gmailStatus,
+  gmailDraft,
+  gmailDraftResult,
+  gmailDraftLoading,
+  gmailDraftMessage,
+  recentTasks,
+  onGmailDraftChange,
+  onCreateGmailDraft,
+  onEdit,
+  onCancel,
+}: {
+  action: PreparedAction;
+  gmailStatus: GmailStatusResponse | null;
+  gmailDraft: { to: string; subject: string; body: string };
+  gmailDraftResult: GmailDraftResponse | null;
+  gmailDraftLoading: boolean;
+  gmailDraftMessage: string | null;
+  recentTasks: RecentTaskItem[];
+  onGmailDraftChange: (draft: { to: string; subject: string; body: string }) => void;
+  onCreateGmailDraft: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  if (action.actionType === "gmail.createDraft") {
+    return (
+      <GmailDraftPreview
+        action={action}
+        gmailStatus={gmailStatus}
+        draft={gmailDraft}
+        result={gmailDraftResult}
+        loading={gmailDraftLoading}
+        message={gmailDraftMessage}
+        onDraftChange={onGmailDraftChange}
+        onCreateDraft={onCreateGmailDraft}
+        onEdit={onEdit}
+        onCancel={onCancel}
+      />
+    );
+  }
+  if (action.actionType === "gmail.search") {
+    return <LookupPreview icon={<Mail size={16} />} action={action} title="Search Gmail context" onEdit={onEdit} onCancel={onCancel} />;
+  }
+  if (action.actionType === "memory.report") {
+    return <ReportPreview action={action} recentTasks={recentTasks} onEdit={onEdit} onCancel={onCancel} />;
+  }
+  if (action.actionType === "github.lookup") {
+    return <LookupPreview icon={<Github size={16} />} action={action} title="Look up GitHub context" onEdit={onEdit} onCancel={onCancel} />;
+  }
+  return <UnsupportedPreview action={action} onEdit={onEdit} onCancel={onCancel} />;
+}
+
+function GmailDraftPreview({
+  action,
+  gmailStatus,
+  draft,
+  result,
+  loading,
+  message,
+  onDraftChange,
+  onCreateDraft,
+  onEdit,
+  onCancel,
+}: {
+  action: PreparedAction;
+  gmailStatus: GmailStatusResponse | null;
+  draft: { to: string; subject: string; body: string };
+  result: GmailDraftResponse | null;
+  loading: boolean;
+  message: string | null;
+  onDraftChange: (draft: { to: string; subject: string; body: string }) => void;
+  onCreateDraft: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  const connected = Boolean(gmailStatus?.connected);
+  const createDraftAvailable = Boolean(gmailStatus?.capabilities?.create_draft);
+  const disabledReason = !connected
+    ? "Gmail is not connected."
+    : !createDraftAvailable
+      ? "Gmail draft creation is not connected yet."
+      : !draft.to.trim()
+        ? "Add a recipient before creating the Gmail draft."
+        : !draft.subject.trim()
+          ? "Add a subject before creating the Gmail draft."
+          : !draft.body.trim()
+            ? "Add draft body text before creating the Gmail draft."
+            : "";
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
+            <Mail size={16} />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-app-text">Gmail draft preview</h2>
+            <p className="mt-1 text-xs text-app-muted">{action.preview?.note || "Review this draft before creating it in Gmail."}</p>
+          </div>
+        </div>
+        <Badge variant={connected ? "success" : "warning"}>{connected ? `Connected${gmailStatus?.email_address ? ` as ${gmailStatus.email_address}` : ""}` : "Gmail disconnected"}</Badge>
+      </div>
+
+      {!connected ? (
+        <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Gmail is not connected. Connect Gmail from Connectors first, then return here to create the draft. No folder is needed for this task.
+        </p>
+      ) : null}
+      {action.preview?.warning ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{action.preview.warning}</p> : null}
+      {action.preview?.sourceSummary ? <p className="mt-3 text-xs text-app-muted">Source: {action.preview.sourceSummary}</p> : null}
+
+      <div className="mt-3 grid gap-3">
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>To</span>
+          <input
+            value={draft.to}
+            onChange={(event) => onDraftChange({ ...draft, to: event.target.value })}
+            placeholder={gmailStatus?.email_address || "recipient@example.com"}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+          />
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Subject</span>
+          <input
+            value={draft.subject}
+            onChange={(event) => onDraftChange({ ...draft, subject: event.target.value })}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+          />
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Body</span>
+          <textarea
+            value={draft.body}
+            onChange={(event) => onDraftChange({ ...draft, body: event.target.value })}
+            rows={8}
+            className="w-full resize-none rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-xs leading-5 text-app-text outline-none focus:border-violet-500/60"
+          />
+        </label>
+      </div>
+
+      <SourceStatusList sources={action.sources} />
+      {disabledReason ? <p className="mt-3 text-xs text-amber-200">{disabledReason}</p> : null}
+      {message ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{message}</p> : null}
+      {result ? <p className="mt-2 text-xs text-app-muted">Draft id: {result.draft_id}</p> : null}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit request
+        </Button>
+        <Button type="button" variant="primary" className="h-9 px-3" loading={loading} disabled={Boolean(disabledReason)} onClick={onCreateDraft}>
+          Create Gmail Draft
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function LookupPreview({ icon, action, title, onEdit, onCancel }: { icon: ReactNode; action: PreparedAction; title: string; onEdit: () => void; onCancel: () => void }) {
+  return (
+    <DetectedActionCard icon={icon} action={action} title={title} onEdit={onEdit} onCancel={onCancel}>
+      <p className="text-xs text-app-muted">{action.preview?.note}</p>
+      <p className="mt-2 text-xs text-app-muted">This is a context lookup preview. MindOS will use connected memory/context instead of asking for a folder.</p>
+    </DetectedActionCard>
+  );
+}
+
+function ReportPreview({ action, recentTasks, onEdit, onCancel }: { action: PreparedAction; recentTasks: RecentTaskItem[]; onEdit: () => void; onCancel: () => void }) {
+  const lastWeek = recentTasksFromLastDays(recentTasks, 7);
+  return (
+    <DetectedActionCard icon={<FileText size={16} />} action={action} title="Prepare memory report" onEdit={onEdit} onCancel={onCancel}>
+      <p className="text-xs text-app-muted">{action.preview?.note}</p>
+      <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+        <p className="text-xs font-medium text-app-text">Sources</p>
+        <p className="mt-1 text-xs text-app-muted">
+          {lastWeek.length ? `${lastWeek.length} recent task items found from the last 7 days.` : "No task history found from the last 7 days. MindOS can still use Memory when the report flow is connected."}
+        </p>
+      </div>
+    </DetectedActionCard>
+  );
+}
+
+function UnsupportedPreview({ action, onEdit, onCancel }: { action: PreparedAction; onEdit: () => void; onCancel: () => void }) {
+  return (
+    <DetectedActionCard icon={<Search size={16} />} action={action} title={action.label} onEdit={onEdit} onCancel={onCancel}>
+      <p className="text-xs text-amber-100">{action.reason || "MindOS cannot safely prepare this request yet."}</p>
+    </DetectedActionCard>
+  );
+}
+
+function DetectedActionCard({
+  icon,
+  action,
+  title,
+  children,
+  onEdit,
+  onCancel,
+}: {
+  icon: ReactNode;
+  action: PreparedAction;
+  title: string;
+  children: ReactNode;
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">{icon}</span>
+          <div>
+            <h2 className="text-sm font-semibold text-app-text">{title}</h2>
+            <p className="mt-1 text-xs text-app-muted">{action.requiresConfirmation ? "Preview first. Confirmation required." : "Preview only for now."}</p>
+          </div>
+        </div>
+        <Badge variant={action.supported ? "info" : "warning"}>{action.label}</Badge>
+      </div>
+      <div className="mt-3">{children}</div>
+      <SourceStatusList sources={action.sources} />
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit request
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SourceStatusList({ sources }: { sources: PreparedAction["sources"] }) {
+  if (!sources.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {sources.map((source) => (
+        <span key={`${source.type}:${source.status}`} className="rounded-full border border-app-border px-2.5 py-1 text-[11px] text-app-muted">
+          {source.type.replace(/_/g, " ")}: <span className={source.status === "missing" || source.status === "disconnected" ? "text-amber-200" : "text-violet-200"}>{source.status}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -1422,6 +1893,12 @@ function ExecutionResultCard({
 
 function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
   if (!tasks.length) return null;
+  function taskBadge(task: RecentTaskItem) {
+    if (task.type === "document_summary") return "Summary";
+    if (task.type === "gmail_draft") return "Gmail draft";
+    return "File task";
+  }
+
   return (
     <Card className="mt-4 space-y-3 p-4">
       <div className="flex items-center justify-between gap-3">
@@ -1440,8 +1917,8 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
                 <p className="mt-1 text-xs text-app-muted">{task.summary}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant={task.type === "document_summary" ? "success" : "default"}>
-                  {task.type === "document_summary" ? "Summary" : "File task"}
+                <Badge variant={task.type === "document_summary" ? "success" : task.type === "gmail_draft" ? "info" : "default"}>
+                  {taskBadge(task)}
                 </Badge>
                 <Badge variant={task.status === "completed" ? "success" : task.status === "partial" ? "warning" : "danger"}>
                   {task.status}
@@ -1449,7 +1926,7 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
               </div>
             </div>
             <p className="mt-2 text-[11px] text-app-muted">
-              {task.folderName}
+              {task.folderName || task.contextName || "Task"}
               {task.outputFileName ? ` · ${task.outputFileName}` : ""}
               {" · "}
               {formatTimestamp(task.createdAt)}
@@ -1549,6 +2026,136 @@ function CompactList({
   );
 }
 
+function classifyTaskAction(instruction: string): ClassifiedTaskAction {
+  const text = instruction.toLowerCase().trim();
+  if (!text) {
+    return { actionType: "file.organize", label: "Organize folder", supported: true };
+  }
+  if (/\b(delete|remove|erase|wipe|destroy)\b/.test(text)) {
+    return {
+      actionType: "unsupported",
+      label: "Unsupported",
+      supported: false,
+      reason: "MindOS cannot safely prepare destructive tasks from the Tasks page.",
+    };
+  }
+  if (/\b(gmail|email|mail)\b/.test(text) && /\b(draft|write|compose|create)\b/.test(text)) {
+    return { actionType: "gmail.createDraft", label: "Create Gmail draft", supported: true };
+  }
+  if (/\b(gmail|email|mail)\b/.test(text) && /\b(search|find|look up|lookup|recent|unread|summarize)\b/.test(text)) {
+    return { actionType: "gmail.search", label: "Search email", supported: true };
+  }
+  if (/\b(github|pull request|pr|issue|commit|repo|repository)\b/.test(text)) {
+    return { actionType: "github.lookup", label: "GitHub lookup", supported: true };
+  }
+  if (/\b(report|recap|summary of|summarize my|last 7 days|past week|weekly)\b/.test(text) && /\b(task|tasks|work|memory|activity)\b/.test(text)) {
+    return { actionType: "memory.report", label: "Memory report", supported: true };
+  }
+  if (/\b(summarize|summary|read|notes|report)\b/.test(text) && /\b(document|documents|pdf|pdfs|docx|markdown|md|txt|text files?|files?)\b/.test(text)) {
+    return { actionType: "document.summary", label: "Summarize documents", supported: true };
+  }
+  if (/\b(rename|renaming)\b/.test(text)) {
+    return {
+      actionType: "unsupported",
+      label: "Rename files",
+      supported: false,
+      reason: "Rename execution is not connected yet. File organization and document summaries are available.",
+    };
+  }
+  if (/\b(folder|file|files|downloads|documents|desktop|project|projects|pdf|pdfs|image|images|installer|installers|move|organize|sort|create folders?)\b/.test(text)) {
+    return { actionType: "file.organize", label: "Organize folder", supported: true };
+  }
+  return {
+    actionType: "unsupported",
+    label: "Unsupported",
+    supported: false,
+    reason: "MindOS cannot safely prepare this task yet.",
+  };
+}
+
+function isFolderTaskAction(actionType: TaskActionType) {
+  return actionType === "file.organize" || actionType === "document.summary";
+}
+
+function recentTasksFromLastDays(tasks: RecentTaskItem[], days: number) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return tasks.filter((task) => {
+    const created = new Date(task.createdAt).getTime();
+    return Number.isFinite(created) && created >= cutoff;
+  });
+}
+
+function buildGmailDraftPreview(instruction: string, history: RecentTaskItem[]) {
+  const grouped = groupRecentTasksForEmail(history);
+  const taskText = grouped || "I do not have enough recent task history available here to list specific completed items.";
+  return {
+    to: "",
+    subject: "Summary of my last 7 days of tasks",
+    body: `Hi,\n\nHere is a short summary of my work from the last 7 days:\n\n${taskText}\n\nPlease let me know if you need more details.\n\nBest regards,`,
+  };
+}
+
+function toGmailDraftSourceItem(task: RecentTaskItem) {
+  return {
+    type: task.type,
+    title: task.title,
+    summary: task.summary,
+    status: task.status,
+    created_at: task.createdAt,
+    context_name: task.folderName || task.contextName || null,
+    output_file_name: task.outputFileName || null,
+    details: task.details,
+  };
+}
+
+function groupRecentTasksForEmail(history: RecentTaskItem[]) {
+  if (!history.length) return "";
+  const documentSummaries = history.filter((task) => task.type === "document_summary");
+  const fileTasks = history.filter((task) => task.type === "file_organize");
+  const gmailDrafts = history.filter((task) => task.type === "gmail_draft");
+  const lines: string[] = [];
+  if (documentSummaries.length) {
+    const saved = documentSummaries.map((task) => task.outputFileName).filter(Boolean);
+    lines.push(`Document summaries: I created ${documentSummaries.length} summary document${documentSummaries.length === 1 ? "" : "s"}.`);
+    if (saved.length) lines.push(`Saved files included ${saved.slice(0, 5).join(", ")}.`);
+  }
+  if (fileTasks.length) {
+    const moved = fileTasks.reduce((sum, task) => sum + Number(task.details.moved_files || 0), 0);
+    lines.push(`File organization: I organized ${fileTasks.length} folder task${fileTasks.length === 1 ? "" : "s"}${moved ? ` and moved ${moved} files` : ""}.`);
+  }
+  if (gmailDrafts.length) {
+    lines.push(`Email workflow: I created ${gmailDrafts.length} Gmail draft${gmailDrafts.length === 1 ? "" : "s"} for review.`);
+  }
+  const other = history.filter((task) => !["document_summary", "file_organize", "gmail_draft"].includes(task.type));
+  for (const task of other.slice(0, 4)) {
+    lines.push(`${task.title}: ${task.summary}`);
+  }
+  return lines.join("\n");
+}
+
+function actionSourcesFor(actionType: TaskActionType, recentTasks: RecentTaskItem[]): PreparedAction["sources"] {
+  if (actionType === "gmail.search") {
+    return [{ type: "gmail", status: "available" }];
+  }
+  if (actionType === "github.lookup") {
+    return [{ type: "github", status: "available" }];
+  }
+  if (actionType === "memory.report") {
+    return [
+      { type: "memory", status: "available" },
+      { type: "task_history", status: recentTasksFromLastDays(recentTasks, 7).length ? "available" : "missing" },
+    ];
+  }
+  return [];
+}
+
+function previewNoteFor(actionType: TaskActionType) {
+  if (actionType === "gmail.search") return "Gmail context lookup will be connected through Chat/Tasks commands. No email will be sent or modified.";
+  if (actionType === "github.lookup") return "GitHub lookup uses read-only synced repository context. No GitHub write actions are available here.";
+  if (actionType === "memory.report") return "MindOS can prepare a report from task history and Memory without asking for a folder.";
+  return "MindOS will prepare a safe preview first.";
+}
+
 function loadRecentTasks(): RecentTaskItem[] {
   try {
     const raw = localStorage.getItem(recentTasksStorageKey);
@@ -1560,10 +2167,9 @@ function loadRecentTasks(): RecentTaskItem[] {
         return (
           item &&
           typeof item.id === "string" &&
-          (item.type === "file_organize" || item.type === "document_summary") &&
+          (item.type === "file_organize" || item.type === "document_summary" || item.type === "gmail_draft") &&
           typeof item.title === "string" &&
           typeof item.summary === "string" &&
-          typeof item.folderName === "string" &&
           typeof item.createdAt === "string"
         );
       })

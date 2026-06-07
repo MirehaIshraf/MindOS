@@ -127,7 +127,8 @@ Before adding a new feature:
 - File/log/git imports must be local-only.
 - Git connector must be read-only.
 - GitHub connector is read-only until explicitly expanded. Do not add GitHub write actions such as creating issues, commenting, merging, pushing, or updating pull requests unless requested.
-- Email connector is read-only until explicitly expanded. Do not add email send, reply, forward, delete, archive, mark-read/unread, or draft actions unless explicitly requested. Do not store full email bodies or attachment contents. Do not log or expose credentials.
+- Email connector is provider-agnostic MCP-style and read-only until explicitly expanded. Do not hardcode Gmail OAuth, Gmail app passwords, IMAP, Samsung Knox, Composio, Zapier, or any single provider unless explicitly requested. Do not add email send, reply, forward, delete, archive, mark-read/unread, or draft actions unless explicitly requested. Do not store full email bodies, attachment contents, API keys, or tokens. Do not log or expose email provider credentials.
+- Gmail connector is a separate explicit local OAuth connector. It must use user-uploaded Google OAuth desktop credentials, localhost callback, and only `gmail.compose` plus `gmail.readonly` scopes. Never request broad Gmail full-access scopes, never expose client secrets/tokens to the frontend, and never send Gmail messages without explicit user confirmation.
 - External collectors should use the external ingestion API.
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
 - VSCode connector should behave like an installed extension, not only a debug Extension Development Host.
@@ -156,6 +157,10 @@ LLM-generated file task plans must always be validated before preview or executi
 Document summary tasks may read selected safe text documents from a browser-selected folder, but must not modify originals, overwrite output files, store full extracted text in memory, or execute files.
 Document summary PDF support is selectable-text extraction only. Do not add OCR or scanned-PDF processing unless explicitly requested.
 Generated document summary filenames must be sanitized, should use meaningful inferred topics when possible, and must never overwrite existing files.
+
+Tasks must render action-specific workflows. Do not make the Tasks page file-system-first for every command: folder picker, scan, and file plan controls should appear only for file organization and document summary actions. Gmail draft tasks should show an editable draft preview and create a draft only after user confirmation; never show a Send button in the task flow.
+
+Email actions must create drafts only unless send support is explicitly requested later. Draft content must be generated from provided facts only, previewed, and editable before creation. Do not index Gmail draft bodies or store email provider credentials in Memory.
 
 Do not create memory events for operational file tasks. File organize, move, copy, rename, create-folder, cleanup, scan, prepare, execute, and undo activity belongs in Task History only. Only completed document summary tasks should create indexed Memory events, and those events must stay lightweight.
 
