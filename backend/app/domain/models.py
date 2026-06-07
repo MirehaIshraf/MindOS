@@ -119,11 +119,33 @@ class Relationship(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class SkillStep(BaseModel):
+    step_index: int
+    # Semantic action type — set by the LLM organiser
+    action: str = "click"  # click | type | hotkey | navigate_url | open_app | key | scroll | focus | close_window | switch_window
+    description: str = ""  # LLM-generated human-readable description
+    app_name: str = ""
+    window_title: str = ""
+    element_type: str = ""
+    element_name: str = ""
+    # Action-specific payload fields
+    text: str = ""           # text to type (type / navigate_url)
+    url: str = ""            # destination URL (navigate_url)
+    keys: list[str] = Field(default_factory=list)   # hotkey combo e.g. ["ctrl","t"]
+    value: str = ""          # legacy key name field
+    coordinates: dict[str, int] = Field(default_factory=dict)
+    screenshot_b64: str = ""  # context screenshot (may be empty)
+    is_destructive: bool = False
+    requires_confirmation: bool = False
+
+
 class Playbook(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: str
     description: str
-    steps: list[str] = Field(default_factory=list)
+    steps: list[SkillStep] = Field(default_factory=list)
+    run_count: int = 0
+    last_run_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

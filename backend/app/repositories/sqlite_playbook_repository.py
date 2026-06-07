@@ -1,11 +1,25 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 
 from app.core.database import PlaybookRecord, get_session_factory, initialize_database
-from app.domain.models import Playbook
+from app.domain.models import Playbook, SkillStep
 from app.repositories.base import PlaybookRepository
-from app.repositories.sqlite_utils import dumps_json, loads_json
+
+
+def _serialize_steps(steps: list[SkillStep]) -> str:
+    return json.dumps([s.model_dump() for s in steps])
+
+
+def _deserialize_steps(raw: str | None) -> list[SkillStep]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return [SkillStep(**item) for item in data]
+    except Exception:
+        return []
 
 
 class SQLitePlaybookRepository(PlaybookRepository):
@@ -22,7 +36,7 @@ class SQLitePlaybookRepository(PlaybookRepository):
                     name=playbook.name,
                     description=playbook.description,
                     trigger_phrases_json="[]",
-                    steps_json=dumps_json(playbook.steps),
+                    steps_json=_serialize_steps(playbook.steps),
                     run_count=0,
                     last_run_at=None,
                     created_at=playbook.created_at,
@@ -32,7 +46,7 @@ class SQLitePlaybookRepository(PlaybookRepository):
             session.commit()
         return playbook
 
-    def create(self, name: str, description: str = "", steps: list[str] | None = None) -> Playbook:
+    def create(self, name: str, description: str = "", steps: list[SkillStep] | None = None) -> Playbook:
         return self.add(Playbook(name=name, description=description, steps=steps or []))
 
     def list(self) -> list[Playbook]:
@@ -55,7 +69,11 @@ class SQLitePlaybookRepository(PlaybookRepository):
             if "description" in updates:
                 record.description = updates["description"]
             if "steps" in updates:
-                record.steps_json = dumps_json(updates["steps"])
+                record.steps_json = _serialize_steps(updates["steps"])
+            if "run_count" in updates:
+                record.run_count = updates["run_count"]
+            if "last_run_at" in updates:
+                record.last_run_at = updates["last_run_at"]
             record.updated_at = datetime.now(timezone.utc)
             session.commit()
             return self._to_playbook(record)
@@ -83,6 +101,8 @@ class SQLitePlaybookRepository(PlaybookRepository):
             id=record.id,
             name=record.name,
             description=record.description or "",
-            steps=loads_json(record.steps_json, []),
+            steps=_deserialize_steps(record.steps_json),
+            run_count=record.run_count or 0,
+            last_run_at=record.last_run_at,
             created_at=record.created_at,
         )

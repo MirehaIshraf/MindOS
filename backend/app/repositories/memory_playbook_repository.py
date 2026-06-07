@@ -1,4 +1,4 @@
-from app.domain.models import Playbook
+from app.domain.models import Playbook, SkillStep
 from app.repositories.base import PlaybookRepository
 
 
@@ -10,7 +10,7 @@ class MemoryPlaybookRepository(PlaybookRepository):
         self._playbooks[playbook.id] = playbook
         return playbook
 
-    def create(self, name: str, description: str = "", steps: list[str] | None = None) -> Playbook:
+    def create(self, name: str, description: str = "", steps: list[SkillStep] | None = None) -> Playbook:
         return self.add(Playbook(name=name, description=description, steps=steps or []))
 
     def list(self) -> list[Playbook]:
