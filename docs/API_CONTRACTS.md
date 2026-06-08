@@ -114,7 +114,10 @@ Preferred browser event types:
 - `POST /connectors/gmail/test`: refreshes token if needed and calls Gmail profile. Returns connected status and email address.
 - `GET /connectors/gmail/recent?limit=5`: reads recent Gmail message metadata/snippets only. It does not fetch full message bodies or attachments.
 - `POST /connectors/gmail/drafts/test`: creates a Gmail draft addressed to the connected account. It never sends the draft.
-- `POST /connectors/gmail/drafts`: creates a Gmail draft using `{ "to": "...", "subject": "...", "body": "..." }`. It never sends the draft.
+- `POST /connectors/gmail/drafts`: creates a Gmail draft using `{ "to": "...", "cc": [], "bcc": [], "subject": "...", "body": "..." }`. It never sends the draft.
+- `POST /connectors/gmail/send`: sends a Gmail message only when Gmail is connected, Gmail `send_email` capability is available, recipient/subject/body are present, and `{ "confirmation": true }` is provided. Request:
+  `{ "to": ["person@example.com"], "cc": [], "bcc": [], "subject": "...", "body": "...", "confirmation": true }`.
+  Missing confirmation returns a JSON error. Gmail credentials/tokens and message bodies are not stored in Memory.
 - `POST /connectors/gmail/drafts/{draft_id}/send`: sends an existing Gmail draft. The frontend must show explicit confirmation before calling this endpoint.
 - `POST /connectors/gmail/disconnect`: deletes `token.json`, keeps credentials, and marks Gmail disconnected.
 - `DELETE /connectors/gmail/credentials`: deletes local Gmail credentials and token state.
@@ -122,7 +125,9 @@ Preferred browser event types:
 - `POST /connectors/email/config`: save or replace provider-agnostic MCP config. Request:
   `{ "provider_type": "email_mcp", "provider_name": "Corporate Email MCP", "api_base_url": "https://email-mcp.company.com", "auth_type": "bearer", "auth_header_name": "Authorization", "api_key": "...", "account_label": "work email", "tool_mapping": { "test": "email.test", "search": "email.search", "get": "email.get", "list_folders": "email.list_folders" } }`.
   Use `api_base_url: "mock"` and `auth_type: "none"` for demo mode. Passing an empty `api_key` clears the saved credential. Credentials are not returned.
-- `POST /connectors/email/test`: tests the configured MCP provider and discovers capabilities through `/health`, `/status`, `/capabilities`, `/email/capabilities`, `/tools/list`, or configured tool calls. Returns normalized capability booleans. Send/delete/modify capabilities may be reported but remain disabled in MindOS.
+- `POST /connectors/email/test`: tests the configured MCP provider and discovers capabilities through `/health`, `/status`, `/capabilities`, `/email/capabilities`, `/tools/list`, or configured tool calls. Returns normalized capability booleans:
+  `{ "read_email": true, "search_email": true, "create_draft": true, "send_email": false, "reply_email": false }`.
+  Older provider names such as `search_emails`, `send`, `gmail.send`, `email.send`, and `createDraft` are normalized into the exact fields above. Delete/modify capabilities may be detected but remain disabled in MindOS.
 - `POST /connectors/email/connect`: enables the configured/tested Email MCP connector. Returns connected status.
 - `POST /connectors/email/disconnect`: disables the Email MCP connector. Provider config and synced memory events remain. Returns `{ "status": "disconnected", "message": "..." }`.
 - `GET /connectors/email/capabilities`: refreshes normalized provider capabilities without creating Memory events.
@@ -134,6 +139,15 @@ Preferred browser event types:
   Response:
   `{ "ok": true, "draft_id": "...", "url": null, "message": "Draft created." }`.
   The adapter tries normalized REST `/email/drafts` and MCP tool names such as `email.create_draft`, `gmail.create_draft`, `gmail.draft`, and `create_draft`. It never sends email and does not create Memory events.
+- `POST /connectors/email/search`: read-only search/preview through the connected MCP email provider. Request:
+  `{ "scope": "search", "query": "deployment", "max_items": 10 }`.
+  Response includes normalized `messages` with id/thread id, subject, sender, recipients, date, snippet/body excerpt, labels/folder, attachment metadata, and URL. It does not create Memory events by itself.
+- `POST /connectors/email/send`: send a new email through a connected MCP email provider only when `send_email` capability is available and `{ "confirmation": true }` is present. Request:
+  `{ "to": "person@example.com", "subject": "...", "body": "...", "cc": [], "bcc": [], "confirmation": true }`.
+  It validates connected state, `send_email`, confirmation, recipient, subject, and body. Missing confirmation returns `400` with `Email send requires confirmation.` Providers without send return `409` with `This email connector does not support sending.` It does not delete/archive/mark messages and does not create Memory events. Mock providers return a `mock_sent_...` message id and do not send real email.
+- `POST /connectors/email/reply-draft`: create a reply draft through a connected MCP email provider only when `reply_email` capability is available. Request:
+  `{ "message_id": "...", "body": "...", "to": "", "subject": "" }`.
+  It creates a draft only and does not send.
 - `DELETE /connectors/email/events`: clears Email memory events and related relationships/vectors only. It does not clear provider config or credentials.
 - `GET /connectors/{connector_id}`: one connector status response.
 - `POST /connectors/{connector_id}/toggle`: enable/disable a connector with `{ "enabled": true }`.
@@ -196,6 +210,12 @@ File System Task Adapter routes:
 - `POST /tasks/gmail/draft/prepare`: prepare an editable Gmail draft preview from user instruction and recent task-history facts. Request:
   `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "model_id": null }`.
   Response includes `to`, `subject`, `body`, `tone`, `source_summary`, warnings, model/provider metadata, and an optional planner warning. The selected LLM returns structured JSON when available; otherwise MindOS returns a clean deterministic fallback. The endpoint does not create a Gmail draft, send email, or create Memory events.
+- `GET /tasks/actions/capabilities`: returns the action capability registry used by Tasks previews. Capabilities include `gmail.read`, `gmail.createDraft`, `gmail.searchEmails`, `gmail.summarizeEmails`, `gmail.sendEmail`, `gmail.send`, `gmail.replyDraft`, `github.read`, `github.createIssue`, `github.createPullRequest`, `git.status`, `git.diff`, `git.commit`, and `git.push`. Each record includes `available`, `provider`, `risk_level`, `requires_confirmation`, and optional `reason`.
+- `POST /tasks/actions/execute`: execute one prepared action after explicit user confirmation. Request:
+  `{ "action_id": "action_...", "action_type": "gmail.createDraft", "preview": { "to": "person@example.com", "subject": "...", "body": "..." }, "confirmation": true }`.
+  Response:
+  `{ "ok": true, "status": "completed", "result": { "provider": "gmail", "draft_id": "...", "sent": false }, "message": "Draft created in Gmail. It was not sent." }`.
+  The endpoint rejects missing confirmation, unsupported actions, missing capabilities, and invalid preview payloads. Gmail task actions route through Gmail connector capabilities and Gmail-specific draft/send routes. Email MCP remains separate and is not used for Gmail POC tasks. Gmail send requires Gmail `send_email` capability and confirmation. GitHub write actions, local Git commit, and Git push remain disabled.
 - `POST /tasks/file/{task_id}/execute`: execute a prepared plan only when `{ "confirmation": true }` is provided.
 - `POST /tasks/file/{task_id}/undo`: run safe undo operations when available.
 - `GET /tasks/file/{task_id}`: fetch file task plan, execution result, and undo state.

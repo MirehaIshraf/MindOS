@@ -565,6 +565,62 @@ export type TaskHistoryResponse = {
   total: number;
 };
 
+export type ActionRiskLevel = "safe" | "low" | "medium" | "high";
+
+export type ActionCapability = {
+  available: boolean;
+  provider: string;
+  risk_level: ActionRiskLevel;
+  requires_confirmation: boolean;
+  reason?: string | null;
+};
+
+export type ActionCapabilityRegistry = {
+  capabilities: Record<string, ActionCapability>;
+};
+
+export type PreparedTaskAction = {
+  id: string;
+  action_type:
+    | "gmail.createDraft"
+    | "gmail.searchEmails"
+    | "gmail.summarizeEmails"
+    | "gmail.sendEmail"
+    | "gmail.sendDraft"
+    | "gmail.replyDraft"
+    | "git.commit"
+    | "git.push"
+    | "github.createIssue"
+    | "github.createPullRequest"
+    | "file.organize"
+    | "document.summary"
+    | "unsupported";
+  title: string;
+  summary: string;
+  risk_level: ActionRiskLevel;
+  requires_confirmation: boolean;
+  can_execute: boolean;
+  blocked_reasons: string[];
+  missing_requirements: string[];
+  preview: Record<string, unknown>;
+  sources: Array<Record<string, unknown>>;
+  created_at: string;
+};
+
+export type TaskActionExecuteRequest = {
+  action_id: string;
+  action_type: PreparedTaskAction["action_type"];
+  preview: Record<string, unknown>;
+  confirmation: boolean;
+};
+
+export type TaskActionExecuteResponse = {
+  ok: boolean;
+  status: "completed" | "failed" | "partial";
+  result: Record<string, unknown>;
+  message: string;
+};
+
 export type FileSnapshotItem = {
   name: string;
   path: string;
@@ -1064,7 +1120,8 @@ export type GmailStatusResponse = {
     read_email?: boolean;
     search_email?: boolean;
     create_draft?: boolean;
-    send_email?: boolean;
+  send_email?: boolean;
+  reply_email?: boolean;
   };
 };
 
@@ -1083,6 +1140,8 @@ export type GmailTestResponse = {
 
 export type GmailDraftRequest = {
   to: string;
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   body: string;
 };
@@ -1091,6 +1150,22 @@ export type GmailDraftResponse = {
   status: string;
   draft_id: string;
   message_id?: string | null;
+  message: string;
+};
+
+export type GmailSendRequest = {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body: string;
+  confirmation: boolean;
+};
+
+export type GmailSendResponse = {
+  status: string;
+  message_id?: string | null;
+  thread_id?: string | null;
   message: string;
 };
 
@@ -1133,6 +1208,20 @@ export type GmailSendDraftResponse = {
   message: string;
 };
 
+export type GmailRecentEmail = {
+  id: string;
+  thread_id?: string | null;
+  subject: string;
+  from_address: string;
+  date?: string | null;
+  snippet: string;
+};
+
+export type GmailRecentEmailsResponse = {
+  emails: GmailRecentEmail[];
+  total: number;
+};
+
 export type EmailStatusResponse = {
   enabled: boolean;
   configured: boolean;
@@ -1153,11 +1242,13 @@ export type EmailStatusResponse = {
 };
 
 export type EmailCapabilityResponse = {
+  search_email: boolean;
   search_emails: boolean;
   read_email: boolean;
   list_folders: boolean;
   create_draft: boolean;
   send_email: boolean;
+  reply_email: boolean;
   delete_email: boolean;
   modify_email: boolean;
   raw?: Record<string, unknown>;
@@ -1229,6 +1320,36 @@ export type EmailDraftResponse = {
   ok: boolean;
   draft_id: string;
   url?: string | null;
+  message: string;
+};
+
+export type NormalizedEmailMessage = {
+  id: string;
+  thread_id?: string | null;
+  subject: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  date?: string | null;
+  snippet: string;
+  body_excerpt: string;
+  labels: string[];
+  folder?: string | null;
+  has_attachments: boolean;
+  attachments: Array<{ filename: string; mime_type: string; size?: number | null }>;
+  url?: string | null;
+};
+
+export type EmailSearchRequest = {
+  scope?: "recent" | "unread" | "search";
+  query?: string | null;
+  max_items?: number;
+};
+
+export type EmailSearchResponse = {
+  status: string;
+  messages: NormalizedEmailMessage[];
+  total: number;
   message: string;
 };
 

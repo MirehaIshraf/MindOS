@@ -27,6 +27,8 @@ import type {
   EmailDraftRequest,
   EmailDraftResponse,
   EmailMcpConfigRequest,
+  EmailSearchRequest,
+  EmailSearchResponse,
   EmailTestResponse,
   ConnectorConfigResponse,
   ConnectorListResponse,
@@ -70,6 +72,9 @@ import type {
   GmailDraftPrepareResponse,
   GmailDraftRequest,
   GmailDraftResponse,
+  GmailRecentEmailsResponse,
+  GmailSendRequest,
+  GmailSendResponse,
   GmailSendDraftResponse,
   GmailStatusResponse,
   GmailTestResponse,
@@ -94,6 +99,9 @@ import type {
   SearchStatsResponse,
   SeedSampleEventsResponse,
   TaskHistoryResponse,
+  ActionCapabilityRegistry,
+  TaskActionExecuteRequest,
+  TaskActionExecuteResponse,
   TaskPlanningResponse,
   TaskResponse,
   TestLLMResponse,
@@ -510,6 +518,16 @@ export async function getTaskHistory(limit = 20): Promise<TaskHistoryResponse> {
   return response.data;
 }
 
+export async function getTaskActionCapabilities(): Promise<ActionCapabilityRegistry> {
+  const response = await api.get<ActionCapabilityRegistry>("/tasks/actions/capabilities");
+  return response.data;
+}
+
+export async function executeTaskAction(payload: TaskActionExecuteRequest): Promise<TaskActionExecuteResponse> {
+  const response = await api.post<TaskActionExecuteResponse>("/tasks/actions/execute", payload, { timeout: 130000 });
+  return response.data;
+}
+
 export async function scanFileTask(payload: { root_path: string; max_depth?: number; max_files?: number; include_hidden?: boolean }): Promise<FileSnapshotResponse> {
   const response = await api.post<FileSnapshotResponse>("/tasks/file/scan", payload, { timeout: 30000 });
   return response.data;
@@ -748,6 +766,16 @@ export async function createGmailDraft(payload: GmailDraftRequest): Promise<Gmai
   return response.data;
 }
 
+export async function getGmailRecentEmails(limit = 10): Promise<GmailRecentEmailsResponse> {
+  const response = await api.get<GmailRecentEmailsResponse>("/connectors/gmail/recent", { params: { limit } });
+  return response.data;
+}
+
+export async function sendGmailMessage(payload: GmailSendRequest): Promise<GmailSendResponse> {
+  const response = await api.post<GmailSendResponse>("/connectors/gmail/send", payload);
+  return response.data;
+}
+
 export async function prepareGmailDraft(payload: GmailDraftPrepareRequest): Promise<GmailDraftPrepareResponse> {
   const response = await api.post<GmailDraftPrepareResponse>("/tasks/gmail/draft/prepare", payload, { timeout: 130000 });
   return response.data;
@@ -805,6 +833,11 @@ export async function syncEmailMessages(payload: EmailSyncRequest): Promise<Emai
 
 export async function createEmailDraft(payload: EmailDraftRequest): Promise<EmailDraftResponse> {
   const response = await api.post<EmailDraftResponse>("/connectors/email/drafts", payload);
+  return response.data;
+}
+
+export async function searchEmailMessages(payload: EmailSearchRequest): Promise<EmailSearchResponse> {
+  const response = await api.post<EmailSearchResponse>("/connectors/email/search", payload, { timeout: 30000 });
   return response.data;
 }
 

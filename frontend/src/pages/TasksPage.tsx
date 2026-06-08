@@ -4,7 +4,18 @@ import { KeyboardEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useSta
 import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
-import { completeDocumentSummary, createGmailDraft, getErrorMessage, getGmailStatus, getModelSettings, prepareFileTaskPlan, prepareGmailDraft, scanFileTask } from "../services/api";
+import {
+  completeDocumentSummary,
+  executeTaskAction,
+  getErrorMessage,
+  getGmailRecentEmails,
+  getGmailStatus,
+  getModelSettings,
+  getTaskActionCapabilities,
+  prepareFileTaskPlan,
+  prepareGmailDraft,
+  scanFileTask,
+} from "../services/api";
 import {
   executeBrowserFilePlan,
   undoBrowserFilePlan,
@@ -25,10 +36,33 @@ import {
   validateBrowserFilePlan,
   type FileTaskIntent,
 } from "../services/fileTaskLlmPlanner";
-import type { DocumentSummaryPrepareResponse, DocumentSummaryStyle, FileOperation, FileSnapshotItem, FileSnapshotResponse, FileTaskPlan, GmailDraftResponse, GmailStatusResponse, ModelConfig } from "../types";
+import type {
+  ActionCapabilityRegistry,
+  DocumentSummaryPrepareResponse,
+  DocumentSummaryStyle,
+  FileOperation,
+  FileSnapshotItem,
+  FileSnapshotResponse,
+  FileTaskPlan,
+  GmailDraftResponse,
+  GmailStatusResponse,
+  ModelConfig,
+  NormalizedEmailMessage,
+  TaskActionExecuteResponse,
+} from "../types";
 
 type TaskUiState = "resting" | "typing" | "context" | "document_options" | "plan" | "action_preview";
-type TaskActionType = "file.organize" | "document.summary" | "gmail.createDraft" | "gmail.search" | "memory.report" | "github.lookup" | "unsupported";
+type TaskActionType =
+  | "file.organize"
+  | "document.summary"
+  | "gmail.createDraft"
+  | "gmail.sendEmail"
+  | "gmail.replyDraft"
+  | "gmail.searchEmails"
+  | "gmail.summarizeEmails"
+  | "memory.report"
+  | "github.lookup"
+  | "unsupported";
 
 type ClassifiedTaskAction = {
   actionType: TaskActionType;
@@ -38,13 +72,23 @@ type ClassifiedTaskAction = {
 };
 
 type PreparedAction = ClassifiedTaskAction & {
+  id: string;
+  title: string;
+  summary: string;
   riskLevel: "low" | "medium" | "high";
   requiresConfirmation: boolean;
+  executionActionType?: TaskActionType;
+  canExecute: boolean;
+  blockedReasons: string[];
+  missingRequirements: string[];
   sources: Array<{ type: string; status: "available" | "missing" | "connected" | "disconnected" }>;
   preview?: {
     to?: string;
+    cc?: string;
+    bcc?: string;
     subject?: string;
     body?: string;
+    messageId?: string;
     note?: string;
     warning?: string;
     sourceSummary?: string;
@@ -58,10 +102,11 @@ type CategorySummary = {
 
 type ScanSource = "backend_path" | "browser_handle";
 type ExecutionPhase = "idle" | "confirming" | "running" | "completed" | "undoing" | "undone";
+type ActionApprovalPhase = "idle" | "confirming" | "running" | "completed";
 
 type RecentTaskItem = {
   id: string;
-  type: "file_organize" | "document_summary" | "gmail_draft";
+  type: "file_organize" | "document_summary" | "gmail_draft" | "gmail_sent";
   title: string;
   summary: string;
   status: "completed" | "partial" | "failed";
@@ -119,11 +164,15 @@ export function TasksPage() {
   const [documentSummary, setDocumentSummary] = useState<DocumentSummaryPrepareResponse | null>(null);
   const [documentReadResult, setDocumentReadResult] = useState<BrowserDocumentReadResult | null>(null);
   const [preparedAction, setPreparedAction] = useState<PreparedAction | null>(null);
+  const [actionCapabilities, setActionCapabilities] = useState<ActionCapabilityRegistry | null>(null);
+  const [actionApprovalPhase, setActionApprovalPhase] = useState<ActionApprovalPhase>("idle");
+  const [actionExecutionResult, setActionExecutionResult] = useState<TaskActionExecuteResponse | null>(null);
   const [gmailStatus, setGmailStatus] = useState<GmailStatusResponse | null>(null);
-  const [gmailDraft, setGmailDraft] = useState({ to: "", subject: "", body: "" });
+  const [gmailDraft, setGmailDraft] = useState({ to: "", cc: "", bcc: "", subject: "", body: "", message_id: "" });
   const [gmailDraftResult, setGmailDraftResult] = useState<GmailDraftResponse | null>(null);
   const [gmailDraftLoading, setGmailDraftLoading] = useState(false);
   const [gmailDraftMessage, setGmailDraftMessage] = useState<string | null>(null);
+  const [emailSearchMessages, setEmailSearchMessages] = useState<NormalizedEmailMessage[]>([]);
   const [summaryOutputFilename, setSummaryOutputFilename] = useState("mindos-summary.md");
   const [summaryFilenameWasEdited, setSummaryFilenameWasEdited] = useState(false);
   const [summaryOutputFormat, setSummaryOutputFormat] = useState<"markdown" | "text">("markdown");
@@ -182,8 +231,11 @@ export function TasksPage() {
     setDocumentSummary(null);
     setDocumentReadResult(null);
     setPreparedAction(null);
+    setActionApprovalPhase("idle");
+    setActionExecutionResult(null);
     setGmailDraftResult(null);
     setGmailDraftMessage(null);
+    setEmailSearchMessages([]);
     setCloudSummaryWarning(null);
     setSummarySaveMessage(null);
     setPrepareError(null);
@@ -418,12 +470,29 @@ export function TasksPage() {
     setDocumentSummary(null);
     setGmailDraftResult(null);
     setGmailDraftMessage(null);
-    if (action.actionType === "gmail.createDraft") {
+    if (isEmailWriteAction(action.actionType)) {
       setPrepareLoading(true);
       let status: GmailStatusResponse | null = null;
       try {
+        const capabilities = await getTaskActionCapabilities();
+        setActionCapabilities(capabilities);
+        const capabilityKey = capabilityKeyForAction(action.actionType);
+        const actionCapability = capabilities.capabilities[capabilityKey];
         status = await getGmailStatus();
         setGmailStatus(status);
+        const draftCapability = capabilities.capabilities["gmail.createDraft"];
+        const sendCapability = capabilities.capabilities["gmail.sendEmail"];
+        const wantsSend = action.actionType === "gmail.sendEmail";
+        const sendAvailable = Boolean(sendCapability?.available);
+        const draftAvailable = Boolean(draftCapability?.available);
+        const executionActionType: TaskActionType = wantsSend && !sendAvailable && draftAvailable ? "gmail.createDraft" : action.actionType;
+        const canExecute = wantsSend ? sendAvailable || draftAvailable : Boolean(actionCapability?.available);
+        const blockedReasons = canExecute ? [] : [actionCapability?.reason || "Email action is not available."];
+        const missingRequirements = canExecute ? [] : [capabilityKey];
+        const fallbackMessage =
+          wantsSend && !sendAvailable && draftAvailable
+            ? "Gmail send is not connected yet. You can create a draft instead."
+            : "";
         const history = recentTasksFromLastDays(recentTasks, 7);
         const selectedModel = await getSelectedChatModel();
         const planned = await prepareGmailDraft({
@@ -432,17 +501,28 @@ export function TasksPage() {
           recent_tasks: history.map(toGmailDraftSourceItem),
           model_id: selectedModel?.id ?? null,
         });
+        const recipient = extractEmailAddress(command) || planned.to || "";
         const draft = {
-          to: planned.to || "",
+          to: recipient,
+          cc: "",
+          bcc: "",
           subject: planned.subject,
           body: planned.body,
+          message_id: "",
         };
         setGmailDraft(draft);
         setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
           ...action,
-          supported: true,
-          riskLevel: "medium",
+          title: emailActionTitle(action.actionType),
+          summary: emailActionSummary(action.actionType, draft.subject),
+          supported: canExecute,
+          riskLevel: executionActionType === "gmail.sendEmail" ? "high" : "medium",
           requiresConfirmation: true,
+          executionActionType,
+          canExecute,
+          blockedReasons,
+          missingRequirements,
           sources: [
             { type: "gmail", status: status.connected ? "connected" : "disconnected" },
             { type: "task_history", status: history.length ? "available" : "missing" },
@@ -451,19 +531,31 @@ export function TasksPage() {
           preview: {
             ...draft,
             note: history.length ? "Based on task history from the last 7 days." : "I can draft the email, but I did not find task history from the last 7 days.",
-            warning: [planned.planner_warning, ...planned.warnings].filter(Boolean).join(" "),
+            warning: [fallbackMessage, planned.planner_warning, ...planned.warnings].filter(Boolean).join(" "),
             sourceSummary: planned.source_summary,
           },
         });
       } catch (error) {
         const history = recentTasksFromLastDays(recentTasks, 7);
         const draft = buildGmailDraftPreview(command.trim(), history);
-        setGmailDraft(draft);
+        const nextDraft = { ...draft, to: extractEmailAddress(command) || draft.to, cc: "", bcc: "", message_id: "" };
+        setGmailDraft(nextDraft);
         setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
           ...action,
+          title: emailActionTitle(action.actionType),
+          summary: emailActionSummary(action.actionType, nextDraft.subject),
           supported: true,
-          riskLevel: "medium",
+          riskLevel: action.actionType === "gmail.sendEmail" ? "high" : "medium",
           requiresConfirmation: true,
+          executionActionType: action.actionType,
+          canExecute: Boolean(status?.connected && action.actionType !== "gmail.sendEmail"),
+          blockedReasons: status?.connected
+            ? action.actionType === "gmail.sendEmail"
+              ? ["Gmail send capability was not detected."]
+              : []
+            : ["Gmail is not connected. Open Connectors -> Gmail and connect it."],
+          missingRequirements: status?.connected && action.actionType !== "gmail.sendEmail" ? [] : [capabilityKeyForAction(action.actionType)],
           sources: [
             { type: "gmail", status: status?.connected ? "connected" : "disconnected" },
             { type: "task_history", status: history.length ? "available" : "missing" },
@@ -482,11 +574,78 @@ export function TasksPage() {
       return;
     }
 
-    if (action.actionType === "gmail.search" || action.actionType === "memory.report" || action.actionType === "github.lookup") {
+    if (action.actionType === "gmail.searchEmails" || action.actionType === "gmail.summarizeEmails") {
+      setPrepareLoading(true);
+      try {
+        const capabilities = await getTaskActionCapabilities();
+        setActionCapabilities(capabilities);
+        const capabilityKey = capabilityKeyForAction(action.actionType);
+        const actionCapability = capabilities.capabilities[capabilityKey];
+        const response = actionCapability?.available ? await getGmailRecentEmails(10) : { emails: [], total: 0 };
+        const messages = response.emails.map((email) => ({
+          id: email.id,
+          thread_id: email.thread_id ?? null,
+          subject: email.subject,
+          from: email.from_address,
+          to: [],
+          cc: [],
+          date: email.date ?? null,
+          snippet: email.snippet,
+          body_excerpt: email.snippet,
+          labels: ["GMAIL"],
+          folder: "Gmail",
+          has_attachments: false,
+          attachments: [],
+          url: null,
+        }));
+        setEmailSearchMessages(messages);
+        setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          ...action,
+          title: action.label,
+          summary: action.actionType === "gmail.summarizeEmails" ? `Summarize ${response.total} recent Gmail emails.` : `Show ${response.total} recent Gmail emails.`,
+          riskLevel: "low",
+          requiresConfirmation: false,
+          canExecute: false,
+          blockedReasons: actionCapability?.available ? [] : [actionCapability?.reason || "Gmail is not connected. Open Connectors -> Gmail and connect it."],
+          missingRequirements: actionCapability?.available ? [] : [capabilityKey],
+          sources: [{ type: "gmail", status: actionCapability?.available ? "available" : "missing" }],
+          preview: {
+            note: action.actionType === "gmail.summarizeEmails" ? summarizeEmailMessages(messages) : "Recent Gmail messages are shown below. No messages are modified.",
+          },
+        });
+      } catch (error) {
+        setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          ...action,
+          title: action.label,
+          summary: "Email lookup failed.",
+          riskLevel: "low",
+          requiresConfirmation: false,
+          canExecute: false,
+          blockedReasons: [getErrorMessage(error)],
+          missingRequirements: [capabilityKeyForAction(action.actionType)],
+          sources: [{ type: "gmail", status: "missing" }],
+          preview: { note: getErrorMessage(error) },
+        });
+      } finally {
+        setPrepareLoading(false);
+        setUiState("action_preview");
+      }
+      return;
+    }
+
+    if (action.actionType === "memory.report" || action.actionType === "github.lookup") {
       setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         ...action,
+        title: action.label,
+        summary: previewNoteFor(action.actionType),
         riskLevel: "low",
         requiresConfirmation: false,
+        canExecute: false,
+        blockedReasons: [],
+        missingRequirements: [],
         sources: actionSourcesFor(action.actionType, recentTasks),
         preview: {
           note: previewNoteFor(action.actionType),
@@ -497,9 +656,15 @@ export function TasksPage() {
     }
 
     setPreparedAction({
+      id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       ...action,
+      title: action.label,
+      summary: action.reason || "MindOS cannot safely prepare this task yet.",
       riskLevel: "low",
       requiresConfirmation: false,
+      canExecute: false,
+      blockedReasons: action.reason ? [action.reason] : [],
+      missingRequirements: [],
       sources: [],
       reason: action.reason || "MindOS cannot safely prepare this task yet.",
     });
@@ -548,38 +713,72 @@ export function TasksPage() {
   }
 
   async function handleCreateGmailDraft() {
-    if (!preparedAction || preparedAction.actionType !== "gmail.createDraft") return;
-    if (!gmailStatus?.connected) {
-      setGmailDraftMessage("Gmail is not connected. Connect Gmail from Connectors first.");
-      return;
-    }
-    if (!gmailStatus.capabilities?.create_draft) {
-      setGmailDraftMessage("Gmail draft creation is not connected yet.");
+    if (!preparedAction || !isEmailWriteAction(preparedAction.actionType)) return;
+    const effectiveActionType = preparedAction.executionActionType ?? preparedAction.actionType;
+    if (!preparedAction.canExecute) {
+      setGmailDraftMessage(preparedAction.blockedReasons[0] || "This email action is not available.");
       return;
     }
     if (!gmailDraft.to.trim()) {
-      setGmailDraftMessage("Add a recipient before creating the Gmail draft.");
+      setGmailDraftMessage(effectiveActionType === "gmail.sendEmail" ? "Add a recipient before sending." : "Add a recipient before creating the draft.");
       return;
     }
+    if (!gmailDraft.subject.trim()) {
+      setGmailDraftMessage(effectiveActionType === "gmail.sendEmail" ? "Add a subject before sending." : "Add a subject before creating the draft.");
+      return;
+    }
+    if (!gmailDraft.body.trim()) {
+      setGmailDraftMessage(effectiveActionType === "gmail.sendEmail" ? "Add an email body before sending." : "Add an email body before creating the draft.");
+      return;
+    }
+    if (effectiveActionType === "gmail.replyDraft" && !gmailDraft.message_id.trim()) {
+      setGmailDraftMessage("Choose or enter the original message id before creating a reply draft.");
+      return;
+    }
+    setActionApprovalPhase("confirming");
+    setGmailDraftMessage(null);
+  }
+
+  async function handleConfirmActionExecution() {
+    if (!preparedAction) return;
     setGmailDraftLoading(true);
+    setActionApprovalPhase("running");
     setGmailDraftMessage(null);
     try {
-      const result = await createGmailDraft(gmailDraft);
-      setGmailDraftResult(result);
-      setGmailDraftMessage("Gmail draft created. Nothing was sent.");
+      const executionActionType = preparedAction.executionActionType ?? preparedAction.actionType;
+      const result = await executeTaskAction({
+        action_id: preparedAction.id,
+        action_type:
+          executionActionType === "gmail.createDraft" || executionActionType === "gmail.sendEmail" || executionActionType === "gmail.replyDraft"
+            ? executionActionType
+            : "unsupported",
+        preview: gmailDraft,
+        confirmation: true,
+      });
+      setActionExecutionResult(result);
+      const draftId = String(result.result.draft_id || "");
+      setGmailDraftResult({
+        status: result.status,
+        draft_id: draftId,
+        message_id: typeof result.result.message_id === "string" ? result.result.message_id : null,
+        message: result.message,
+      });
+      setGmailDraftMessage(result.message || (executionActionType === "gmail.sendEmail" ? "Email sent." : "Draft created. Nothing was sent."));
+      setActionApprovalPhase("completed");
       addRecentTask({
-        type: "gmail_draft",
-        title: "Created Gmail draft",
-        summary: `Drafted "${gmailDraft.subject}"`,
+        type: executionActionType === "gmail.sendEmail" ? "gmail_sent" : "gmail_draft",
+        title: executionActionType === "gmail.sendEmail" ? "Sent Gmail email" : executionActionType === "gmail.replyDraft" ? "Created Gmail reply draft" : "Created Gmail draft",
+        summary: `To ${gmailDraft.to} · ${gmailDraft.subject}`,
         status: "completed",
-        contextName: gmailStatus.email_address || "Gmail",
+        contextName: gmailStatus?.email_address || String(result.result.provider || "Gmail"),
         details: {
-          draft_id: result.draft_id,
-          message_id: result.message_id ?? "",
+          draft_id: draftId,
+          message_id: typeof result.result.message_id === "string" ? result.result.message_id : "",
         },
       });
     } catch (error) {
       setGmailDraftMessage(getErrorMessage(error));
+      setActionApprovalPhase("idle");
     } finally {
       setGmailDraftLoading(false);
     }
@@ -947,11 +1146,13 @@ export function TasksPage() {
           {uiState === "action_preview" && preparedAction ? (
             <ActionPreviewRenderer
               action={preparedAction}
+              capabilities={actionCapabilities}
               gmailStatus={gmailStatus}
               gmailDraft={gmailDraft}
               gmailDraftResult={gmailDraftResult}
               gmailDraftLoading={gmailDraftLoading}
               gmailDraftMessage={gmailDraftMessage}
+              emailSearchMessages={emailSearchMessages}
               recentTasks={recentTasks}
               onGmailDraftChange={setGmailDraft}
               onCreateGmailDraft={() => void handleCreateGmailDraft()}
@@ -960,6 +1161,14 @@ export function TasksPage() {
                 setPreparedAction(null);
                 setUiState(command.trim() ? "typing" : "resting");
               }}
+            />
+          ) : null}
+          {actionApprovalPhase === "confirming" && preparedAction ? (
+            <ActionConfirmationCard
+              action={preparedAction}
+              draft={gmailDraft}
+              onCancel={() => setActionApprovalPhase("idle")}
+              onConfirm={() => void handleConfirmActionExecution()}
             />
           ) : null}
           {executionMessage ? <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{executionMessage}</p> : null}
@@ -1098,9 +1307,11 @@ function DetectedActionChip({ action, fileIntent }: { action: ClassifiedTaskActi
             : "By type"
       : action.actionType === "document.summary"
         ? "Readable files"
-        : action.actionType === "gmail.createDraft"
-          ? "Draft only"
-          : action.actionType === "gmail.search"
+        : isEmailWriteAction(action.actionType)
+          ? action.actionType === "gmail.sendEmail"
+            ? "Send with confirmation"
+            : "Draft only"
+          : action.actionType === "gmail.searchEmails" || action.actionType === "gmail.summarizeEmails"
             ? "Email context"
             : action.actionType === "memory.report"
               ? "Memory context"
@@ -1118,11 +1329,13 @@ function DetectedActionChip({ action, fileIntent }: { action: ClassifiedTaskActi
 
 function ActionPreviewRenderer({
   action,
+  capabilities,
   gmailStatus,
   gmailDraft,
   gmailDraftResult,
   gmailDraftLoading,
   gmailDraftMessage,
+  emailSearchMessages,
   recentTasks,
   onGmailDraftChange,
   onCreateGmailDraft,
@@ -1130,21 +1343,24 @@ function ActionPreviewRenderer({
   onCancel,
 }: {
   action: PreparedAction;
+  capabilities: ActionCapabilityRegistry | null;
   gmailStatus: GmailStatusResponse | null;
-  gmailDraft: { to: string; subject: string; body: string };
+  gmailDraft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string };
   gmailDraftResult: GmailDraftResponse | null;
   gmailDraftLoading: boolean;
   gmailDraftMessage: string | null;
+  emailSearchMessages: NormalizedEmailMessage[];
   recentTasks: RecentTaskItem[];
-  onGmailDraftChange: (draft: { to: string; subject: string; body: string }) => void;
+  onGmailDraftChange: (draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string }) => void;
   onCreateGmailDraft: () => void;
   onEdit: () => void;
   onCancel: () => void;
 }) {
-  if (action.actionType === "gmail.createDraft") {
+  if (isEmailWriteAction(action.actionType)) {
     return (
       <GmailDraftPreview
         action={action}
+        capabilities={capabilities}
         gmailStatus={gmailStatus}
         draft={gmailDraft}
         result={gmailDraftResult}
@@ -1157,8 +1373,8 @@ function ActionPreviewRenderer({
       />
     );
   }
-  if (action.actionType === "gmail.search") {
-    return <LookupPreview icon={<Mail size={16} />} action={action} title="Search Gmail context" onEdit={onEdit} onCancel={onCancel} />;
+  if (action.actionType === "gmail.searchEmails" || action.actionType === "gmail.summarizeEmails") {
+    return <EmailSearchPreview action={action} messages={emailSearchMessages} onEdit={onEdit} onCancel={onCancel} />;
   }
   if (action.actionType === "memory.report") {
     return <ReportPreview action={action} recentTasks={recentTasks} onEdit={onEdit} onCancel={onCancel} />;
@@ -1171,6 +1387,7 @@ function ActionPreviewRenderer({
 
 function GmailDraftPreview({
   action,
+  capabilities,
   gmailStatus,
   draft,
   result,
@@ -1182,29 +1399,43 @@ function GmailDraftPreview({
   onCancel,
 }: {
   action: PreparedAction;
+  capabilities: ActionCapabilityRegistry | null;
   gmailStatus: GmailStatusResponse | null;
-  draft: { to: string; subject: string; body: string };
+  draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string };
   result: GmailDraftResponse | null;
   loading: boolean;
   message: string | null;
-  onDraftChange: (draft: { to: string; subject: string; body: string }) => void;
+  onDraftChange: (draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string }) => void;
   onCreateDraft: () => void;
   onEdit: () => void;
   onCancel: () => void;
 }) {
-  const connected = Boolean(gmailStatus?.connected);
-  const createDraftAvailable = Boolean(gmailStatus?.capabilities?.create_draft);
-  const disabledReason = !connected
-    ? "Gmail is not connected."
-    : !createDraftAvailable
-      ? "Gmail draft creation is not connected yet."
-      : !draft.to.trim()
-        ? "Add a recipient before creating the Gmail draft."
-        : !draft.subject.trim()
-          ? "Add a subject before creating the Gmail draft."
-          : !draft.body.trim()
-            ? "Add draft body text before creating the Gmail draft."
-            : "";
+  const gmailConnected = Boolean(gmailStatus?.connected);
+  const sendAvailable = Boolean(capabilities?.capabilities["gmail.sendEmail"]?.available || gmailStatus?.capabilities?.send_email);
+  const draftAvailable = Boolean(
+    capabilities?.capabilities["gmail.createDraft"]?.available ||
+      (gmailStatus?.connected && gmailStatus.capabilities?.create_draft)
+  );
+  const effectiveActionType = action.executionActionType ?? action.actionType;
+  const isSendAction = effectiveActionType === "gmail.sendEmail";
+  const isDraftFallback = action.actionType === "gmail.sendEmail" && effectiveActionType === "gmail.createDraft";
+  const disabledReason = getEmailActionDisabledReason({
+    action,
+    effectiveActionType,
+    gmailConnected,
+    sendAvailable,
+    draftAvailable,
+    draft,
+  });
+  const title =
+    effectiveActionType === "gmail.sendEmail"
+      ? "Gmail send preview"
+      : effectiveActionType === "gmail.replyDraft"
+        ? "Gmail reply draft preview"
+        : isDraftFallback
+          ? "Gmail draft fallback preview"
+          : "Gmail draft preview";
+  const buttonLabel = effectiveActionType === "gmail.sendEmail" ? "Send Email" : effectiveActionType === "gmail.replyDraft" ? "Create Reply Draft" : "Create Gmail Draft";
   return (
     <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1213,22 +1444,42 @@ function GmailDraftPreview({
             <Mail size={16} />
           </span>
           <div>
-            <h2 className="text-sm font-semibold text-app-text">Gmail draft preview</h2>
+            <h2 className="text-sm font-semibold text-app-text">{title}</h2>
             <p className="mt-1 text-xs text-app-muted">{action.preview?.note || "Review this draft before creating it in Gmail."}</p>
           </div>
         </div>
-        <Badge variant={connected ? "success" : "warning"}>{connected ? `Connected${gmailStatus?.email_address ? ` as ${gmailStatus.email_address}` : ""}` : "Gmail disconnected"}</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={gmailConnected ? "success" : "warning"}>
+            {gmailConnected ? `Gmail connected${gmailStatus?.email_address ? ` as ${gmailStatus.email_address}` : ""}` : "Gmail disconnected"}
+          </Badge>
+        </div>
       </div>
 
-      {!connected ? (
+      {!gmailConnected ? (
         <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-          Gmail is not connected. Connect Gmail from Connectors first, then return here to create the draft. No folder is needed for this task.
+          Gmail is not connected. Open Connectors &gt; Gmail and connect it.
+        </p>
+      ) : null}
+      {isDraftFallback ? (
+        <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">
+          Gmail send is not connected yet. You can create a draft instead.
         </p>
       ) : null}
       {action.preview?.warning ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{action.preview.warning}</p> : null}
       {action.preview?.sourceSummary ? <p className="mt-3 text-xs text-app-muted">Source: {action.preview.sourceSummary}</p> : null}
 
       <div className="mt-3 grid gap-3">
+        {effectiveActionType === "gmail.replyDraft" ? (
+          <label className="space-y-1 text-xs text-app-muted">
+            <span>Original message id</span>
+            <input
+              value={draft.message_id}
+              onChange={(event) => onDraftChange({ ...draft, message_id: event.target.value })}
+              placeholder="message id from search result"
+              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            />
+          </label>
+        ) : null}
         <label className="space-y-1 text-xs text-app-muted">
           <span>To</span>
           <input
@@ -1238,6 +1489,26 @@ function GmailDraftPreview({
             className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
           />
         </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-xs text-app-muted">
+            <span>Cc</span>
+            <input
+              value={draft.cc}
+              onChange={(event) => onDraftChange({ ...draft, cc: event.target.value })}
+              placeholder="optional"
+              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            />
+          </label>
+          <label className="space-y-1 text-xs text-app-muted">
+            <span>Bcc</span>
+            <input
+              value={draft.bcc}
+              onChange={(event) => onDraftChange({ ...draft, bcc: event.target.value })}
+              placeholder="optional"
+              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            />
+          </label>
+        </div>
         <label className="space-y-1 text-xs text-app-muted">
           <span>Subject</span>
           <input
@@ -1260,7 +1531,11 @@ function GmailDraftPreview({
       <SourceStatusList sources={action.sources} />
       {disabledReason ? <p className="mt-3 text-xs text-amber-200">{disabledReason}</p> : null}
       {message ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{message}</p> : null}
-      {result ? <p className="mt-2 text-xs text-app-muted">Draft id: {result.draft_id}</p> : null}
+      {result ? (
+        <p className="mt-2 text-xs text-app-muted">
+          {isSendAction ? `Message id: ${result.message_id || "sent"}` : `Draft id: ${result.draft_id}`}
+        </p>
+      ) : null}
 
       <div className="mt-3 flex justify-end gap-2">
         <Button type="button" variant="secondary" className="h-9 px-3" onClick={onCancel}>
@@ -1270,10 +1545,120 @@ function GmailDraftPreview({
           Edit request
         </Button>
         <Button type="button" variant="primary" className="h-9 px-3" loading={loading} disabled={Boolean(disabledReason)} onClick={onCreateDraft}>
-          Create Gmail Draft
+          {buttonLabel}
         </Button>
       </div>
     </div>
+  );
+}
+
+function ActionConfirmationCard({
+  action,
+  draft,
+  onCancel,
+  onConfirm,
+}: {
+  action: PreparedAction;
+  draft: { to: string; subject: string };
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const effectiveActionType = action.executionActionType ?? action.actionType;
+  if (effectiveActionType === "gmail.sendEmail") {
+    return (
+      <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium text-app-text">Send this Gmail email?</p>
+            <p className="mt-1 text-xs text-app-muted">This will send the email from your connected Gmail account.</p>
+          </div>
+          <Badge variant="danger">high risk</Badge>
+        </div>
+        <div className="mt-3 rounded-md border border-app-border bg-zinc-950/70 px-3 py-2 text-xs">
+          <p className="text-app-muted">
+            To: <span className="text-app-text">{draft.to}</span>
+          </p>
+          <p className="mt-1 text-app-muted">
+            Subject: <span className="text-app-text">{draft.subject}</span>
+          </p>
+        </div>
+        <p className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+          This will send the email from your connected Gmail account.
+        </p>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button type="button" variant="secondary" className="h-8 px-3" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" className="h-8 px-3" onClick={onConfirm}>
+            Confirm Send
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  const isHighRisk = action.riskLevel === "high";
+  const bullets = safetyBulletsForAction(action);
+  return (
+    <div className={`rounded-lg border p-3 ${isHighRisk ? "border-red-500/40 bg-red-500/10" : "border-violet-500/30 bg-violet-500/10"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium text-app-text">Confirm action</p>
+          <p className="mt-1 text-xs text-app-muted">MindOS will do the following: {action.summary}</p>
+        </div>
+        <Badge variant={isHighRisk ? "danger" : "warning"}>{action.riskLevel} risk</Badge>
+      </div>
+      <div className="mt-3 rounded-md border border-app-border bg-zinc-950/70 px-3 py-2">
+        <p className="text-xs font-medium text-app-text">Safety</p>
+        <ul className="mt-2 space-y-1 text-xs text-app-muted">
+          {bullets.map((bullet) => (
+            <li key={bullet}>- {bullet}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-8 px-3" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="primary" className="h-8 px-3" onClick={onConfirm}>
+          Confirm and run
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function EmailSearchPreview({
+  action,
+  messages,
+  onEdit,
+  onCancel,
+}: {
+  action: PreparedAction;
+  messages: NormalizedEmailMessage[];
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <DetectedActionCard icon={<Mail size={16} />} action={action} title={action.actionType === "gmail.summarizeEmails" ? "Email summary preview" : "Email search preview"} onEdit={onEdit} onCancel={onCancel}>
+      {action.blockedReasons.length ? <p className="text-xs text-amber-100">{action.blockedReasons[0]}</p> : null}
+      {action.preview?.note ? <p className="text-xs text-app-muted">{action.preview.note}</p> : null}
+      <div className="mt-3 space-y-2">
+        {messages.length ? (
+          messages.slice(0, 8).map((message) => (
+            <div key={message.id} className="rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-app-text">{message.subject || "(no subject)"}</p>
+                <span className="text-[11px] text-app-muted">{message.date ? formatTimestamp(message.date) : ""}</span>
+              </div>
+              <p className="mt-1 text-xs text-app-muted">From: {message.from || "unknown"}</p>
+              <p className="mt-1 text-xs text-app-muted">{message.body_excerpt || message.snippet || "No excerpt available."}</p>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-md border border-app-border bg-zinc-900/70 px-3 py-2 text-xs text-app-muted">No email messages to show.</p>
+        )}
+      </div>
+    </DetectedActionCard>
   );
 }
 
@@ -1895,6 +2280,7 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
   if (!tasks.length) return null;
   function taskBadge(task: RecentTaskItem) {
     if (task.type === "document_summary") return "Summary";
+    if (task.type === "gmail_sent") return "Email sent";
     if (task.type === "gmail_draft") return "Gmail draft";
     return "File task";
   }
@@ -1917,7 +2303,7 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
                 <p className="mt-1 text-xs text-app-muted">{task.summary}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant={task.type === "document_summary" ? "success" : task.type === "gmail_draft" ? "info" : "default"}>
+                <Badge variant={task.type === "document_summary" ? "success" : task.type === "gmail_draft" || task.type === "gmail_sent" ? "info" : "default"}>
                   {taskBadge(task)}
                 </Badge>
                 <Badge variant={task.status === "completed" ? "success" : task.status === "partial" ? "warning" : "danger"}>
@@ -2039,11 +2425,20 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
       reason: "MindOS cannot safely prepare destructive tasks from the Tasks page.",
     };
   }
+  if (/\b(gmail|email|mail)\b/.test(text) && /\b(reply|respond)\b/.test(text)) {
+    return { actionType: "gmail.replyDraft", label: "Create reply draft", supported: true };
+  }
+  if (/\b(gmail|email|mail)\b/.test(text) && /\b(send|sent)\b/.test(text)) {
+    return { actionType: "gmail.sendEmail", label: "Send email", supported: true };
+  }
   if (/\b(gmail|email|mail)\b/.test(text) && /\b(draft|write|compose|create)\b/.test(text)) {
     return { actionType: "gmail.createDraft", label: "Create Gmail draft", supported: true };
   }
-  if (/\b(gmail|email|mail)\b/.test(text) && /\b(search|find|look up|lookup|recent|unread|summarize)\b/.test(text)) {
-    return { actionType: "gmail.search", label: "Search email", supported: true };
+  if (/\b(gmail|email|mail|emails|mails)\b/.test(text) && /\b(summarize|summary|recap)\b/.test(text)) {
+    return { actionType: "gmail.summarizeEmails", label: "Summarize emails", supported: true };
+  }
+  if (/\b(gmail|email|mail|emails|mails)\b/.test(text) && /\b(search|find|look up|lookup|recent|unread)\b/.test(text)) {
+    return { actionType: "gmail.searchEmails", label: "Search emails", supported: true };
   }
   if (/\b(github|pull request|pr|issue|commit|repo|repository)\b/.test(text)) {
     return { actionType: "github.lookup", label: "GitHub lookup", supported: true };
@@ -2075,6 +2470,89 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
 
 function isFolderTaskAction(actionType: TaskActionType) {
   return actionType === "file.organize" || actionType === "document.summary";
+}
+
+function isEmailWriteAction(actionType: TaskActionType) {
+  return actionType === "gmail.createDraft" || actionType === "gmail.sendEmail" || actionType === "gmail.replyDraft";
+}
+
+function capabilityKeyForAction(actionType: TaskActionType) {
+  if (actionType === "gmail.sendEmail") return "gmail.sendEmail";
+  if (actionType === "gmail.replyDraft") return "gmail.replyDraft";
+  if (actionType === "gmail.searchEmails") return "gmail.searchEmails";
+  if (actionType === "gmail.summarizeEmails") return "gmail.summarizeEmails";
+  return "gmail.createDraft";
+}
+
+function emailActionTitle(actionType: TaskActionType) {
+  if (actionType === "gmail.sendEmail") return "Send email";
+  if (actionType === "gmail.replyDraft") return "Create reply draft";
+  return "Create Gmail draft";
+}
+
+function emailActionSummary(actionType: TaskActionType, subject: string) {
+  if (actionType === "gmail.sendEmail") return `Send an email titled "${subject}" after confirmation.`;
+  if (actionType === "gmail.replyDraft") return `Create a reply draft titled "${subject}". Nothing will be sent.`;
+  return `Create a Gmail draft titled "${subject}". Nothing will be sent.`;
+}
+
+function getEmailActionDisabledReason({
+  action,
+  effectiveActionType,
+  gmailConnected,
+  sendAvailable,
+  draftAvailable,
+  draft,
+}: {
+  action: PreparedAction;
+  effectiveActionType: TaskActionType;
+  gmailConnected: boolean;
+  sendAvailable: boolean;
+  draftAvailable: boolean;
+  draft: { to: string; subject: string; body: string; message_id: string };
+}) {
+  if (!gmailConnected) return "Gmail is not connected.";
+  if (action.actionType === "gmail.sendEmail" && !sendAvailable && !draftAvailable) {
+    return "Gmail draft and send actions are not connected yet.";
+  }
+  if (effectiveActionType === "gmail.sendEmail" && !sendAvailable) {
+    return action.blockedReasons[0] || "Gmail send capability was not detected.";
+  }
+  if (effectiveActionType === "gmail.createDraft" && !draftAvailable) {
+    return action.actionType === "gmail.sendEmail"
+      ? "Gmail send is not connected yet. You can create a draft instead."
+      : "Gmail draft creation is not connected yet.";
+  }
+  if (!draft.to.trim()) {
+    return effectiveActionType === "gmail.sendEmail" ? "Add a recipient before sending." : "Add a recipient before creating the draft.";
+  }
+  if (!draft.subject.trim()) {
+    return effectiveActionType === "gmail.sendEmail" ? "Add a subject before sending." : "Add a subject before creating the draft.";
+  }
+  if (!draft.body.trim()) {
+    return effectiveActionType === "gmail.sendEmail" ? "Add an email body before sending." : "Add an email body before creating the draft.";
+  }
+  if (effectiveActionType === "gmail.replyDraft" && !draft.message_id.trim()) {
+    return "Add the original message id before creating a reply draft.";
+  }
+  if (!action.canExecute) return action.blockedReasons[0] || "Preview the email and confirm before sending.";
+  return "";
+}
+
+function extractEmailAddress(value: string) {
+  const match = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0] ?? "";
+}
+
+function summarizeEmailMessages(messages: NormalizedEmailMessage[]) {
+  if (!messages.length) return "No matching emails found.";
+  const senders = [...new Set(messages.map((message) => message.from).filter(Boolean))].slice(0, 4);
+  const subjects = messages.slice(0, 4).map((message) => message.subject || "(no subject)");
+  return [
+    `Found ${messages.length} email${messages.length === 1 ? "" : "s"}${senders.length ? ` from ${senders.join(", ")}` : ""}.`,
+    `Key subjects: ${subjects.join("; ")}.`,
+    "No messages were modified.",
+  ].join(" ");
 }
 
 function recentTasksFromLastDays(tasks: RecentTaskItem[], days: number) {
@@ -2113,6 +2591,7 @@ function groupRecentTasksForEmail(history: RecentTaskItem[]) {
   const documentSummaries = history.filter((task) => task.type === "document_summary");
   const fileTasks = history.filter((task) => task.type === "file_organize");
   const gmailDrafts = history.filter((task) => task.type === "gmail_draft");
+  const gmailSent = history.filter((task) => task.type === "gmail_sent");
   const lines: string[] = [];
   if (documentSummaries.length) {
     const saved = documentSummaries.map((task) => task.outputFileName).filter(Boolean);
@@ -2126,7 +2605,10 @@ function groupRecentTasksForEmail(history: RecentTaskItem[]) {
   if (gmailDrafts.length) {
     lines.push(`Email workflow: I created ${gmailDrafts.length} Gmail draft${gmailDrafts.length === 1 ? "" : "s"} for review.`);
   }
-  const other = history.filter((task) => !["document_summary", "file_organize", "gmail_draft"].includes(task.type));
+  if (gmailSent.length) {
+    lines.push(`Email workflow: I sent ${gmailSent.length} email${gmailSent.length === 1 ? "" : "s"} after confirmation.`);
+  }
+  const other = history.filter((task) => !["document_summary", "file_organize", "gmail_draft", "gmail_sent"].includes(task.type));
   for (const task of other.slice(0, 4)) {
     lines.push(`${task.title}: ${task.summary}`);
   }
@@ -2134,8 +2616,8 @@ function groupRecentTasksForEmail(history: RecentTaskItem[]) {
 }
 
 function actionSourcesFor(actionType: TaskActionType, recentTasks: RecentTaskItem[]): PreparedAction["sources"] {
-  if (actionType === "gmail.search") {
-    return [{ type: "gmail", status: "available" }];
+  if (actionType === "gmail.searchEmails" || actionType === "gmail.summarizeEmails") {
+    return [{ type: "email", status: "available" }];
   }
   if (actionType === "github.lookup") {
     return [{ type: "github", status: "available" }];
@@ -2150,10 +2632,30 @@ function actionSourcesFor(actionType: TaskActionType, recentTasks: RecentTaskIte
 }
 
 function previewNoteFor(actionType: TaskActionType) {
-  if (actionType === "gmail.search") return "Gmail context lookup will be connected through Chat/Tasks commands. No email will be sent or modified.";
+  if (actionType === "gmail.searchEmails") return "Email search is read-only. No messages will be sent or modified.";
+  if (actionType === "gmail.summarizeEmails") return "Email summarization is read-only. No messages will be sent or modified.";
   if (actionType === "github.lookup") return "GitHub lookup uses read-only synced repository context. No GitHub write actions are available here.";
   if (actionType === "memory.report") return "MindOS can prepare a report from task history and Memory without asking for a folder.";
   return "MindOS will prepare a safe preview first.";
+}
+
+function safetyBulletsForAction(action: PreparedAction) {
+  if (action.actionType === "gmail.createDraft") {
+    return ["This creates a draft only.", "MindOS will not send the email.", "Draft bodies are stored in Task History only as lightweight metadata."];
+  }
+  if (action.actionType === "gmail.sendEmail") {
+    return ["This will send the email after confirmation.", "MindOS will not delete, archive, or mark any email.", "The sent body is not stored in Memory."];
+  }
+  if (action.actionType === "gmail.replyDraft") {
+    return ["This creates a reply draft only.", "MindOS will not send the reply.", "The reply body is not stored in Memory."];
+  }
+  if (action.actionType === "gmail.searchEmails" || action.actionType === "gmail.summarizeEmails") {
+    return ["This is read-only.", "No emails will be modified."];
+  }
+  if (action.actionType === "github.lookup") {
+    return ["This uses read-only GitHub context.", "No issues, pull requests, comments, or repository changes will be created."];
+  }
+  return ["MindOS validates the preview before execution.", "No unsupported tool call will run."];
 }
 
 function loadRecentTasks(): RecentTaskItem[] {
@@ -2167,7 +2669,7 @@ function loadRecentTasks(): RecentTaskItem[] {
         return (
           item &&
           typeof item.id === "string" &&
-          (item.type === "file_organize" || item.type === "document_summary" || item.type === "gmail_draft") &&
+          (item.type === "file_organize" || item.type === "document_summary" || item.type === "gmail_draft" || item.type === "gmail_sent") &&
           typeof item.title === "string" &&
           typeof item.summary === "string" &&
           typeof item.createdAt === "string"

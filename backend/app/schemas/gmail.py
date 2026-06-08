@@ -49,6 +49,8 @@ class GmailTestResponse(BaseModel):
 
 class GmailDraftRequest(BaseModel):
     to: str
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
     subject: str
     body: str
 
@@ -65,6 +67,38 @@ class GmailDraftResponse(BaseModel):
     status: str
     draft_id: str
     message_id: str | None = None
+    message: str
+
+
+class GmailSendRequest(BaseModel):
+    to: list[str]
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str
+    body: str
+    confirmation: bool = False
+
+    @field_validator("to")
+    @classmethod
+    def recipients_required(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        if not cleaned:
+            raise ValueError("Add a recipient before sending.")
+        return cleaned
+
+    @field_validator("subject", "body")
+    @classmethod
+    def send_text_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be empty")
+        return cleaned
+
+
+class GmailSendResponse(BaseModel):
+    status: str
+    message_id: str | None = None
+    thread_id: str | None = None
     message: str
 
 

@@ -1776,10 +1776,10 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
         <div className="rounded-md border border-app-border bg-zinc-950 p-4">
           <p className="text-sm font-medium text-app-text">Capabilities</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <CapabilityRow label="Search emails" enabled={capabilities.search_emails} />
+            <CapabilityRow label="Search emails" enabled={capabilities.search_email || capabilities.search_emails} />
             <CapabilityRow label="Read email" enabled={capabilities.read_email} />
             <CapabilityRow label="List labels/folders" enabled={capabilities.list_folders} />
-            <CapabilityRow label="Send email" enabled={false} note={capabilities.send_email ? "Provider exposes it; disabled in MindOS" : undefined} />
+            <CapabilityRow label="Send email" enabled={capabilities.send_email} note={capabilities.send_email ? "Requires preview and confirmation in Tasks" : undefined} />
             <CapabilityRow label="Delete/modify email" enabled={false} note={capabilities.delete_email || capabilities.modify_email ? "Provider exposes it; disabled in MindOS" : undefined} />
           </div>
         </div>

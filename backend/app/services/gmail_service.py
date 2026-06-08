@@ -9,6 +9,8 @@ from app.schemas.gmail import (
     GmailDraftResponse,
     GmailRecentEmail,
     GmailRecentEmailsResponse,
+    GmailSendRequest,
+    GmailSendResponse,
     GmailStatusResponse,
     GmailTestResponse,
 )
@@ -46,7 +48,7 @@ class GmailService:
                 "read_email": connected,
                 "search_email": connected,
                 "create_draft": connected and "https://www.googleapis.com/auth/gmail.compose" in scopes,
-                "send_email": False,
+                "send_email": connected and "https://www.googleapis.com/auth/gmail.compose" in scopes,
             },
         )
 
@@ -134,7 +136,7 @@ class GmailService:
         return GmailRecentEmailsResponse(emails=emails, total=len(emails))
 
     def create_draft(self, request: GmailDraftRequest) -> GmailDraftResponse:
-        raw = self._build_raw_message(request.to, request.subject, request.body)
+        raw = self._build_raw_message([request.to], request.subject, request.body, cc=request.cc, bcc=request.bcc)
         data = self._request("POST", "/users/me/drafts", json={"message": {"raw": raw}})
         draft_id = str(data.get("id") or "")
         message_id = str((data.get("message") or {}).get("id") or "") or None
@@ -145,6 +147,25 @@ class GmailService:
             draft_id=draft_id,
             message_id=message_id,
             message="Draft created in Gmail. It was not sent.",
+        )
+
+    def send_message(self, request: GmailSendRequest) -> GmailSendResponse:
+        if request.confirmation is not True:
+            raise GmailConnectorError("Gmail send requires confirmation.")
+        status = self.status()
+        if not status.connected:
+            raise GmailConnectorError("Gmail is not connected.")
+        if not status.capabilities.get("send_email"):
+            raise GmailConnectorError("Gmail send is not connected yet. You can create a draft instead.")
+        raw = self._build_raw_message(request.to, request.subject, request.body, cc=request.cc, bcc=request.bcc)
+        data = self._request("POST", "/users/me/messages/send", json={"raw": raw})
+        message_id = str(data.get("id") or "") or None
+        thread_id = str(data.get("threadId") or "") or None
+        return GmailSendResponse(
+            status="sent",
+            message_id=message_id,
+            thread_id=thread_id,
+            message="Email sent from Gmail.",
         )
 
     def create_test_draft(self) -> GmailDraftResponse:
@@ -214,9 +235,13 @@ class GmailService:
         value = response.json() if response.content else {}
         return value if isinstance(value, dict) else {}
 
-    def _build_raw_message(self, to: str, subject: str, body: str) -> str:
+    def _build_raw_message(self, to: list[str], subject: str, body: str, cc: list[str] | None = None, bcc: list[str] | None = None) -> str:
         message = EmailMessage()
-        message["To"] = to
+        message["To"] = ", ".join([item.strip() for item in to if item.strip()])
+        if cc:
+            message["Cc"] = ", ".join([item.strip() for item in cc if item.strip()])
+        if bcc:
+            message["Bcc"] = ", ".join([item.strip() for item in bcc if item.strip()])
         message["Subject"] = subject
         message.set_content(body)
         return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")

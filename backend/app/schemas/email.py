@@ -13,6 +13,8 @@ class EmailToolMapping(BaseModel):
     get: str = "email.get"
     list_folders: str = "email.list_folders"
     create_draft: str = "email.create_draft"
+    send_email: str = "email.send"
+    reply_draft: str = "email.reply_draft"
 
 
 class EmailMcpConfigRequest(BaseModel):
@@ -42,11 +44,13 @@ class EmailMcpConfigRequest(BaseModel):
 
 
 class EmailCapabilityResponse(BaseModel):
+    search_email: bool = False
     search_emails: bool = False
     read_email: bool = False
     list_folders: bool = False
     create_draft: bool = False
     send_email: bool = False
+    reply_email: bool = False
     delete_email: bool = False
     modify_email: bool = False
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -154,3 +158,55 @@ class EmailDraftResponse(BaseModel):
     draft_id: str
     url: str | None = None
     message: str
+
+
+class EmailSearchRequest(BaseModel):
+    scope: EmailSyncScope = "search"
+    query: str | None = None
+    max_items: int = Field(default=10, ge=1, le=50)
+
+
+class EmailSearchResponse(BaseModel):
+    status: str
+    messages: list[NormalizedEmailMessage] = Field(default_factory=list)
+    total: int
+    message: str
+
+
+class EmailSendRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    confirmation: bool = False
+
+    @field_validator("to", "subject", "body")
+    @classmethod
+    def send_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be empty")
+        return cleaned
+
+
+class EmailSendResponse(BaseModel):
+    ok: bool
+    message_id: str | None = None
+    url: str | None = None
+    message: str
+
+
+class EmailReplyDraftRequest(BaseModel):
+    message_id: str
+    body: str
+    to: str = ""
+    subject: str = ""
+
+    @field_validator("message_id", "body")
+    @classmethod
+    def reply_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be empty")
+        return cleaned

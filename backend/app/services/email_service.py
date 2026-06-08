@@ -15,6 +15,11 @@ from app.schemas.email import (
     EmailDraftRequest,
     EmailDraftResponse,
     EmailMcpConfigRequest,
+    EmailReplyDraftRequest,
+    EmailSearchRequest,
+    EmailSearchResponse,
+    EmailSendRequest,
+    EmailSendResponse,
     EmailStatusResponse,
     EmailSyncRequest,
     EmailSyncResponse,
@@ -30,6 +35,10 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 
 
 class EmailConnectorError(ValueError):
+    pass
+
+
+class EmailCapabilityUnavailableError(EmailConnectorError):
     pass
 
 
@@ -111,7 +120,7 @@ class EmailService:
         config = self._configured_config()
         heartbeat = connector_registry_service.heartbeat_metadata("email")
         capabilities = _capabilities_from_dict(dict(heartbeat.get("capabilities") or {}))
-        if not any([capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft]):
+        if not any([capabilities.search_email, capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft]):
             capabilities = self._discover_capabilities(config)
         connector_registry_service.set_enabled("email", True)
         connector_registry_service.record_seen(
@@ -206,6 +215,72 @@ class EmailService:
             raise EmailConnectorError("Draft creation failed.")
         return EmailDraftResponse(ok=True, draft_id=draft_id, url=url, message="Draft created.")
 
+    def search_preview(self, request: EmailSearchRequest) -> EmailSearchResponse:
+        self._require_connected()
+        config = self._configured_config()
+        capabilities = self._current_capabilities(config)
+        if not (capabilities.search_email or capabilities.search_emails):
+            raise EmailConnectorError("Email search is not available for this provider.")
+        messages = self.search_messages(
+            config,
+            EmailSyncRequest(scope=request.scope, query=request.query, max_items=request.max_items),
+        )
+        return EmailSearchResponse(
+            status="success",
+            messages=messages,
+            total=len(messages),
+            message=f"Found {len(messages)} email messages.",
+        )
+
+    def send_email(self, request: EmailSendRequest) -> EmailSendResponse:
+        if request.confirmation is not True:
+            raise EmailConnectorError("Email send requires confirmation.")
+        self._require_connected()
+        config = self._configured_config()
+        capabilities = self._current_capabilities(config)
+        if not capabilities.send_email:
+            raise EmailCapabilityUnavailableError("This email connector does not support sending.")
+        if self._is_mock(config):
+            return EmailSendResponse(ok=True, message_id=f"mock_sent_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}", url=None, message="Mock email sent.")
+        payload = {
+            "to": request.to.strip(),
+            "subject": request.subject.strip(),
+            "body": request.body.strip(),
+            "cc": request.cc,
+            "bcc": request.bcc,
+        }
+        data = self._call_send_email(config, payload)
+        message_id = ""
+        url = None
+        if isinstance(data, dict):
+            message_id = str(data.get("message_id") or data.get("messageId") or data.get("id") or "")
+            url = str(data.get("url") or data.get("web_url") or data.get("webUrl") or "") or None
+        return EmailSendResponse(ok=True, message_id=message_id or None, url=url, message="Email sent.")
+
+    def create_reply_draft(self, request: EmailReplyDraftRequest) -> EmailDraftResponse:
+        self._require_connected()
+        config = self._configured_config()
+        capabilities = self._current_capabilities(config)
+        if not capabilities.reply_email:
+            raise EmailConnectorError("Reply draft creation is not available for this provider.")
+        if self._is_mock(config):
+            return EmailDraftResponse(ok=True, draft_id=f"mock_reply_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}", url=None, message="Reply draft created.")
+        payload = {
+            "message_id": request.message_id.strip(),
+            "body": request.body.strip(),
+            "to": request.to.strip(),
+            "subject": request.subject.strip(),
+        }
+        data = self._call_reply_draft(config, payload)
+        draft_id = ""
+        url = None
+        if isinstance(data, dict):
+            draft_id = str(data.get("draft_id") or data.get("draftId") or data.get("id") or "")
+            url = str(data.get("url") or data.get("web_url") or data.get("webUrl") or "") or None
+        if not draft_id:
+            raise EmailConnectorError("Reply draft creation failed.")
+        return EmailDraftResponse(ok=True, draft_id=draft_id, url=url, message="Reply draft created.")
+
     def search_messages(self, config: dict[str, Any], request: EmailSyncRequest) -> list[NormalizedEmailMessage]:
         if self._is_mock(config):
             return _mock_messages(request)
@@ -221,7 +296,7 @@ class EmailService:
 
     def _discover_capabilities(self, config: dict[str, Any]) -> EmailCapabilityResponse:
         if self._is_mock(config):
-            return EmailCapabilityResponse(search_emails=True, read_email=True, list_folders=True, create_draft=True, send_email=False)
+            return EmailCapabilityResponse(search_email=True, search_emails=True, read_email=True, list_folders=True, create_draft=True, send_email=True, reply_email=False)
 
         attempts: list[dict[str, Any]] = []
         for path in ["/health", "/status", "/email/capabilities", "/capabilities"]:
@@ -229,7 +304,7 @@ class EmailService:
                 data = self._request(config, "GET", path)
                 attempts.append({"path": path, "ok": True})
                 capabilities = _capabilities_from_provider(data)
-                if any([capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft]):
+                if any([capabilities.search_email, capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft, capabilities.send_email]):
                     return capabilities
             except EmailConnectorError as exc:
                 attempts.append({"path": path, "error": str(exc)})
@@ -237,7 +312,7 @@ class EmailService:
         try:
             data = self._request(config, "POST", "/tools/list", json_payload={})
             capabilities = _capabilities_from_provider(data)
-            if any([capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft]):
+            if any([capabilities.search_email, capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft, capabilities.send_email]):
                 return capabilities
         except EmailConnectorError as exc:
             attempts.append({"path": "/tools/list", "error": str(exc)})
@@ -248,13 +323,13 @@ class EmailService:
             try:
                 data = self._call_tool(config, tool_name, arguments)
                 capabilities = _capabilities_from_provider(data)
-                if any([capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft]):
+                if any([capabilities.search_email, capabilities.search_emails, capabilities.read_email, capabilities.list_folders, capabilities.create_draft, capabilities.send_email]):
                     return capabilities
             except EmailConnectorError as exc:
                 attempts.append({"tool": tool_name, "error": str(exc)})
 
         if attempts:
-            return EmailCapabilityResponse(search_emails=True, read_email=False, list_folders=False, raw={"discovery_attempts": attempts})
+            return EmailCapabilityResponse(search_email=True, search_emails=True, read_email=False, list_folders=False, raw={"discovery_attempts": attempts})
         return EmailCapabilityResponse()
 
     def _call_direct_or_tool(self, config: dict[str, Any], direct_path: str, tool_name: str, arguments: dict[str, Any]) -> Any:
@@ -275,16 +350,58 @@ class EmailService:
         except EmailConnectorError as first_error:
             last_error = first_error
         tool_names = [
-            self._tool_name(config, "create_draft"),
-            "gmail.create_draft",
-            "gmail.draft",
-            "create_draft",
+                self._tool_name(config, "create_draft"),
+                "email.create_draft",
+                "gmail.create_draft",
+                "gmail.drafts.create",
+                "gmail.draft",
+                "create_draft",
+                "createDraft",
         ]
         seen: set[str] = set()
         for tool_name in tool_names:
             if tool_name in seen:
                 continue
             seen.add(tool_name)
+            try:
+                return self._call_tool(config, tool_name, payload)
+            except EmailConnectorError as error:
+                last_error = error
+        raise last_error
+
+    def _call_send_email(self, config: dict[str, Any], payload: dict[str, Any]) -> Any:
+        try:
+            return self._request(config, "POST", "/email/send", json_payload=payload)
+        except EmailConnectorError as first_error:
+            last_error = first_error
+        for tool_name in _unique_tool_names(
+            [
+                self._tool_name(config, "send_email"),
+                "email.send",
+                "gmail.send",
+                "gmail.messages.send",
+                "send_email",
+                "sendEmail",
+            ]
+        ):
+            try:
+                return self._call_tool(config, tool_name, payload)
+            except EmailConnectorError as error:
+                last_error = error
+        raise last_error
+
+    def _call_reply_draft(self, config: dict[str, Any], payload: dict[str, Any]) -> Any:
+        try:
+            return self._request(config, "POST", "/email/reply-draft", json_payload=payload)
+        except EmailConnectorError as first_error:
+            last_error = first_error
+        for tool_name in _unique_tool_names(
+            [
+                self._tool_name(config, "reply_draft"),
+                "email.reply_draft",
+                "gmail.reply_draft",
+            ]
+        ):
             try:
                 return self._call_tool(config, tool_name, payload)
             except EmailConnectorError as error:
@@ -413,6 +530,13 @@ class EmailService:
     def _provider_requires_recipient(self, config: dict[str, Any]) -> bool:
         return bool(config.get("requires_recipient", True))
 
+    def _current_capabilities(self, config: dict[str, Any]) -> EmailCapabilityResponse:
+        capabilities = _capabilities_from_dict(dict(connector_registry_service.heartbeat_metadata("email").get("capabilities") or config.get("capabilities") or {}))
+        if not any([capabilities.search_email, capabilities.search_emails, capabilities.read_email, capabilities.create_draft, capabilities.send_email, capabilities.reply_email]):
+            capabilities = self._discover_capabilities(config)
+            connector_registry_service.record_seen("email", {"capabilities": capabilities.model_dump()})
+        return capabilities
+
     def _config(self) -> dict[str, Any]:
         return connector_registry_service.get_config_dict("email")
 
@@ -502,12 +626,35 @@ def _capabilities_from_provider(data: Any) -> EmailCapabilityResponse:
     tools = _extract_list(raw, ["tools", "capabilities", "items"])
     names = {str(tool.get("name") or tool.get("id") or tool).lower() for tool in tools if isinstance(tool, (dict, str))}
     text = " ".join(names) + " " + " ".join(str(key).lower() for key in raw.keys())
+    search_email = bool(raw.get("search_email") or raw.get("search_emails") or raw.get("search") or "email.search" in text or "gmail.search" in text or "search_email" in text)
+    create_draft = bool(
+        raw.get("create_draft")
+        or raw.get("createDraft")
+        or "email.create_draft" in text
+        or "gmail.create_draft" in text
+        or "gmail.drafts.create" in text
+        or "gmail.draft" in text
+        or "create_draft" in text
+        or "createdraft" in text
+    )
+    send_email = bool(
+        raw.get("send_email")
+        or raw.get("sendEmail")
+        or raw.get("send")
+        or "email.send" in text
+        or "gmail.send" in text
+        or "gmail.messages.send" in text
+        or "send_email" in text
+        or "sendemail" in text
+    )
     return EmailCapabilityResponse(
-        search_emails=bool(raw.get("search_emails") or raw.get("search") or "email.search" in text or "search" in text),
+        search_email=search_email,
+        search_emails=search_email,
         read_email=bool(raw.get("read_email") or raw.get("get") or "email.get" in text or "read" in text),
         list_folders=bool(raw.get("list_folders") or raw.get("folders") or "email.list_folders" in text or "folder" in text),
-        create_draft=bool(raw.get("create_draft") or raw.get("createDraft") or "email.create_draft" in text or "gmail.create_draft" in text or "gmail.draft" in text or "create_draft" in text),
-        send_email=bool(raw.get("send_email") or "email.send" in text or "send" in text),
+        create_draft=create_draft,
+        send_email=send_email,
+        reply_email=bool(raw.get("reply_email") or raw.get("reply_draft") or "email.reply_draft" in text or "gmail.reply_draft" in text or "reply" in text),
         delete_email=bool(raw.get("delete_email") or "email.delete" in text or "delete" in text),
         modify_email=bool(raw.get("modify_email") or "archive" in text or "mark" in text or "modify" in text),
         raw={"provider_capabilities": raw},
@@ -515,12 +662,15 @@ def _capabilities_from_provider(data: Any) -> EmailCapabilityResponse:
 
 
 def _capabilities_from_dict(value: dict[str, Any]) -> EmailCapabilityResponse:
+    search_email = bool(value.get("search_email") or value.get("search_emails"))
     return EmailCapabilityResponse(
-        search_emails=bool(value.get("search_emails")),
+        search_email=search_email,
+        search_emails=search_email,
         read_email=bool(value.get("read_email")),
         list_folders=bool(value.get("list_folders")),
-        create_draft=bool(value.get("create_draft")),
-        send_email=bool(value.get("send_email")),
+        create_draft=bool(value.get("create_draft") or value.get("createDraft")),
+        send_email=bool(value.get("send_email") or value.get("sendEmail") or value.get("send")),
+        reply_email=bool(value.get("reply_email") or value.get("reply_draft")),
         delete_email=bool(value.get("delete_email")),
         modify_email=bool(value.get("modify_email")),
         raw=dict(value.get("raw") or {}),
@@ -572,6 +722,16 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def _safe_error(error: Exception) -> str:
     return re.sub(r"(Bearer|Token|Api-Key|Authorization)\s+[A-Za-z0-9._~+/=-]+", r"\1 [redacted]", str(error))[:200]
+
+
+def _unique_tool_names(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 email_service = EmailService()

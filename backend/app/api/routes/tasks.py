@@ -11,6 +11,7 @@ from app.schemas.tasks import (
     TaskPlanningResponse,
     TaskResponse,
 )
+from app.schemas.task_actions import ActionCapabilityRegistry, TaskActionExecuteRequest, TaskActionExecuteResponse
 from app.schemas.file_tasks import (
     DocumentSummaryCompleteRequest,
     DocumentSummaryCompleteResponse,
@@ -34,6 +35,7 @@ from app.services.file_task_llm_planner_service import file_task_llm_planner_ser
 from app.services.file_task_planner_service import file_task_planner_service
 from app.services.file_snapshot_service import file_snapshot_service
 from app.services.gmail_draft_planner import gmail_draft_planner
+from app.services.task_action_execution_service import TaskActionExecutionError, task_action_execution_service
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -86,6 +88,24 @@ def pending_tasks() -> TaskHistoryResponse:
 @router.get("/history", response_model=TaskHistoryResponse)
 def task_history(limit: int = Query(default=20, ge=1, le=100)) -> TaskHistoryResponse:
     return task_service.list_history(limit=limit)
+
+
+@router.get("/actions/capabilities", response_model=ActionCapabilityRegistry)
+def task_action_capabilities() -> ActionCapabilityRegistry:
+    return task_action_execution_service.capabilities()
+
+
+@router.post("/actions/execute", response_model=TaskActionExecuteResponse)
+def execute_task_action(request: TaskActionExecuteRequest) -> TaskActionExecuteResponse:
+    try:
+        return task_action_execution_service.execute(request)
+    except TaskActionExecutionError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to execute prepared task action")
+        raise HTTPException(status_code=500, detail=f"Action execution failed: {error}") from error
 
 
 @router.post("/file/scan", response_model=FileSnapshotResponse)

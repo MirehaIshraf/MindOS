@@ -21,6 +21,7 @@ class GmailDraftPlanner:
                         "content": (
                             "You write clean email drafts from user-provided local task history. "
                             "Use only the provided facts. Do not invent work. Do not expose internal event names. "
+                            "Do not mention MindOS task activity unless the user explicitly asks. "
                             "Return JSON only with keys: to, subject, body, tone, source_summary."
                         ),
                     },
@@ -83,6 +84,7 @@ class GmailDraftPlanner:
                 "- organized",
                 "- human sounding",
                 "- no raw internal labels",
+                "- do not dump file names or counts unless they are clearly useful",
                 "- no fake claims",
                 "- if the user asks for Bengali, write Bengali; otherwise write English",
             ]
