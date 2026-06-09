@@ -89,6 +89,8 @@ Gmail API calls go through `GmailService`, which refreshes expired access tokens
 
 Gmail task routing is separate from Email MCP routing: `gmail.*` task action -> Gmail connector status/capabilities -> GmailService/Gmail API. `email_mcp.*` connector work stays in the generic Email MCP connector. Gmail tasks do not use mock Email MCP state, generic Email MCP provider capabilities, or Email MCP send routes unless the user explicitly asks for a custom/corporate Email MCP task.
 
+Gmail Attachment Flow: user instruction -> attachment intent detection -> candidate search from recent task outputs and the currently selected browser-folder scan -> manual `Choose files` fallback -> editable Gmail draft/send preview -> attachment validation for blocked extensions and 20 MB total size -> user confirmation -> multipart Gmail draft/send route -> Gmail MIME message with attachments. Attachment file contents are held only in browser state/request memory long enough to create the Gmail draft/send request; contents are not sent to the LLM, indexed, or stored in Memory/Task History.
+
 ## VSCode Extension Runtime Flow
 
 Installed VSCode extension -> polls `/connectors/vscode/runtime` -> sends `/connectors/vscode/heartbeat` -> sends events only if the backend VSCode connector is enabled -> backend ingests through `/ingest/external`.

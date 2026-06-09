@@ -761,7 +761,7 @@ export async function createGmailTestDraft(): Promise<GmailDraftResponse> {
   return response.data;
 }
 
-export async function createGmailDraft(payload: GmailDraftRequest): Promise<GmailDraftResponse> {
+export async function createGmailDraft(payload: GmailDraftRequest | FormData): Promise<GmailDraftResponse> {
   const response = await api.post<GmailDraftResponse>("/connectors/gmail/drafts", payload);
   return response.data;
 }
@@ -771,7 +771,7 @@ export async function getGmailRecentEmails(limit = 10): Promise<GmailRecentEmail
   return response.data;
 }
 
-export async function sendGmailMessage(payload: GmailSendRequest): Promise<GmailSendResponse> {
+export async function sendGmailMessage(payload: GmailSendRequest | FormData): Promise<GmailSendResponse> {
   const response = await api.post<GmailSendResponse>("/connectors/gmail/send", payload);
   return response.data;
 }

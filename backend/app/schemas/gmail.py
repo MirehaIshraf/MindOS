@@ -31,7 +31,7 @@ class GmailStatusResponse(BaseModel):
     connected_at: str | None = None
     credential_file_name: str | None = None
     required_scopes: list[str] = Field(default_factory=lambda: list(REQUIRED_GMAIL_SCOPES))
-    capabilities: dict[str, bool] = Field(default_factory=dict)
+    capabilities: dict[str, bool | int] = Field(default_factory=dict)
 
 
 class GmailConnectResponse(BaseModel):

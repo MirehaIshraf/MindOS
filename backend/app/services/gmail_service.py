@@ -1,5 +1,6 @@
 import base64
 from email.message import EmailMessage
+import mimetypes
 from typing import Any
 
 import httpx
@@ -21,10 +22,27 @@ from app.services.gmail_token_store import gmail_token_store
 
 
 GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
+GMAIL_ATTACHMENT_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS = {
+    ".bat",
+    ".cmd",
+    ".db",
+    ".dll",
+    ".env",
+    ".exe",
+    ".key",
+    ".pem",
+    ".ps1",
+    ".sh",
+    ".sqlite",
+}
 
 
 class GmailConnectorError(ValueError):
     pass
+
+
+GmailAttachmentPayload = dict[str, Any]
 
 
 class GmailService:
@@ -49,6 +67,8 @@ class GmailService:
                 "search_email": connected,
                 "create_draft": connected and "https://www.googleapis.com/auth/gmail.compose" in scopes,
                 "send_email": connected and "https://www.googleapis.com/auth/gmail.compose" in scopes,
+                "attachments": connected and "https://www.googleapis.com/auth/gmail.compose" in scopes,
+                "max_attachment_total_mb": 20,
             },
         )
 
@@ -137,6 +157,23 @@ class GmailService:
 
     def create_draft(self, request: GmailDraftRequest) -> GmailDraftResponse:
         raw = self._build_raw_message([request.to], request.subject, request.body, cc=request.cc, bcc=request.bcc)
+        return self._create_draft_from_raw(raw)
+
+    def create_draft_with_attachments(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[GmailAttachmentPayload] | None = None,
+    ) -> GmailDraftResponse:
+        self._validate_message_fields(to, subject, body)
+        safe_attachments = self.validate_attachments(attachments or [])
+        raw = self._build_raw_message(to, subject, body, cc=cc, bcc=bcc, attachments=safe_attachments)
+        return self._create_draft_from_raw(raw)
+
+    def _create_draft_from_raw(self, raw: str) -> GmailDraftResponse:
         data = self._request("POST", "/users/me/drafts", json={"message": {"raw": raw}})
         draft_id = str(data.get("id") or "")
         message_id = str((data.get("message") or {}).get("id") or "") or None
@@ -158,6 +195,31 @@ class GmailService:
         if not status.capabilities.get("send_email"):
             raise GmailConnectorError("Gmail send is not connected yet. You can create a draft instead.")
         raw = self._build_raw_message(request.to, request.subject, request.body, cc=request.cc, bcc=request.bcc)
+        return self._send_raw_message(raw)
+
+    def send_message_with_attachments(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        confirmation: bool,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[GmailAttachmentPayload] | None = None,
+    ) -> GmailSendResponse:
+        if confirmation is not True:
+            raise GmailConnectorError("Gmail send requires confirmation.")
+        status = self.status()
+        if not status.connected:
+            raise GmailConnectorError("Gmail is not connected.")
+        if not status.capabilities.get("send_email"):
+            raise GmailConnectorError("Gmail send is not connected yet. You can create a draft instead.")
+        self._validate_message_fields(to, subject, body)
+        safe_attachments = self.validate_attachments(attachments or [])
+        raw = self._build_raw_message(to, subject, body, cc=cc, bcc=bcc, attachments=safe_attachments)
+        return self._send_raw_message(raw)
+
+    def _send_raw_message(self, raw: str) -> GmailSendResponse:
         data = self._request("POST", "/users/me/messages/send", json={"raw": raw})
         message_id = str(data.get("id") or "") or None
         thread_id = str(data.get("threadId") or "") or None
@@ -185,6 +247,26 @@ class GmailService:
         if not draft_id.strip():
             raise GmailConnectorError("Draft id is required.")
         return self._request("POST", f"/users/me/drafts/{draft_id.strip()}/send")
+
+    def validate_attachments(self, attachments: list[GmailAttachmentPayload]) -> list[GmailAttachmentPayload]:
+        total_size = 0
+        safe_attachments: list[GmailAttachmentPayload] = []
+        for attachment in attachments:
+            filename = str(attachment.get("filename") or "").strip()
+            if not filename:
+                raise GmailConnectorError("Attachment filename is required.")
+            extension = _extension_for_filename(filename)
+            if extension in GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS:
+                raise GmailConnectorError(f"Remove blocked file type: {filename}.")
+            content = attachment.get("content")
+            if not isinstance(content, bytes):
+                raise GmailConnectorError(f"Could not read attachment: {filename}.")
+            size = int(attachment.get("size") or len(content))
+            total_size += size
+            if total_size > GMAIL_ATTACHMENT_MAX_TOTAL_BYTES:
+                raise GmailConnectorError("Attachment total size is too large. Keep attachments under 20 MB.")
+            safe_attachments.append({**attachment, "filename": filename, "content": content, "size": size})
+        return safe_attachments
 
     def disconnect(self) -> GmailStatusResponse:
         gmail_oauth_service.disconnect()
@@ -235,7 +317,23 @@ class GmailService:
         value = response.json() if response.content else {}
         return value if isinstance(value, dict) else {}
 
-    def _build_raw_message(self, to: list[str], subject: str, body: str, cc: list[str] | None = None, bcc: list[str] | None = None) -> str:
+    def _validate_message_fields(self, to: list[str], subject: str, body: str) -> None:
+        if not [item.strip() for item in to if item.strip()]:
+            raise GmailConnectorError("Add a recipient before sending.")
+        if not subject.strip():
+            raise GmailConnectorError("Add a subject before sending.")
+        if not body.strip():
+            raise GmailConnectorError("Add an email body before sending.")
+
+    def _build_raw_message(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[GmailAttachmentPayload] | None = None,
+    ) -> str:
         message = EmailMessage()
         message["To"] = ", ".join([item.strip() for item in to if item.strip()])
         if cc:
@@ -244,6 +342,16 @@ class GmailService:
             message["Bcc"] = ", ".join([item.strip() for item in bcc if item.strip()])
         message["Subject"] = subject
         message.set_content(body)
+        for attachment in attachments or []:
+            filename = str(attachment.get("filename") or "attachment")
+            content_type = str(attachment.get("content_type") or "") or (mimetypes.guess_type(filename)[0] or "application/octet-stream")
+            maintype, _, subtype = content_type.partition("/")
+            message.add_attachment(
+                attachment["content"],
+                maintype=maintype or "application",
+                subtype=subtype or "octet-stream",
+                filename=filename,
+            )
         return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
 
@@ -254,6 +362,12 @@ def _headers_to_dict(headers: list[dict[str, Any]]) -> dict[str, str]:
         if name:
             result[name] = str(header.get("value") or "")
     return result
+
+
+def _extension_for_filename(filename: str) -> str:
+    if "." not in filename:
+        return ""
+    return f".{filename.rsplit('.', 1)[-1].lower()}"
 
 
 gmail_service = GmailService()

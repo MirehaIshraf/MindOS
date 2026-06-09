@@ -1,6 +1,6 @@
 import html
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from app.core.dependencies import get_event_repository, get_relationship_repository
 from app.schemas.connectors import (
@@ -329,18 +329,47 @@ def create_gmail_test_draft() -> GmailDraftResponse:
 
 
 @router.post("/gmail/drafts", response_model=GmailDraftResponse)
-def create_gmail_draft(request: GmailDraftRequest) -> GmailDraftResponse:
+async def create_gmail_draft(request: Request) -> GmailDraftResponse:
     try:
-        return gmail_service.create_draft(request)
+        if _is_multipart_request(request):
+            form = await request.form()
+            attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
+            return gmail_service.create_draft_with_attachments(
+                to=_form_string_list(form, "to"),
+                cc=_form_string_list(form, "cc"),
+                bcc=_form_string_list(form, "bcc"),
+                subject=_form_string(form, "subject"),
+                body=_form_string(form, "body"),
+                attachments=attachments,
+            )
+        payload = GmailDraftRequest.model_validate(await request.json())
+        return gmail_service.create_draft(payload)
     except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/gmail/send", response_model=GmailSendResponse)
-def send_gmail_message(request: GmailSendRequest) -> GmailSendResponse:
+async def send_gmail_message(request: Request) -> GmailSendResponse:
     try:
-        return gmail_service.send_message(request)
+        if _is_multipart_request(request):
+            form = await request.form()
+            attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
+            return gmail_service.send_message_with_attachments(
+                to=_form_string_list(form, "to"),
+                cc=_form_string_list(form, "cc"),
+                bcc=_form_string_list(form, "bcc"),
+                subject=_form_string(form, "subject"),
+                body=_form_string(form, "body"),
+                confirmation=_form_bool(form, "confirmation"),
+                attachments=attachments,
+            )
+        payload = GmailSendRequest.model_validate(await request.json())
+        return gmail_service.send_message(payload)
     except GmailConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
@@ -362,6 +391,56 @@ def disconnect_gmail() -> GmailStatusResponse:
 @router.delete("/gmail/credentials", response_model=GmailStatusResponse)
 def remove_gmail_credentials() -> GmailStatusResponse:
     return gmail_service.remove_credentials()
+
+
+def _is_multipart_request(request: Request) -> bool:
+    return "multipart/form-data" in (request.headers.get("content-type") or "").lower()
+
+
+def _form_string(form: object, key: str) -> str:
+    value = form.get(key) if hasattr(form, "get") else None
+    if _is_upload_file(value):
+        return ""
+    return str(value or "").strip()
+
+
+def _form_string_list(form: object, key: str) -> list[str]:
+    values = form.getlist(key) if hasattr(form, "getlist") else []
+    result: list[str] = []
+    for value in values:
+        if _is_upload_file(value):
+            continue
+        for part in str(value or "").split(","):
+            cleaned = part.strip()
+            if cleaned:
+                result.append(cleaned)
+    return result
+
+
+def _form_bool(form: object, key: str) -> bool:
+    value = _form_string(form, key).lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+async def _read_gmail_form_attachments(values: list[object]) -> list[dict[str, object]]:
+    attachments: list[dict[str, object]] = []
+    for value in values:
+        if not _is_upload_file(value):
+            continue
+        content = await value.read()
+        attachments.append(
+            {
+                "filename": getattr(value, "filename", None) or "attachment",
+                "content_type": getattr(value, "content_type", None) or "application/octet-stream",
+                "content": content,
+                "size": len(content),
+            }
+        )
+    return attachments
+
+
+def _is_upload_file(value: object) -> bool:
+    return hasattr(value, "read") and hasattr(value, "filename")
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)

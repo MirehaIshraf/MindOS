@@ -105,7 +105,7 @@ Preferred browser event types:
   `{ "repo_full_names": ["owner/repo"], "include_commits": true, "include_issues": true, "include_pull_requests": true, "max_items_per_type": 30 }`.
   Sync is limited to 5 repositories per request and up to 100 items per type. It requires GitHub to be connected, creates or updates `github_commit`, `github_issue`, and `github_pull_request` memory events with dedupe keys, and does not fetch file contents or perform GitHub writes.
 - `DELETE /connectors/github/events`: clears GitHub memory events and related relationships/vectors only. It does not clear the token.
-- `GET /connectors/gmail/status`: returns local Gmail connector status: `credentials_configured`, `connected`, `reconnect_required`, `email_address`, granted `scopes`, `last_error`, `connected_at`, `credential_file_name`, and required scopes. It never returns client secrets or tokens.
+- `GET /connectors/gmail/status`: returns local Gmail connector status: `credentials_configured`, `connected`, `reconnect_required`, `email_address`, granted `scopes`, `last_error`, `connected_at`, `credential_file_name`, required scopes, and capabilities including `attachments: true` plus `max_attachment_total_mb: 20` when Gmail compose is connected. It never returns client secrets or tokens.
 - `POST /connectors/gmail/credentials/upload`: saves a user-provided Google OAuth desktop credentials JSON locally. Request:
   `{ "filename": "credentials.json", "content": "{...json...}" }`.
   The backend validates `installed` or compatible OAuth fields and stores the original file at `~/.mindos/connectors/gmail/credentials.json`. Client secret is never returned.
@@ -114,10 +114,10 @@ Preferred browser event types:
 - `POST /connectors/gmail/test`: refreshes token if needed and calls Gmail profile. Returns connected status and email address.
 - `GET /connectors/gmail/recent?limit=5`: reads recent Gmail message metadata/snippets only. It does not fetch full message bodies or attachments.
 - `POST /connectors/gmail/drafts/test`: creates a Gmail draft addressed to the connected account. It never sends the draft.
-- `POST /connectors/gmail/drafts`: creates a Gmail draft using `{ "to": "...", "cc": [], "bcc": [], "subject": "...", "body": "..." }`. It never sends the draft.
+- `POST /connectors/gmail/drafts`: creates a Gmail draft using JSON `{ "to": "...", "cc": [], "bcc": [], "subject": "...", "body": "..." }`, or multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, and repeated `attachments` files. It never sends the draft. Multipart attachments are validated server-side; blocked extensions include `.exe`, `.dll`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.key`, `.pem`, `.env`, `.sqlite`, and `.db`, and total attachments are capped at 20 MB.
 - `POST /connectors/gmail/send`: sends a Gmail message only when Gmail is connected, Gmail `send_email` capability is available, recipient/subject/body are present, and `{ "confirmation": true }` is provided. Request:
   `{ "to": ["person@example.com"], "cc": [], "bcc": [], "subject": "...", "body": "...", "confirmation": true }`.
-  Missing confirmation returns a JSON error. Gmail credentials/tokens and message bodies are not stored in Memory.
+  The endpoint also accepts multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, `confirmation`, and repeated `attachments` files. Missing confirmation returns a JSON error. Attachment validation matches the draft endpoint. Gmail credentials/tokens, message bodies, and attachment contents are not stored in Memory.
 - `POST /connectors/gmail/drafts/{draft_id}/send`: sends an existing Gmail draft. The frontend must show explicit confirmation before calling this endpoint.
 - `POST /connectors/gmail/disconnect`: deletes `token.json`, keeps credentials, and marks Gmail disconnected.
 - `DELETE /connectors/gmail/credentials`: deletes local Gmail credentials and token state.

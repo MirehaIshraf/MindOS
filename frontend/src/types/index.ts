@@ -1120,8 +1120,10 @@ export type GmailStatusResponse = {
     read_email?: boolean;
     search_email?: boolean;
     create_draft?: boolean;
-  send_email?: boolean;
-  reply_email?: boolean;
+    send_email?: boolean;
+    reply_email?: boolean;
+    attachments?: boolean;
+    max_attachment_total_mb?: number;
   };
 };
 
