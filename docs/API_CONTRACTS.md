@@ -142,7 +142,7 @@ Preferred browser event types:
 - `POST /connectors/email/search`: read-only search/preview through the connected MCP email provider. Request:
   `{ "scope": "search", "query": "deployment", "max_items": 10 }`.
   Response includes normalized `messages` with id/thread id, subject, sender, recipients, date, snippet/body excerpt, labels/folder, attachment metadata, and URL. It does not create Memory events by itself.
-- `POST /connectors/email/send`: send a new email through a connected MCP email provider only when `send_email` capability is available and `{ "confirmation": true }` is present. Request:
+- `POST /connectors/email/send`: send a new email through a connected MCP email provider only when explicitly using Email MCP, `send_email` capability is available, and `{ "confirmation": true }` is present. Request:
   `{ "to": "person@example.com", "subject": "...", "body": "...", "cc": [], "bcc": [], "confirmation": true }`.
   It validates connected state, `send_email`, confirmation, recipient, subject, and body. Missing confirmation returns `400` with `Email send requires confirmation.` Providers without send return `409` with `This email connector does not support sending.` It does not delete/archive/mark messages and does not create Memory events. Mock providers return a `mock_sent_...` message id and do not send real email.
 - `POST /connectors/email/reply-draft`: create a reply draft through a connected MCP email provider only when `reply_email` capability is available. Request:
@@ -173,7 +173,7 @@ Preferred browser event types:
 
 ## Tasks
 
-Tasks are experimental/paused but routes still exist:
+Tasks are experimental. File/document/Gmail task POCs are active behind preview, capability checks, and confirmation; other task adapters remain planned/disabled unless explicitly implemented.
 
 - `GET /tasks`
 - `POST /tasks/execute`
@@ -210,18 +210,19 @@ File System Task Adapter routes:
 - `POST /tasks/gmail/draft/prepare`: prepare an editable Gmail draft preview from user instruction and recent task-history facts. Request:
   `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "model_id": null }`.
   Response includes `to`, `subject`, `body`, `tone`, `source_summary`, warnings, model/provider metadata, and an optional planner warning. The selected LLM returns structured JSON when available; otherwise MindOS returns a clean deterministic fallback. The endpoint does not create a Gmail draft, send email, or create Memory events.
+  Attachment-aware Gmail task previews are frontend-driven: the LLM planner receives filenames/task history only, not attachment contents. Actual files are submitted later through the Gmail draft/send multipart routes only after user selection and confirmation.
 - `GET /tasks/actions/capabilities`: returns the action capability registry used by Tasks previews. Capabilities include `gmail.read`, `gmail.createDraft`, `gmail.searchEmails`, `gmail.summarizeEmails`, `gmail.sendEmail`, `gmail.send`, `gmail.replyDraft`, `github.read`, `github.createIssue`, `github.createPullRequest`, `git.status`, `git.diff`, `git.commit`, and `git.push`. Each record includes `available`, `provider`, `risk_level`, `requires_confirmation`, and optional `reason`.
 - `POST /tasks/actions/execute`: execute one prepared action after explicit user confirmation. Request:
   `{ "action_id": "action_...", "action_type": "gmail.createDraft", "preview": { "to": "person@example.com", "subject": "...", "body": "..." }, "confirmation": true }`.
   Response:
   `{ "ok": true, "status": "completed", "result": { "provider": "gmail", "draft_id": "...", "sent": false }, "message": "Draft created in Gmail. It was not sent." }`.
-  The endpoint rejects missing confirmation, unsupported actions, missing capabilities, and invalid preview payloads. Gmail task actions route through Gmail connector capabilities and Gmail-specific draft/send routes. Email MCP remains separate and is not used for Gmail POC tasks. Gmail send requires Gmail `send_email` capability and confirmation. GitHub write actions, local Git commit, and Git push remain disabled.
+  The endpoint rejects missing confirmation, unsupported actions, missing capabilities, and invalid preview payloads. Gmail task actions route through Gmail connector capabilities and Gmail-specific draft/send routes. Email MCP remains separate and is not used for Gmail POC tasks. Gmail send requires Gmail `send_email` capability and confirmation. Gmail attachments are handled through the multipart Gmail connector routes, not by storing file contents in task execution JSON. GitHub write actions, local Git commit, and Git push remain disabled/planned.
 - `POST /tasks/file/{task_id}/execute`: execute a prepared plan only when `{ "confirmation": true }` is provided.
 - `POST /tasks/file/{task_id}/undo`: run safe undo operations when available.
 - `GET /tasks/file/{task_id}`: fetch file task plan, execution result, and undo state.
 - `GET /tasks/file/recent`: list recent file tasks.
 
-Only File System tasks are active. Other task adapters remain paused/mock-only unless explicitly requested.
+Active task POCs are file organization, document summary, and Gmail draft/send. Other task adapters remain paused/mock-only unless explicitly requested and implemented.
 
 ## Playbooks
 

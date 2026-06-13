@@ -28,7 +28,13 @@ Main MVP modules:
 - Settings
 - Dev
 
-Tasks are experimental/paused except for the File System Task Adapter MVP. The file adapter supports local file organization with plan/preview/confirm/execute/undo. Other task adapters remain paused/mock-only.
+Tasks are experimental, but several safe POC task flows are active after explicit user request:
+
+- File organization with scan, plan, preview, confirmation, and browser-selected-folder execution.
+- Document summary with selected file reading, LLM summary preview, and non-overwriting summary save.
+- Gmail draft/send through the dedicated Gmail connector, including editable previews, explicit send confirmation, and attachment preview/selection.
+
+Other task adapters remain paused/mock-only unless explicitly implemented.
 
 ## Current Data Sources
 
@@ -105,4 +111,16 @@ Final task architecture:
 
 User asks task -> FastAPI retrieves context -> model drafts plan -> FastAPI validates -> user confirms -> FastAPI executes allowed tool
 
-The File System Task Adapter is the first safe MVP version of this architecture. It only allows local `create_folder`, `move_file`, `copy_file`, and `rename_file` operations inside a selected root folder after confirmation. Do not extend this to external task execution until explicitly requested.
+Current active task POCs are file organization, document summary, Gmail draft/send with confirmation, and Gmail attachment preview/selection. These flows are not production-grade autonomous agents; they are gated preview-confirm-execute slices.
+
+Gmail has a dedicated local Gmail connector for OAuth, recent metadata, drafts, sends, and attachments. Gmail tasks route to that connector by default. The generic Email MCP connector remains separate for custom, internal, corporate, or managed MCP providers and should be used only when explicitly selected.
+
+The File System Task Adapter allows local `create_folder`, `move_file`, `copy_file`, and `rename_file` style planning inside a selected root folder after confirmation. Browser-selected file execution is a POC path and must remain non-destructive: no overwrite, delete, shell, or silent scan.
+
+Future task direction:
+
+- GitHub API tasks: create issues and pull requests only after preview and confirmation.
+- Local Git tasks: status, diff, commit, and push only after preview and confirmation.
+- GitHub push is a local Git remote operation, not only a GitHub API operation.
+
+Do not extend task execution to new external providers until explicitly requested and routed through preview, capability checks, confirmation, and allowlisted execution.

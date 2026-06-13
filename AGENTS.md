@@ -6,7 +6,7 @@ MindOS is a local-first personal AI workspace for developers. It collects local 
 
 ## Current Priority
 
-The current priority is data collection and memory quality:
+The current priority is data collection and memory quality, with safe task execution POCs now active where explicitly implemented:
 
 1. Connectors
 2. External ingestion API
@@ -16,14 +16,16 @@ The current priority is data collection and memory quality:
 6. Clean memory/indexing policy
 7. Stable local memory and retrieval
 
-Tasks and agentic execution are currently paused/experimental.
+Tasks are experimental. Gmail task actions and file/document tasks are active POC features when they follow preview, capability checks, confirmation, and allowlisted execution.
 
 ## Non-Negotiable Rules
 
-- Do not add real external task execution unless explicitly requested.
-- Do not send real email.
+- Do not add real external task execution unless explicitly requested and guarded by preview plus confirmation.
+- Do not send real email silently.
 - Do not call real Jira/GitHub write APIs.
 - Do not run destructive Git commands.
+- Never run arbitrary shell commands from task flows.
+- Never force push, delete branches, reset, clean, rebase, or change Git remotes from task flows.
 - Do not auto-start Ollama.
 - Do not auto-pull models.
 - Do not auto-scan folders.
@@ -129,8 +131,13 @@ Before adding a new feature:
 - GitHub connector is read-only until explicitly expanded. Do not add GitHub write actions such as creating issues, commenting, merging, pushing, or updating pull requests unless requested.
 - Email connector is provider-agnostic MCP-style and read-only until explicitly expanded. Do not hardcode Gmail OAuth, Gmail app passwords, IMAP, Samsung Knox, Composio, Zapier, or any single provider unless explicitly requested. Do not add email send, reply, forward, delete, archive, mark-read/unread, or draft actions unless explicitly requested. Do not store full email bodies, attachment contents, API keys, or tokens. Do not log or expose email provider credentials.
 - Gmail connector is a separate explicit local OAuth connector. It must use user-uploaded Google OAuth desktop credentials, localhost callback, and only `gmail.compose` plus `gmail.readonly` scopes. Never request broad Gmail full-access scopes, never expose client secrets/tokens to the frontend, and never send Gmail messages without explicit user confirmation.
-- Do not route Gmail tasks through the generic Email MCP connector when the Gmail connector exists. `gmail.*` task actions must use Gmail connector status, Gmail capabilities, and Gmail-specific routes.
-- Gmail attachments must never be added silently. Show attachment candidates or manual file choices in preview, require user selection and confirmation, block dangerous file types, enforce size limits, and never store attachment contents in Memory or Task History.
+- Do not route Gmail tasks through the generic Email MCP connector when the Gmail connector exists. `gmail.*` task actions must use Gmail connector status, Gmail capabilities, and Gmail-specific routes unless the user explicitly chooses a custom/corporate Email MCP task.
+- Gmail send is allowed only when Gmail is connected, send capability is available, recipient/subject/body are valid, the user has seen an editable preview, and the user explicitly confirms send.
+- Gmail drafts may be created after preview. Gmail draft bodies, sent bodies, credentials, and tokens must not be stored in Memory.
+- Gmail attachments must never be added silently. Show attachment candidates or manual file choices in preview, require user selection and confirmation, block dangerous file types, enforce size limits, and never store attachment contents in Memory or Task History. Attachment filenames may appear in lightweight Task History.
+- Generic Email MCP remains provider-agnostic for custom/corporate/internal providers and should not be confused with Gmail.
+- Future GitHub/local Git write actions require preview, exact capability checks, and explicit confirmation. GitHub API actions belong to the GitHub connector; local repo status/diff/commit/push belongs to the local Git connector.
+- Git commit/push tasks must use allowlisted Git commands only.
 - External collectors should use the external ingestion API.
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
 - VSCode connector should behave like an installed extension, not only a debug Extension Development Host.
@@ -148,7 +155,9 @@ Before adding a new feature:
 
 ## Current Known Direction
 
-Tasks are mostly paused, except the File System Task Adapter MVP. File tasks may use the selected LLM only to draft a plan; FastAPI validates every operation, shows a preview, requires user confirmation, executes through `FileAdapter`, and stores an undo log. Do not add delete, overwrite, shell command, external API, email, Jira, GitHub, browser, or VSCode task adapters unless explicitly requested.
+Tasks are experimental, but file organization, document summary, and Gmail draft/send actions are active POC features. Every task action must follow action classification, capability checks, editable preview, explicit confirmation for side effects, allowlisted execution, and lightweight Task History.
+
+File tasks may use the selected LLM only to draft a plan; FastAPI or the browser POC validates every operation, shows a preview, and requires user confirmation. Do not add delete, overwrite, shell command, Jira, GitHub write, browser, VSCode, or other task adapters unless explicitly requested.
 
 When modifying Tasks, keep task execution safe: LLM plans, FastAPI validates, the user confirms, and the backend executes. Do not add direct execution from the frontend.
 
@@ -160,9 +169,9 @@ Document summary tasks may read selected safe text documents from a browser-sele
 Document summary PDF support is selectable-text extraction only. Do not add OCR or scanned-PDF processing unless explicitly requested.
 Generated document summary filenames must be sanitized, should use meaningful inferred topics when possible, and must never overwrite existing files.
 
-Tasks must render action-specific workflows. Do not make the Tasks page file-system-first for every command: folder picker, scan, and file plan controls should appear only for file organization and document summary actions. Gmail draft tasks should show an editable draft preview and create a draft only after user confirmation; never show a Send button in the task flow.
+Tasks must render action-specific workflows. Do not make the Tasks page file-system-first for every command: folder picker, scan, and file plan controls should appear only for file organization and document summary actions. Gmail draft/send tasks should show an editable Gmail preview, optional user-selected attachments, and a final confirmation before any send.
 
-Email actions must create drafts only unless send support is explicitly requested later. Draft content must be generated from provided facts only, previewed, and editable before creation. Do not index Gmail draft bodies or store email provider credentials in Memory.
+Gmail task actions use the dedicated Gmail connector. Generic Email MCP actions remain separate and should be used only for explicitly selected custom/corporate MCP provider tasks. Draft/send content must be generated from provided facts only, previewed, and editable before creation/send. Do not index Gmail draft bodies, sent bodies, attachment contents, or store email provider credentials in Memory.
 
 Never execute external side-effect actions without user confirmation. Gmail, GitHub, local Git, file, and future provider actions must follow preview -> capability check -> confirmation -> execution; never execute raw LLM tool calls. Email send must always require explicit confirmation immediately before execution.
 Never silently disable risky action buttons. Always show a user-facing blocked reason.

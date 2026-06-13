@@ -10,6 +10,8 @@
 - No hidden side effects.
 - No automatic expensive operations on page load.
 - All destructive actions require confirmation.
+- External side-effect actions must show exact missing capability/input reasons.
+- Do not silently disable dangerous buttons.
 
 ## Backend
 
@@ -31,6 +33,7 @@
 - Only show "backend offline" for network failure.
 - Keep user-facing UI calm and not text-heavy.
 - Dev page can be technical; Chat page should be clean.
+- Keep connector-specific logic out of generic task components where possible; use services and capability contracts.
 
 ## Performance
 

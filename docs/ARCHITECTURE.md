@@ -29,7 +29,7 @@ Actual structure:
 - `types`: shared frontend TypeScript types.
 - `store`: global UI state.
 
-Chat is the primary user interface. Memory is for browsing and searching stored knowledge. Connectors control data sources. Settings manages models and configuration. Dev is for debugging only. Tasks exist but are paused/experimental.
+Chat is the primary user interface. Memory is for browsing and searching stored knowledge. Connectors control data sources. Settings manages models and configuration. Dev is for debugging only. Tasks are experimental, with active POC flows for file organization, document summary, and Gmail draft/send actions.
 
 ## Data Flow
 
@@ -77,9 +77,9 @@ The GitHub connector is primarily a configuration and context source. It stores 
 
 ## Email MCP Connector Flow
 
-Email is read-only in the current POC through a provider-agnostic MCP-style adapter: user configures provider name -> MCP/API base URL -> auth type and optional token/API key -> optional tool mapping -> test connection/capability discovery -> connect -> sync recent/unread/search messages -> normalize provider responses -> dedupe by provider/account/message id -> create or update `email_message` memory events -> chat/search can retrieve email context.
+Email MCP is a provider-agnostic custom/corporate/internal provider path, separate from Gmail. The current POC flow is: user configures provider name -> MCP/API base URL -> auth type and optional token/API key -> optional tool mapping -> test connection/capability discovery -> connect -> sync recent/unread/search messages -> normalize provider responses -> dedupe by provider/account/message id -> create or update `email_message` memory events -> chat/search can retrieve email context.
 
-The adapter supports mock provider mode (`api_base_url=mock`) for demos, direct normalized REST endpoints such as `/email/search`, and MCP tool-call style providers through `/tools/call`. MindOS never hardcodes Gmail, IMAP, Samsung Knox, Composio, Zapier, or any one provider. Provider-specific details stay in `EmailService`/the MCP adapter layer. API keys/tokens are stored locally in connector config for now, stripped from config/status responses, never written to Memory events, never logged intentionally, and never sent to the model. Email draft/send task actions are capability-driven: provider tools are normalized into `read_email`, `search_email`, `create_draft`, `send_email`, and `reply_email`; the UI chooses Send Email only when `send_email` is true, otherwise it offers a Create Draft fallback when `create_draft` is true. Send always requires a valid preview and final confirmation. Delete, archive, forward, mark read/unread, and other modifying tools remain disabled.
+The adapter supports mock provider mode (`api_base_url=mock`) for demos, direct normalized REST endpoints such as `/email/search`, and MCP tool-call style providers through `/tools/call`. MindOS never hardcodes Gmail, IMAP, Samsung Knox, Composio, Zapier, or any one provider. Provider-specific details stay in `EmailService`/the MCP adapter layer. API keys/tokens are stored locally in connector config for now, stripped from config/status responses, never written to Memory events, never logged intentionally, and never sent to the model. Email MCP draft/send actions are capability-driven and should be used only when the user explicitly chooses a custom/corporate Email MCP task. Gmail tasks use the dedicated Gmail connector instead. Delete, archive, forward, mark read/unread, and other modifying tools remain disabled.
 
 ## Gmail Connector Flow
 
@@ -121,11 +121,19 @@ SQLite event -> embedding text builder -> Ollama embedding model -> ChromaDB vec
 
 SQLite remains source of truth. ChromaDB stores vectors and lightweight metadata only.
 
+## Task Execution Flow
+
+Tasks follow a gated execution pattern:
+
+instruction -> classifier -> prepared action -> capability registry -> source/context collection -> LLM planner if needed -> editable preview -> explicit confirmation -> allowlisted execution -> Task History.
+
+LLMs may draft plans, email bodies, issue descriptions, PR text, or commit messages, but raw model output is never executed directly. Every side-effecting action must have visible disabled reasons when blocked, and every send/commit/push/write action requires explicit user confirmation.
+
 ## File System Task Adapter UI Flow
 
 The Tasks UI starts with an action classifier: user command -> task action type -> action-specific preview. File organization and document summary actions continue into folder context. Gmail draft, Gmail search, memory report, and GitHub lookup actions render their own preview surfaces instead of showing folder controls.
 
-Gmail draft/send task flow: user command -> `gmail.createDraft` or `gmail.sendEmail` action -> collect recent task-history facts -> selected LLM draft planner returns structured To/Subject/Body JSON -> editable preview -> user clicks Create Gmail Draft or Send Email -> GmailService creates the draft or sends the message only after confirmation. If the selected model is unavailable, MindOS uses a clean deterministic formatter instead of raw task-history dumps. If Gmail is disconnected, draft/send is unavailable, or recent task history is missing, the UI shows Gmail-specific state clearly without falling back to file/folder controls or Email MCP.
+Gmail draft/send task flow: user command -> `gmail.createDraft` or `gmail.sendEmail` action -> Gmail connector status/capabilities -> collect recent task-history facts -> selected LLM draft planner returns structured To/Subject/Body JSON -> editable preview -> optional attachment selection -> final confirmation for send -> GmailService creates the draft or sends the message. If the selected model is unavailable, MindOS uses a clean deterministic formatter instead of raw task-history dumps. If Gmail is disconnected, draft/send is unavailable, or recent task history is missing, the UI shows Gmail-specific state clearly without falling back to file/folder controls or Email MCP.
 
 The file task UI follows a compact command flow: user command -> folder scan -> deterministic or AI-assisted plan preview -> confirmation -> browser execution for selected handles -> undo when available.
 
@@ -155,3 +163,25 @@ User instruction -> classifier -> planner -> capability check -> action-specific
 `PreparedAction` and the action capability registry are the shared foundation for Gmail, GitHub, local Git, file, and document actions. LLMs may draft text such as email bodies, commit messages, issue titles, and PR descriptions, but the backend validates capabilities and preview payloads before any side-effect action runs. External write actions such as Gmail send, GitHub issue/PR creation, local Git commit, and Git push remain disabled until explicitly implemented.
 
 Gmail task flow: instruction -> email intent classification -> Gmail planner/search -> Gmail capability check -> action-specific preview -> user-facing blocked reason or confirmation -> GmailService action -> Task History. Search and summarize actions are read-only. Gmail send is available only when the Gmail connector exposes `send_email`; if send is absent but `create_draft` exists, the preview switches the primary action to Create Gmail Draft. Send still requires confirmation at the UI and backend service boundary.
+
+Gmail tasks never use Email MCP unless the user explicitly asks for a custom/corporate Email MCP task.
+
+## Gmail Task Flow
+
+`gmail.*` task -> Gmail connector status/capabilities -> Gmail planner/search -> editable draft/send preview -> optional attachment selection -> final confirmation -> GmailService draft/send route.
+
+The Gmail connector owns Gmail-specific OAuth, recent metadata reads, draft creation, sends, and attachments. Email MCP capabilities must not leak into Gmail task availability.
+
+## Gmail Attachment Flow
+
+instruction -> attachment intent detection -> candidate search from recent task outputs, the current selected folder, or an explicit file index when available -> manual Choose Files fallback -> checkbox selection -> validation -> preview -> confirmation -> multipart Gmail draft/send.
+
+Attachment validation blocks dangerous extensions, enforces the configured total-size cap, and prevents silent attachment. Attachment contents are only held long enough to submit the confirmed Gmail request; they are not indexed, sent to the LLM, or stored in Memory/Task History.
+
+## GitHub And Local Git Future Flow
+
+GitHub API tasks are planned for repository API actions such as issues, pull requests, and repository metadata. They should use GitHub connector capabilities, preview, and confirmation.
+
+Local Git tasks are planned for repository status, diff, commit, and push. Commit/push flow should be: status/diff -> LLM commit message or action plan -> selected files preview -> explicit confirmation -> allowlisted Git command. GitHub push is a local Git remote operation, not only a GitHub API operation.
+
+No future GitHub/local Git task may force push, delete branches, reset, clean, rebase, change remotes, or run arbitrary shell commands unless an explicit future decision changes that policy.
