@@ -114,10 +114,10 @@ Preferred browser event types:
 - `POST /connectors/gmail/test`: refreshes token if needed and calls Gmail profile. Returns connected status and email address.
 - `GET /connectors/gmail/recent?limit=5`: reads recent Gmail message metadata/snippets only. It does not fetch full message bodies or attachments.
 - `POST /connectors/gmail/drafts/test`: creates a Gmail draft addressed to the connected account. It never sends the draft.
-- `POST /connectors/gmail/drafts`: creates a Gmail draft using JSON `{ "to": "...", "cc": [], "bcc": [], "subject": "...", "body": "..." }`, or multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, and repeated `attachments` files. It never sends the draft. Multipart attachments are validated server-side; blocked extensions include `.exe`, `.dll`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.key`, `.pem`, `.env`, `.sqlite`, and `.db`, and total attachments are capped at 20 MB.
+- `POST /connectors/gmail/drafts`: creates a Gmail draft using JSON `{ "to": "...", "cc": [], "bcc": [], "subject": "...", "body": "...", "indexed_attachments": [{ "source_id": "...", "relative_path": "resume.pdf" }] }`, or multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, optional `indexed_attachments` JSON, and repeated `attachments` files. It never sends the draft. Manual and indexed attachments are resolved and validated server-side; blocked extensions include `.exe`, `.dll`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.key`, `.pem`, `.env`, `.sqlite`, `.db`, `.zip`, `.rar`, and `.7z`, and total attachments are capped at 20 MB.
 - `POST /connectors/gmail/send`: sends a Gmail message only when Gmail is connected, Gmail `send_email` capability is available, recipient/subject/body are present, and `{ "confirmation": true }` is provided. Request:
   `{ "to": ["person@example.com"], "cc": [], "bcc": [], "subject": "...", "body": "...", "confirmation": true }`.
-  The endpoint also accepts multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, `confirmation`, and repeated `attachments` files. Missing confirmation returns a JSON error. Attachment validation matches the draft endpoint. Gmail credentials/tokens, message bodies, and attachment contents are not stored in Memory.
+  The endpoint also accepts multipart/form-data with fields `to`, `cc`, `bcc`, `subject`, `body`, `confirmation`, optional `indexed_attachments` JSON, and repeated `attachments` files. Missing confirmation returns a JSON error. Attachment validation matches the draft endpoint. Gmail credentials/tokens, message bodies, and attachment contents are not stored in Memory.
 - `POST /connectors/gmail/drafts/{draft_id}/send`: sends an existing Gmail draft. The frontend must show explicit confirmation before calling this endpoint.
 - `POST /connectors/gmail/disconnect`: deletes `token.json`, keeps credentials, and marks Gmail disconnected.
 - `DELETE /connectors/gmail/credentials`: deletes local Gmail credentials and token state.
@@ -157,6 +157,14 @@ Preferred browser event types:
 - `POST /connectors/file-system/preview`: preview folder import.
 - `POST /connectors/file-system/import`: import folder by path.
 - `DELETE /connectors/file-system/events`: clear only file system events.
+- `GET /connectors/file-system/tracked-folders`: list connected File System folders. Returns folder id, name, path, enabled/indexing flags, `index_status`, last/next index timestamps, counts, and lightweight config.
+- `POST /connectors/file-system/tracked-folders`: connect a folder and queue lazy background indexing. Request:
+  `{ "path": "D:\\Projects\\MindOS", "name": "MindOS", "indexing_enabled": true, "recursive": true, "max_depth": 5, "max_files": 2000, "max_file_size_mb": 5, "allowed_extensions": [".md", ".py"], "index_interval_minutes": 20 }`.
+  The backend validates the path with the same protected-folder rules as file scanning, saves or updates a tracked File System source, and returns immediately after queueing indexing. It does not create Memory events for the source save or index job.
+- `PUT /connectors/file-system/tracked-folders/{source_id}`: update a tracked folder's path/name/enabled state or indexing settings. If enabled, it queues a fresh background index. Returns the tracked folder.
+- `DELETE /connectors/file-system/tracked-folders/{source_id}`: remove the tracked folder source. Existing indexed memory is not deleted automatically; use clear events if the user explicitly wants to remove file memory.
+- `POST /connectors/file-system/tracked-folders/{source_id}/reindex`: queue a background reindex job. Returns job status and does not block on scanning.
+- `GET /connectors/file-system/index-jobs`: list recent in-memory background index jobs with queued/running/completed/failed status. Index job lifecycle records are status only, not Memory events.
 - `POST /connectors/logs/preview`: preview log file import.
 - `POST /connectors/logs/import`: import log file by path.
 - `DELETE /connectors/logs/events`: clear only log events.
@@ -168,6 +176,7 @@ Preferred browser event types:
 - `PUT /connectors/sources/{source_id}`: update saved connector source.
 - `DELETE /connectors/sources/{source_id}`: delete saved connector source.
 - `POST /connectors/sources/{source_id}/import`: run import for a saved source.
+- `POST /connectors/sources/{source_id}/index`: reindex a saved File System source as a connected folder. Requires an enabled `file_system` saved source with `indexing_enabled=true`. It scans only that source path, extracts bounded readable text, creates or updates `file_system/file_indexed` memory events by `source_id + relative_path`, and returns the same source/import-run/result envelope as saved source imports.
 - `DELETE /connectors/sources/{source_id}/events`: clear events for one saved source.
 - `GET /connectors/import-runs`: list import history.
 
@@ -184,6 +193,17 @@ Tasks are experimental. File/document/Gmail task POCs are active behind preview,
 - `GET /tasks/history`
 
 File System Task Adapter routes:
+
+- `POST /tasks/files/search`: search already-indexed connected folder files. It does not read arbitrary files during search. Request:
+  `{ "query": "resume cv curriculum vitae", "source_ids": ["..."], "extensions": [".pdf", ".docx"], "search_content": true, "search_filename": true, "connected_sources_only": true, "attachable_only": true, "limit": 20 }`.
+  Response:
+  `{ "matches": [{ "event_id": null, "source_id": "...", "file_name": "resume.pdf", "relative_path": "CV/resume.pdf", "extension": ".pdf", "size_bytes": 12345, "modified_at": "...", "score": 0.87, "match_reason": "filename matched resume", "matched_excerpt": "", "content_index_status": "failed", "attachable": true }] }`.
+  Matches can come from file inventory even when content indexing failed, so `event_id` may be `null`. Content matches include `event_id`, `matched_excerpt`, and `content_index_status: "indexed"`. Inventory records are connector metadata, not Memory events.
+- `POST /tasks/files/resolve-attachments`: resolve selected indexed file candidates before Gmail attachment use. Request:
+  `{ "files": [{ "source_id": "...", "relative_path": "CV/resume.pdf" }] }`.
+  Response:
+  `{ "attachments": [{ "id": "...:CV/resume.pdf", "file_name": "resume.pdf", "source_id": "...", "relative_path": "CV/resume.pdf", "size_bytes": 12345, "extension": ".pdf", "attachable": true, "reason": null }] }`.
+  Resolution never trusts frontend absolute paths. The backend validates that `source_id` is an enabled indexed File System connector source, `relative_path` has no traversal/absolute path segments, the resolved file stays inside the connected root, the file exists, the type is allowed, and attachment size limits are respected.
 
 - `POST /tasks/file/scan`: read-only scan of a selected folder without reading file contents or modifying files. Request:
   `{ "root_path": "D:\\Downloads", "max_depth": 2, "max_files": 500, "include_hidden": false }`.
@@ -207,10 +227,10 @@ File System Task Adapter routes:
   `{ "task_id": "...", "folder_name": "Notes", "output_file_name": "capsule-networks-summary.md", "files_used_count": 3, "files_skipped_count": 1, "summary_style": "detailed", "output_format": "markdown", "file_types_used": ["pdf", "docx", "md"], "summary_title": "Summarized Capsule Networks documents", "topic": "Capsule Networks", "naming_confidence": "high" }`.
   Response includes `status`, `task_type`, optional `memory_event_id`, and optional `warning`.
   This endpoint creates the only task-related Memory event for the File Task POC: `mindos/document_summary_created`. It stores lightweight dynamic title/topic plus filename/folder/count/style/format/file-type metadata only, not full source document text.
-- `POST /tasks/gmail/draft/prepare`: prepare an editable Gmail draft preview from user instruction and recent task-history facts. Request:
-  `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "model_id": null }`.
+- `POST /tasks/gmail/draft/prepare`: prepare an editable Gmail draft preview from user instruction, recent task-history facts, and optional selected attachment filenames only. Request:
+  `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "attachment_filenames": ["resume.pdf"], "model_id": null }`.
   Response includes `to`, `subject`, `body`, `tone`, `source_summary`, warnings, model/provider metadata, and an optional planner warning. The selected LLM returns structured JSON when available; otherwise MindOS returns a clean deterministic fallback. The endpoint does not create a Gmail draft, send email, or create Memory events.
-  Attachment-aware Gmail task previews are frontend-driven: the LLM planner receives filenames/task history only, not attachment contents. Actual files are submitted later through the Gmail draft/send multipart routes only after user selection and confirmation.
+  Attachment-aware Gmail task previews are frontend-driven: the LLM planner receives selected filenames/task history only, not attachment contents. Candidate search may use recent summary outputs, the current browser-selected folder, and `/tasks/files/search` over connected indexed folders only. Actual files are submitted later through manual multipart files or `indexed_attachments` references after user selection and confirmation.
 - `GET /tasks/actions/capabilities`: returns the action capability registry used by Tasks previews. Capabilities include `gmail.read`, `gmail.createDraft`, `gmail.searchEmails`, `gmail.summarizeEmails`, `gmail.sendEmail`, `gmail.send`, `gmail.replyDraft`, `github.read`, `github.createIssue`, `github.createPullRequest`, `git.status`, `git.diff`, `git.commit`, and `git.push`. Each record includes `available`, `provider`, `risk_level`, `requires_confirmation`, and optional `reason`.
 - `POST /tasks/actions/execute`: execute one prepared action after explicit user confirmation. Request:
   `{ "action_id": "action_...", "action_type": "gmail.createDraft", "preview": { "to": "person@example.com", "subject": "...", "body": "..." }, "confirmation": true }`.

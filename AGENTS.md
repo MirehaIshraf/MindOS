@@ -112,6 +112,8 @@ Before adding a new feature:
 - Connector UI should stay simple; advanced sync settings belong behind a collapsed advanced section unless the user explicitly needs them.
 - Do not put "upcoming" marketing text in product UI; unsupported connectors should appear as off or needing setup.
 - No automatic folder scanning.
+- Only user-connected folders may be indexed. Never scan the full disk, home directory, Downloads, Desktop, or other broad locations silently.
+- File System tracked-folder indexing must stay lazy/background-only, limited to user-connected folders, and must not create Memory events for source saves, reindex jobs, or scheduler lifecycle. Only `file_system/file_indexed` file records are indexed memory.
 - No automatic browser tracking without extension/user permission.
 - Browser connector supports manual save and privacy-first smart capture. Do not add full browser history scraping.
 - Do not request browser history permission without explicit instruction.
@@ -135,6 +137,8 @@ Before adding a new feature:
 - Gmail send is allowed only when Gmail is connected, send capability is available, recipient/subject/body are valid, the user has seen an editable preview, and the user explicitly confirms send.
 - Gmail drafts may be created after preview. Gmail draft bodies, sent bodies, credentials, and tokens must not be stored in Memory.
 - Gmail attachments must never be added silently. Show attachment candidates or manual file choices in preview, require user selection and confirmation, block dangerous file types, enforce size limits, and never store attachment contents in Memory or Task History. Attachment filenames may appear in lightweight Task History.
+- Gmail indexed attachments must be resolved from connected File System source ids plus relative paths on the backend. Never trust frontend absolute paths, never search outside connected indexed folders, and never send attachment contents to an LLM or Memory.
+- Attachment discovery must search connected folder file inventory as well as content-indexed memory. A safe file whose text extraction failed can still be found by filename and attached after user selection and confirmation.
 - Generic Email MCP remains provider-agnostic for custom/corporate/internal providers and should not be confused with Gmail.
 - Future GitHub/local Git write actions require preview, exact capability checks, and explicit confirmation. GitHub API actions belong to the GitHub connector; local repo status/diff/commit/push belongs to the local Git connector.
 - Git commit/push tasks must use allowlisted Git commands only.

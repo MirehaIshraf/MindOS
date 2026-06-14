@@ -89,7 +89,7 @@ Gmail API calls go through `GmailService`, which refreshes expired access tokens
 
 Gmail task routing is separate from Email MCP routing: `gmail.*` task action -> Gmail connector status/capabilities -> GmailService/Gmail API. `email_mcp.*` connector work stays in the generic Email MCP connector. Gmail tasks do not use mock Email MCP state, generic Email MCP provider capabilities, or Email MCP send routes unless the user explicitly asks for a custom/corporate Email MCP task.
 
-Gmail Attachment Flow: user instruction -> attachment intent detection -> candidate search from recent task outputs and the currently selected browser-folder scan -> manual `Choose files` fallback -> editable Gmail draft/send preview -> attachment validation for blocked extensions and 20 MB total size -> user confirmation -> multipart Gmail draft/send route -> Gmail MIME message with attachments. Attachment file contents are held only in browser state/request memory long enough to create the Gmail draft/send request; contents are not sent to the LLM, indexed, or stored in Memory/Task History.
+Gmail Attachment Flow: user instruction -> attachment intent detection -> candidate search from recent task outputs, the currently selected browser-folder scan, and connected File System indexes only -> manual `Choose files` fallback -> editable Gmail draft/send preview -> checkbox selection -> attachment validation for blocked extensions and 20 MB total size -> user confirmation -> Gmail draft/send route -> Gmail MIME message with attachments. Indexed attachments are passed as `{source_id, relative_path}` references; the backend resolves them inside the connected folder root and never trusts frontend absolute paths. Attachment contents are held only long enough to create the Gmail draft/send request; contents are not sent to the LLM, indexed, or stored in Memory/Task History.
 
 ## VSCode Extension Runtime Flow
 
@@ -144,6 +144,10 @@ File task input sources:
 
 File scan flow: user path -> `POST /tasks/file/scan` -> `FileSnapshotService` -> safe metadata-only scan -> UI scan summary and category counts.
 
+Connected File Index flow: user adds a tracked File System folder -> source config is saved -> lazy scheduler queues background indexing -> safe bounded folder scan -> operational inventory upsert for every safe discovered file -> optional readable text extraction -> dedupe/upsert one `file_indexed` Memory event only when content extraction succeeds -> memory policy marks successful content events indexable/context eligible -> `/tasks/files/search` can search inventory filename metadata plus successful content excerpts. The indexer skips blocked extensions, secrets, excluded folders, oversized files, and never scans outside user-connected folders. Periodic polling uses `next_index_after`; startup queues stale enabled sources lazily and never blocks `/status` or app startup. Missing/deleted files are marked `missing` in inventory/content metadata rather than deleted.
+
+File Inventory vs Content Index: inventory is operational connector metadata used for filename search, attachment candidate search, attachability checks, size/modified metadata, and missing-file tracking. It is not a Memory event. `file_system/file_indexed` is only created for files where readable content extraction succeeds. Failed PDF/DOCX/text extraction records remain searchable by filename and may still be attachable if the file type and size are safe.
+
 File task prepare flow: user instruction + root path -> `POST /tasks/file/prepare` -> `FileSnapshotService` scan -> deterministic planner -> safety validation -> preview plan -> user confirmation later.
 
 File task AI planning flow: browser scan -> deterministic instruction intent -> metadata-only `POST /tasks/file/plan-with-llm` when useful -> selected chat model returns JSON plan -> exact-intent fallback if the model fails -> backend validates allowed `create_folder` / `move_file` operations -> frontend validates against the browser scan again -> preview plan -> user confirmation -> browser execution.
@@ -174,9 +178,9 @@ The Gmail connector owns Gmail-specific OAuth, recent metadata reads, draft crea
 
 ## Gmail Attachment Flow
 
-instruction -> attachment intent detection -> candidate search from recent task outputs, the current selected folder, or an explicit file index when available -> manual Choose Files fallback -> checkbox selection -> validation -> preview -> confirmation -> multipart Gmail draft/send.
+instruction -> attachment intent detection -> candidate search from recent task outputs, the current selected folder, or connected File System indexes -> manual Choose Files fallback -> checkbox selection -> validation -> preview -> confirmation -> Gmail draft/send.
 
-Attachment validation blocks dangerous extensions, enforces the configured total-size cap, and prevents silent attachment. Attachment contents are only held long enough to submit the confirmed Gmail request; they are not indexed, sent to the LLM, or stored in Memory/Task History.
+Indexed candidates are selected by source id and relative path, then resolved by the backend inside the connected folder root before Gmail receives bytes. Attachment validation blocks dangerous extensions, enforces the configured total-size cap, and prevents silent attachment. Attachment contents are only held long enough to submit the confirmed Gmail request; they are not indexed, sent to the LLM, or stored in Memory/Task History.
 
 ## GitHub And Local Git Future Flow
 
