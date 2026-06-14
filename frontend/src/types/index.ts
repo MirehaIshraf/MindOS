@@ -905,6 +905,115 @@ export type RunConnectorSourceImportResponse = {
   result: Record<string, unknown>;
 };
 
+export type TrackedFolderRequest = {
+  path: string;
+  name?: string | null;
+  enabled?: boolean;
+  indexing_enabled?: boolean;
+  recursive?: boolean;
+  max_depth?: number;
+  max_files?: number;
+  max_file_size_mb?: number;
+  include_hidden?: boolean;
+  allowed_extensions?: string[];
+  exclude_patterns?: string[];
+  index_interval_minutes?: number;
+};
+
+export type TrackedFolder = {
+  id: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+  indexing_enabled: boolean;
+  index_status: string;
+  last_indexed_at?: string | null;
+  next_index_after?: string | null;
+  last_error?: string | null;
+  file_count: number;
+  indexed_count: number;
+  inventory_count: number;
+  content_failed_count: number;
+  skipped_count: number;
+  missing_count: number;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TrackedFoldersResponse = {
+  folders: TrackedFolder[];
+  total: number;
+};
+
+export type FileIndexJob = {
+  job_id: string;
+  source_id: string;
+  status: string;
+  reason: string;
+  message: string;
+  queued_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error?: string | null;
+  result?: Record<string, unknown> | null;
+};
+
+export type FileIndexJobsResponse = {
+  jobs: FileIndexJob[];
+  total: number;
+};
+
+export type IndexedFileSearchRequest = {
+  query: string;
+  source_ids?: string[];
+  extensions?: string[];
+  search_content?: boolean;
+  search_filename?: boolean;
+  connected_sources_only?: boolean;
+  attachable_only?: boolean;
+  limit?: number;
+};
+
+export type IndexedFileSearchMatch = {
+  event_id?: string | null;
+  source_id: string;
+  file_name: string;
+  relative_path: string;
+  extension: string;
+  size_bytes: number;
+  modified_at?: string | null;
+  score: number;
+  match_reason: string;
+  matched_excerpt: string;
+  content_index_status: string;
+  attachable: boolean;
+};
+
+export type IndexedFileSearchResponse = {
+  matches: IndexedFileSearchMatch[];
+};
+
+export type IndexedAttachmentReference = {
+  source_id: string;
+  relative_path: string;
+};
+
+export type ResolvedIndexedAttachment = {
+  id: string;
+  file_name: string;
+  source_id: string;
+  relative_path: string;
+  size_bytes: number;
+  extension: string;
+  attachable: boolean;
+  reason?: string | null;
+};
+
+export type ResolveIndexedAttachmentsResponse = {
+  attachments: ResolvedIndexedAttachment[];
+};
+
 export type FileImportPayload = {
   folder_path: string;
   recursive: boolean;
@@ -1146,6 +1255,7 @@ export type GmailDraftRequest = {
   bcc?: string[];
   subject: string;
   body: string;
+  indexed_attachments?: IndexedAttachmentReference[];
 };
 
 export type GmailDraftResponse = {
@@ -1162,6 +1272,7 @@ export type GmailSendRequest = {
   subject: string;
   body: string;
   confirmation: boolean;
+  indexed_attachments?: IndexedAttachmentReference[];
 };
 
 export type GmailSendResponse = {
@@ -1187,6 +1298,7 @@ export type GmailDraftPrepareRequest = {
   connected_email?: string | null;
   recent_tasks?: GmailDraftPrepareSourceItem[];
   memory_items?: GmailDraftPrepareSourceItem[];
+  attachment_filenames?: string[];
   model_id?: string | null;
 };
 

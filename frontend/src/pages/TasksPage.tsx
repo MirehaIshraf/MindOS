@@ -6,17 +6,20 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import {
   completeDocumentSummary,
-  createGmailDraft,
+  createGmailDraftWithAttachments,
   executeTaskAction,
   getErrorMessage,
   getGmailRecentEmails,
   getGmailStatus,
   getModelSettings,
   getTaskActionCapabilities,
+  getTrackedFolders,
   prepareFileTaskPlan,
   prepareGmailDraft,
+  resolveIndexedAttachments,
   scanFileTask,
-  sendGmailMessage,
+  searchIndexedFiles,
+  sendGmailMessageWithAttachments,
 } from "../services/api";
 import {
   executeBrowserFilePlan,
@@ -32,12 +35,16 @@ import { writeSummaryFile } from "../services/browserDocumentWriter";
 import { prepareBrowserDocumentSummary } from "../services/documentSummaryPlanner";
 import {
   candidatesFromManualFiles,
-  detectGmailAttachmentIntent,
-  findGmailAttachmentCandidates,
+  detectAttachmentIntent,
+  findAttachmentCandidates,
+  hydrateAttachmentCandidateFiles,
+  isIndexedAttachmentCandidate,
+  selectedAttachmentCandidates,
   selectedAttachmentFiles,
-  validateGmailAttachments,
-  type GmailAttachmentCandidate,
-} from "../services/gmailAttachmentService";
+  selectedIndexedAttachments,
+  validateAttachments,
+  type AttachmentCandidate,
+} from "../services/attachmentFinderService";
 import {
   buildExactIntentFallbackPlan,
   classifyFileTaskIntent,
@@ -104,6 +111,7 @@ type PreparedAction = ClassifiedTaskAction & {
     sourceSummary?: string;
     attachmentIntent?: boolean;
     attachmentQuery?: string;
+    attachmentSearchStatus?: string;
   };
 };
 
@@ -184,7 +192,7 @@ export function TasksPage() {
   const [gmailDraftResult, setGmailDraftResult] = useState<GmailDraftResponse | null>(null);
   const [gmailDraftLoading, setGmailDraftLoading] = useState(false);
   const [gmailDraftMessage, setGmailDraftMessage] = useState<string | null>(null);
-  const [gmailAttachmentCandidates, setGmailAttachmentCandidates] = useState<GmailAttachmentCandidate[]>([]);
+  const [gmailAttachmentCandidates, setGmailAttachmentCandidates] = useState<AttachmentCandidate[]>([]);
   const [emailSearchMessages, setEmailSearchMessages] = useState<NormalizedEmailMessage[]>([]);
   const [summaryOutputFilename, setSummaryOutputFilename] = useState("mindos-summary.md");
   const [summaryFilenameWasEdited, setSummaryFilenameWasEdited] = useState(false);
@@ -476,6 +484,67 @@ export function TasksPage() {
     }
   }
 
+  async function collectGmailAttachmentCandidates(attachmentIntent: ReturnType<typeof detectAttachmentIntent>, history: RecentTaskItem[]) {
+    if (!attachmentIntent.attachment_intent) return { candidates: [], status: "" };
+    const localCandidates = findAttachmentCandidates({
+      query: attachmentIntent.file_query,
+      extensionPreference: attachmentIntent.extension_preference,
+      latestPreference: attachmentIntent.latest_preference,
+      recentTaskOutputs: history,
+      selectedFolderScan: scanSource === "browser_handle" && scanResult && !pathIsStale ? (scanResult as BrowserFolderScanResult) : null,
+      memoryFileEvents: [],
+    });
+    const hydrated = await hydrateAttachmentCandidateFiles(localCandidates, browserFolder);
+    let indexedCandidates: AttachmentCandidate[] = [];
+    let status = "";
+    try {
+      const tracked = await getTrackedFolders();
+      const indexedFolders = tracked.folders.filter((folder) => folder.enabled && folder.indexing_enabled && (folder.inventory_count || folder.indexed_count) > 0);
+      const indexingPending = tracked.folders.some((folder) => folder.enabled && folder.indexing_enabled && ["queued", "indexing"].includes(folder.index_status));
+      if (indexingPending) {
+        status = "Connected folders are still being indexed. File results may be incomplete.";
+      } else if (!indexedFolders.length) {
+        status = "No connected File System folders are indexed yet. Choose files manually or connect a folder.";
+      }
+      if (indexedFolders.length) {
+        const response = await searchIndexedFiles({
+          query: attachmentIntent.file_query,
+          search_filename: true,
+          search_content: true,
+          extensions: attachmentIntent.extension_preference.length ? attachmentIntent.extension_preference : [".pdf", ".docx", ".doc", ".txt", ".md"],
+          connected_sources_only: true,
+          attachable_only: true,
+          limit: 20,
+        });
+        const resolved = await resolveIndexedAttachments(
+          response.matches.map((match) => ({ source_id: match.source_id, relative_path: match.relative_path })),
+        );
+        const resolvedByKey = new Map(resolved.attachments.map((item) => [`${item.source_id}:${item.relative_path}`, item]));
+        indexedCandidates = response.matches.map((match) => {
+          const resolvedMatch = resolvedByKey.get(`${match.source_id}:${match.relative_path}`);
+          return {
+            id: `file_index:${match.source_id}:${match.relative_path}`,
+            name: match.file_name,
+            source_id: match.source_id,
+            relative_path: match.relative_path,
+            size_bytes: resolvedMatch?.size_bytes ?? match.size_bytes,
+            extension: (resolvedMatch?.extension || match.extension || "").toLowerCase(),
+            source: "file_index",
+            modified_at: match.modified_at ?? undefined,
+            score: 20 + match.score * 20,
+            reason: `${readableMatchReason(match.match_reason)} ${match.content_index_status === "failed" ? "Content extraction failed, but filename metadata matched." : "Connected folder file."}`,
+            selected: false,
+            unavailableReason: resolvedMatch && !resolvedMatch.attachable ? resolvedMatch.reason || "File cannot be attached." : undefined,
+          } satisfies AttachmentCandidate;
+        });
+      }
+    } catch (error) {
+      status = getErrorMessage(error);
+    }
+    const combined = rankAttachmentCandidates([...indexedCandidates, ...hydrated], attachmentIntent.latest_preference);
+    return { candidates: combined, status };
+  }
+
   async function prepareGeneralAction(action = classifyTaskAction(command.trim())) {
     setPrepareError(null);
     setPrepareStatus(null);
@@ -508,19 +577,15 @@ export function TasksPage() {
             ? "Gmail send is not connected yet. You can create a draft instead."
             : "";
         const history = recentTasksFromLastDays(recentTasks, 7);
-        const attachmentIntent = detectGmailAttachmentIntent(command.trim());
-        const attachmentCandidates = await findGmailAttachmentCandidates({
-          intent: attachmentIntent,
-          browserFolder,
-          scanResult: scanSource === "browser_handle" && scanResult && !pathIsStale ? (scanResult as BrowserFolderScanResult) : null,
-          recentTasks: history,
-        });
+        const attachmentIntent = detectAttachmentIntent(command.trim());
+        const { candidates: attachmentCandidates, status: attachmentSearchStatus } = await collectGmailAttachmentCandidates(attachmentIntent, history);
         setGmailAttachmentCandidates(attachmentCandidates);
         const selectedModel = await getSelectedChatModel();
         const planned = await prepareGmailDraft({
           instruction: command.trim(),
           connected_email: status.email_address ?? null,
           recent_tasks: history.map(toGmailDraftSourceItem),
+          attachment_filenames: selectedAttachmentCandidates(attachmentCandidates).map((candidate) => candidate.name),
           model_id: selectedModel?.id ?? null,
         });
         const recipient = extractEmailAddress(command) || planned.to || "";
@@ -555,22 +620,21 @@ export function TasksPage() {
             note: history.length ? "Based on task history from the last 7 days." : "I can draft the email, but I did not find task history from the last 7 days.",
             warning: [fallbackMessage, planned.planner_warning, ...planned.warnings].filter(Boolean).join(" "),
             sourceSummary: planned.source_summary,
-            attachmentIntent: attachmentIntent.hasIntent,
-            attachmentQuery: attachmentIntent.query,
+            attachmentIntent: attachmentIntent.attachment_intent,
+            attachmentQuery: attachmentIntent.file_query,
+            attachmentSearchStatus,
           },
         });
       } catch (error) {
         const history = recentTasksFromLastDays(recentTasks, 7);
-        const attachmentIntent = detectGmailAttachmentIntent(command.trim());
-        const attachmentCandidates = await findGmailAttachmentCandidates({
-          intent: attachmentIntent,
-          browserFolder,
-          scanResult: scanSource === "browser_handle" && scanResult && !pathIsStale ? (scanResult as BrowserFolderScanResult) : null,
-          recentTasks: history,
-        });
+        const attachmentIntent = detectAttachmentIntent(command.trim());
+        const { candidates: attachmentCandidates, status: attachmentSearchStatus } = await collectGmailAttachmentCandidates(attachmentIntent, history);
         setGmailAttachmentCandidates(attachmentCandidates);
         const draft = buildGmailDraftPreview(command.trim(), history);
-        const nextDraft = { ...draft, to: extractEmailAddress(command) || draft.to, cc: "", bcc: "", message_id: "" };
+        const nextDraft = ensureAttachmentMention(
+          { ...draft, to: extractEmailAddress(command) || draft.to, cc: "", bcc: "", message_id: "" },
+          selectedAttachmentCandidates(attachmentCandidates).map((candidate) => candidate.name),
+        );
         setGmailDraft(nextDraft);
         setPreparedAction({
           id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -597,8 +661,9 @@ export function TasksPage() {
             note: history.length ? "Based on task history from the last 7 days." : "I can draft the email, but I did not find task history from the last 7 days.",
             warning: `AI drafting was unavailable, so MindOS used a safe basic draft. ${getErrorMessage(error)}`,
             sourceSummary: history.length ? `Used ${history.length} task history items from the last 7 days.` : "No recent task history was available.",
-            attachmentIntent: attachmentIntent.hasIntent,
-            attachmentQuery: attachmentIntent.query,
+            attachmentIntent: attachmentIntent.attachment_intent,
+            attachmentQuery: attachmentIntent.file_query,
+            attachmentSearchStatus,
           },
         });
       } finally {
@@ -769,7 +834,7 @@ export function TasksPage() {
       setGmailDraftMessage("Choose or enter the original message id before creating a reply draft.");
       return;
     }
-    const attachmentValidation = validateGmailAttachments(gmailAttachmentCandidates);
+    const attachmentValidation = validateAttachments(gmailAttachmentCandidates);
     if (!attachmentValidation.ok) {
       setGmailDraftMessage(attachmentValidation.warnings[0]);
       return;
@@ -778,8 +843,9 @@ export function TasksPage() {
     setGmailDraftMessage(null);
   }
 
-  function updateGmailAttachmentCandidates(nextCandidates: GmailAttachmentCandidate[]) {
+  function updateGmailAttachmentCandidates(nextCandidates: AttachmentCandidate[]) {
     setGmailAttachmentCandidates(nextCandidates);
+    setGmailDraft((current) => ensureAttachmentMention(current, selectedAttachmentCandidates(nextCandidates).map((candidate) => candidate.name)));
     setGmailDraftMessage(null);
   }
 
@@ -790,6 +856,7 @@ export function TasksPage() {
       const existingIds = new Set(current.map((candidate) => candidate.id));
       return [...current, ...manualCandidates.filter((candidate) => !existingIds.has(candidate.id))];
     });
+    setGmailDraft((current) => ensureAttachmentMention(current, manualCandidates.map((candidate) => candidate.name)));
     setGmailDraftMessage(null);
   }
 
@@ -800,8 +867,10 @@ export function TasksPage() {
     setGmailDraftMessage(null);
     try {
       const executionActionType = preparedAction.executionActionType ?? preparedAction.actionType;
-      const selectedAttachments = selectedAttachmentFiles(gmailAttachmentCandidates);
-      const attachmentValidation = validateGmailAttachments(gmailAttachmentCandidates);
+      const selectedAttachments = selectedAttachmentCandidates(gmailAttachmentCandidates);
+      const selectedManualFiles = selectedAttachmentFiles(gmailAttachmentCandidates);
+      const selectedIndexedRefs = selectedIndexedAttachments(gmailAttachmentCandidates);
+      const attachmentValidation = validateAttachments(gmailAttachmentCandidates);
       if (!attachmentValidation.ok) {
         setGmailDraftMessage(attachmentValidation.warnings[0]);
         setActionApprovalPhase("idle");
@@ -811,9 +880,18 @@ export function TasksPage() {
       let draftId = "";
       let messageId: string | null = null;
       if (selectedAttachments.length && (executionActionType === "gmail.createDraft" || executionActionType === "gmail.sendEmail")) {
-        const formData = buildGmailAttachmentFormData(gmailDraft, selectedAttachments.map((candidate) => candidate.file as File), executionActionType === "gmail.sendEmail");
+        const attachmentFiles = selectedManualFiles.map((candidate) => candidate.file as File);
         if (executionActionType === "gmail.sendEmail") {
-          const sent = await sendGmailMessage(formData);
+          const sent = await sendGmailMessageWithAttachments({
+            to: splitRecipients(gmailDraft.to),
+            cc: splitRecipients(gmailDraft.cc),
+            bcc: splitRecipients(gmailDraft.bcc),
+            subject: gmailDraft.subject,
+            body: gmailDraft.body,
+            confirmation: true,
+            attachments: attachmentFiles,
+            indexed_attachments: selectedIndexedRefs,
+          });
           messageId = sent.message_id ?? null;
           result = {
             ok: true,
@@ -823,7 +901,15 @@ export function TasksPage() {
           };
           setGmailDraftResult({ status: sent.status, draft_id: "", message_id: sent.message_id ?? null, message: sent.message });
         } else {
-          const draftResponse = await createGmailDraft(formData);
+          const draftResponse = await createGmailDraftWithAttachments({
+            to: gmailDraft.to,
+            cc: splitRecipients(gmailDraft.cc),
+            bcc: splitRecipients(gmailDraft.bcc),
+            subject: gmailDraft.subject,
+            body: gmailDraft.body,
+            attachments: attachmentFiles,
+            indexed_attachments: selectedIndexedRefs,
+          });
           draftId = draftResponse.draft_id;
           messageId = draftResponse.message_id ?? null;
           result = {
@@ -1264,7 +1350,7 @@ export function TasksPage() {
             <ActionConfirmationCard
               action={preparedAction}
               draft={gmailDraft}
-              attachments={selectedAttachmentFiles(gmailAttachmentCandidates)}
+              attachments={selectedAttachmentCandidates(gmailAttachmentCandidates)}
               onCancel={() => setActionApprovalPhase("idle")}
               onConfirm={() => void handleConfirmActionExecution()}
             />
@@ -1450,11 +1536,11 @@ function ActionPreviewRenderer({
   gmailDraftResult: GmailDraftResponse | null;
   gmailDraftLoading: boolean;
   gmailDraftMessage: string | null;
-  gmailAttachmentCandidates: GmailAttachmentCandidate[];
+  gmailAttachmentCandidates: AttachmentCandidate[];
   emailSearchMessages: NormalizedEmailMessage[];
   recentTasks: RecentTaskItem[];
   onGmailDraftChange: (draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string }) => void;
-  onGmailAttachmentsChange: (candidates: GmailAttachmentCandidate[]) => void;
+  onGmailAttachmentsChange: (candidates: AttachmentCandidate[]) => void;
   onManualGmailAttachmentFiles: (files: FileList | null) => void;
   onCreateGmailDraft: () => void;
   onEdit: () => void;
@@ -1515,9 +1601,9 @@ function GmailDraftPreview({
   result: GmailDraftResponse | null;
   loading: boolean;
   message: string | null;
-  attachments: GmailAttachmentCandidate[];
+  attachments: AttachmentCandidate[];
   onDraftChange: (draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string }) => void;
-  onAttachmentsChange: (candidates: GmailAttachmentCandidate[]) => void;
+  onAttachmentsChange: (candidates: AttachmentCandidate[]) => void;
   onManualAttachmentFiles: (files: FileList | null) => void;
   onCreateDraft: () => void;
   onEdit: () => void;
@@ -1541,7 +1627,7 @@ function GmailDraftPreview({
     draftAvailable,
     draft,
   });
-  const attachmentValidation = validateGmailAttachments(attachments);
+  const attachmentValidation = validateAttachments(attachments);
   const finalDisabledReason = disabledReason || attachmentValidation.warnings[0] || "";
   const title =
     effectiveActionType === "gmail.sendEmail"
@@ -1654,7 +1740,9 @@ function GmailDraftPreview({
                 {attachmentValidation.selected.length
                   ? `${attachmentValidation.selected.length} selected · ${formatBytes(attachmentValidation.totalBytes)}`
                   : action.preview?.attachmentIntent
-                    ? "Review candidates or choose files manually."
+                    ? attachments.length
+                      ? "Found possible attachment files from connected folders. Select the file(s) to attach."
+                      : "No attachment selected yet."
                     : "Choose files if this email needs attachments."}
               </p>
             </div>
@@ -1682,12 +1770,13 @@ function GmailDraftPreview({
         </div>
         {attachments.length ? (
           <div className="mt-3 space-y-2">
+            {action.preview?.attachmentIntent ? <p className="text-[11px] font-medium uppercase tracking-wide text-app-muted">Possible files found</p> : null}
             {attachments.map((candidate) => (
               <div key={candidate.id} className="flex items-center gap-2 rounded-md border border-app-border bg-zinc-950/70 px-2 py-2 text-xs">
                 <input
                   type="checkbox"
                   checked={candidate.selected}
-                  disabled={!candidate.file}
+                  disabled={!isAttachmentCandidateSelectable(candidate)}
                   onChange={(event) =>
                     onAttachmentsChange(
                       attachments.map((item) => (item.id === candidate.id ? { ...item, selected: event.target.checked } : item)),
@@ -1699,26 +1788,32 @@ function GmailDraftPreview({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-app-text">{candidate.name}</p>
                   <p className="truncate text-[11px] text-app-muted">
-                    {candidate.reason}
-                    {candidate.size ? ` · ${formatBytes(candidate.size)}` : ""}
+                    {attachmentSourceLabel(candidate.source)} - {candidate.reason}
+                    {candidate.size_bytes ? ` - ${formatBytes(candidate.size_bytes)}` : ""}
+                    {candidate.modified_at ? ` - ${formatShortDate(candidate.modified_at)}` : ""}
                     {candidate.unavailableReason ? ` · ${candidate.unavailableReason}` : ""}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== candidate.id))}
-                  className="rounded p-1 text-app-muted transition hover:bg-zinc-800 hover:text-app-text"
-                  aria-label={`Remove ${candidate.name}`}
-                >
-                  <X size={14} />
-                </button>
+                {candidate.source === "manual_picker" ? (
+                  <button
+                    type="button"
+                    onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== candidate.id))}
+                    className="rounded p-1 text-app-muted transition hover:bg-zinc-800 hover:text-app-text"
+                    aria-label={`Remove ${candidate.name}`}
+                  >
+                    <X size={14} />
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>
         ) : action.preview?.attachmentIntent ? (
           <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-            I detected an attachment request, but no matching local candidate is selected yet. Choose the file before creating or sending.
+            No matching files found in connected folders. Choose files manually.
           </p>
+        ) : null}
+        {typeof action.preview?.attachmentSearchStatus === "string" && action.preview.attachmentSearchStatus ? (
+          <p className="mt-3 text-xs text-amber-200">{action.preview.attachmentSearchStatus}</p>
         ) : null}
         {attachmentValidation.warnings.length ? <p className="mt-3 text-xs text-amber-200">{attachmentValidation.warnings[0]}</p> : null}
       </div>
@@ -1756,7 +1851,7 @@ function ActionConfirmationCard({
 }: {
   action: PreparedAction;
   draft: { to: string; subject: string };
-  attachments: GmailAttachmentCandidate[];
+  attachments: AttachmentCandidate[];
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -2741,22 +2836,6 @@ function getEmailActionDisabledReason({
   return "";
 }
 
-function buildGmailAttachmentFormData(
-  draft: { to: string; cc: string; bcc: string; subject: string; body: string },
-  attachments: File[],
-  confirmation: boolean,
-) {
-  const formData = new FormData();
-  formData.append("to", draft.to);
-  splitRecipients(draft.cc).forEach((recipient) => formData.append("cc", recipient));
-  splitRecipients(draft.bcc).forEach((recipient) => formData.append("bcc", recipient));
-  formData.append("subject", draft.subject);
-  formData.append("body", draft.body);
-  formData.append("confirmation", String(confirmation));
-  attachments.forEach((file) => formData.append("attachments", file, file.name));
-  return formData;
-}
-
 function splitRecipients(value: string) {
   return value
     .split(",")
@@ -2953,6 +3032,75 @@ function formatBytes(size: number) {
     unitIndex += 1;
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatShortDate(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function attachmentSourceLabel(source: AttachmentCandidate["source"]) {
+  if (source === "manual_picker") return "Manual";
+  if (source === "recent_task_output") return "Recent task";
+  if (source === "selected_folder_scan") return "Selected folder";
+  return "Connected folder";
+}
+
+function rankAttachmentCandidates(candidates: AttachmentCandidate[], latestPreference: boolean) {
+  const byKey = new Map<string, AttachmentCandidate>();
+  for (const candidate of candidates) {
+    const key = `${candidate.source}:${candidate.source_id || ""}:${candidate.relative_path || candidate.name}:${candidate.size_bytes}`;
+    const existing = byKey.get(key);
+    if (!existing || candidate.score > existing.score || (!existing.source_id && candidate.source_id)) {
+      byKey.set(key, candidate);
+    }
+  }
+  const ranked = [...byKey.values()].sort((a, b) => {
+    if (latestPreference) {
+      const timeDiff = timestampForSort(b.modified_at) - timestampForSort(a.modified_at);
+      if (timeDiff) return timeDiff;
+    }
+    return b.score - a.score;
+  });
+  const visible = ranked.slice(0, 12).map((candidate) => ({ ...candidate, selected: false }));
+  const top = visible[0];
+  const runnerUp = visible[1];
+  if (top && isAttachmentCandidateSelectable(top) && top.score >= 28 && (!runnerUp || top.score - runnerUp.score >= 4)) {
+    top.selected = true;
+  }
+  return visible;
+}
+
+function isAttachmentCandidateSelectable(candidate: AttachmentCandidate) {
+  if (candidate.unavailableReason) return false;
+  if (candidate.file) return true;
+  return isIndexedAttachmentCandidate(candidate);
+}
+
+function readableMatchReason(reason: string) {
+  const normalized = reason.toLowerCase();
+  if (normalized.includes("filename")) return "Filename matched.";
+  if (normalized.includes("content")) return "Content matched.";
+  return reason ? `${reason}.` : "";
+}
+
+function timestampForSort(value?: string) {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function ensureAttachmentMention<T extends { body: string }>(draft: T, attachmentNames: string[]): T {
+  const names = attachmentNames.filter(Boolean);
+  if (!names.length || /\b(attached|attachment|included)\b/i.test(draft.body)) return draft;
+  const sentence = names.length === 1 ? `I have attached ${names[0]} for your review.` : `I have attached ${names.length} files for your review.`;
+  const parts = draft.body.trimEnd().split("\n\n");
+  const body =
+    parts.length >= 2 && /^best\b/i.test(parts[parts.length - 1].trim())
+      ? [...parts.slice(0, -1), sentence, parts[parts.length - 1]].join("\n\n")
+      : `${draft.body.trimEnd()}\n\n${sentence}`;
+  return { ...draft, body };
 }
 
 function normalizedSummaryFilename(filename: string, format: "markdown" | "text") {

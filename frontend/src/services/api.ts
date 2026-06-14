@@ -82,6 +82,11 @@ import type {
   LogImportResult,
   LogPreviewResult,
   ImportRunsResponse,
+  FileIndexJob,
+  FileIndexJobsResponse,
+  IndexedFileSearchRequest,
+  IndexedFileSearchResponse,
+  IndexedAttachmentReference,
   ModelConfig,
   ModelSettingsResponse,
   IngestEventRequest,
@@ -94,7 +99,11 @@ import type {
   MemoryEvent,
   RelatedEventsResponse,
   RecentEventsResponse,
+  ResolveIndexedAttachmentsResponse,
   RunConnectorSourceImportResponse,
+  TrackedFolder,
+  TrackedFolderRequest,
+  TrackedFoldersResponse,
   SearchResponse,
   SearchStatsResponse,
   SeedSampleEventsResponse,
@@ -634,6 +643,51 @@ export async function runConnectorSourceImport(sourceId: string): Promise<RunCon
   return response.data;
 }
 
+export async function indexConnectorSource(sourceId: string): Promise<RunConnectorSourceImportResponse> {
+  const response = await api.post<RunConnectorSourceImportResponse>(`/connectors/sources/${sourceId}/index`, {}, { timeout: 130000 });
+  return response.data;
+}
+
+export async function getTrackedFolders(): Promise<TrackedFoldersResponse> {
+  const response = await api.get<TrackedFoldersResponse>("/connectors/file-system/tracked-folders");
+  return response.data;
+}
+
+export async function addTrackedFolder(payload: TrackedFolderRequest): Promise<TrackedFolder> {
+  const response = await api.post<TrackedFolder>("/connectors/file-system/tracked-folders", payload);
+  return response.data;
+}
+
+export async function updateTrackedFolder(sourceId: string, payload: Partial<TrackedFolderRequest>): Promise<TrackedFolder> {
+  const response = await api.put<TrackedFolder>(`/connectors/file-system/tracked-folders/${sourceId}`, payload);
+  return response.data;
+}
+
+export async function deleteTrackedFolder(sourceId: string): Promise<{ status: string }> {
+  const response = await api.delete<{ status: string }>(`/connectors/file-system/tracked-folders/${sourceId}`);
+  return response.data;
+}
+
+export async function reindexTrackedFolder(sourceId: string): Promise<FileIndexJob> {
+  const response = await api.post<FileIndexJob>(`/connectors/file-system/tracked-folders/${sourceId}/reindex`);
+  return response.data;
+}
+
+export async function getFileIndexJobs(): Promise<FileIndexJobsResponse> {
+  const response = await api.get<FileIndexJobsResponse>("/connectors/file-system/index-jobs");
+  return response.data;
+}
+
+export async function searchIndexedFiles(payload: IndexedFileSearchRequest): Promise<IndexedFileSearchResponse> {
+  const response = await api.post<IndexedFileSearchResponse>("/tasks/files/search", payload, { timeout: 30000 });
+  return response.data;
+}
+
+export async function resolveIndexedAttachments(files: IndexedAttachmentReference[]): Promise<ResolveIndexedAttachmentsResponse> {
+  const response = await api.post<ResolveIndexedAttachmentsResponse>("/tasks/files/resolve-attachments", { files }, { timeout: 30000 });
+  return response.data;
+}
+
 export async function getImportRuns(params: { source_id?: string; connector_type?: string; limit?: number } = {}): Promise<ImportRunsResponse> {
   const response = await api.get<ImportRunsResponse>("/connectors/import-runs", { params });
   return response.data;
@@ -766,6 +820,11 @@ export async function createGmailDraft(payload: GmailDraftRequest | FormData): P
   return response.data;
 }
 
+export async function createGmailDraftWithAttachments(payload: GmailDraftRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[] }): Promise<GmailDraftResponse> {
+  const response = await api.post<GmailDraftResponse>("/connectors/gmail/drafts", buildGmailMultipartFormData(payload, false));
+  return response.data;
+}
+
 export async function getGmailRecentEmails(limit = 10): Promise<GmailRecentEmailsResponse> {
   const response = await api.get<GmailRecentEmailsResponse>("/connectors/gmail/recent", { params: { limit } });
   return response.data;
@@ -774,6 +833,46 @@ export async function getGmailRecentEmails(limit = 10): Promise<GmailRecentEmail
 export async function sendGmailMessage(payload: GmailSendRequest | FormData): Promise<GmailSendResponse> {
   const response = await api.post<GmailSendResponse>("/connectors/gmail/send", payload);
   return response.data;
+}
+
+export async function sendGmailMessageWithAttachments(payload: GmailSendRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[] }): Promise<GmailSendResponse> {
+  const response = await api.post<GmailSendResponse>(
+    "/connectors/gmail/send",
+    buildGmailMultipartFormData(
+      {
+        ...payload,
+        to: payload.to.join(","),
+      },
+      payload.confirmation,
+    ),
+  );
+  return response.data;
+}
+
+function buildGmailMultipartFormData(
+  payload: {
+    to: string;
+    cc?: string[];
+    bcc?: string[];
+    subject: string;
+    body: string;
+    attachments: File[];
+    indexed_attachments?: IndexedAttachmentReference[];
+  },
+  confirmation: boolean,
+) {
+  const formData = new FormData();
+  formData.append("to", payload.to);
+  (payload.cc ?? []).forEach((recipient) => formData.append("cc", recipient));
+  (payload.bcc ?? []).forEach((recipient) => formData.append("bcc", recipient));
+  formData.append("subject", payload.subject);
+  formData.append("body", payload.body);
+  formData.append("confirmation", String(confirmation));
+  if (payload.indexed_attachments?.length) {
+    formData.append("indexed_attachments", JSON.stringify(payload.indexed_attachments));
+  }
+  payload.attachments.forEach((file) => formData.append("attachments", file, file.name));
+  return formData;
 }
 
 export async function prepareGmailDraft(payload: GmailDraftPrepareRequest): Promise<GmailDraftPrepareResponse> {

@@ -18,6 +18,7 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
 import {
+  addTrackedFolder,
   clearConnectorSourceEvents,
   clearEmailEvents,
   clearFileSystemEvents,
@@ -47,6 +48,7 @@ import {
   previewFileImport,
   previewGitImport,
   previewLogImport,
+  reindexTrackedFolder,
   runConnectorSourceImport,
   saveEmailConfig,
   saveGitHubConfig,
@@ -88,16 +90,20 @@ import type {
 
 const connectorOrder = ["vscode", "browser", "github", "gmail", "jira", "email", "file_system", "logs", "git"];
 
-const emptyFileForm = { folderPath: "", recursive: true, maxFiles: 100, maxFileSizeKb: 256, allowedExtensions: "" };
+const defaultIndexedExtensions = ".txt,.md,.log,.json,.csv,.xml,.yaml,.yml,.pdf,.docx,.py,.java,.js,.ts,.tsx,.jsx,.html,.css,.sql";
+const emptyFileForm = { folderPath: "", recursive: true, maxFiles: 2000, maxDepth: 5, maxFileSizeMb: 5, maxFileSizeKb: 2048, allowedExtensions: defaultIndexedExtensions, indexingEnabled: true };
 const emptyLogForm = { filePath: "", maxLines: 1000, onlyErrors: false, groupSimilar: true };
 const emptyGitForm = { repoPath: "", maxCommits: 50, includeDiffSummary: true, includeStatus: true };
 const emptySavedSourceForm = {
   name: "",
   path: "",
   recursive: true,
-  maxFiles: 100,
+  maxFiles: 2000,
+  maxDepth: 5,
+  maxFileSizeMb: 5,
   maxFileSizeKb: 256,
-  allowedExtensions: "",
+  allowedExtensions: defaultIndexedExtensions,
+  indexingEnabled: true,
   maxLines: 1000,
   onlyErrors: false,
   groupSimilar: true,
@@ -246,6 +252,23 @@ export function ConnectorsPage() {
     }
   }
 
+  async function handleAddTrackedFolder() {
+    setLoading("addTrackedFolder");
+    setError(null);
+    try {
+      const folder = await addTrackedFolder(toTrackedFolderPayload(fileForm));
+      setNotice(`${folder.name} connected. MindOS will index readable files in the background.`);
+      setFileForm(emptyFileForm);
+      setFilePreview(null);
+      setFileResult(null);
+      await refresh();
+    } catch (caughtError) {
+      setError(getApiErrorMessage(caughtError));
+    } finally {
+      setLoading(null);
+    }
+  }
+
   async function handleLogPreview() {
     setLoading("logPreview");
     setError(null);
@@ -358,8 +381,13 @@ export function ConnectorsPage() {
     setLoading(`run:${source.id}`);
     setError(null);
     try {
-      const response = await runConnectorSourceImport(source.id);
-      setNotice(response.import_run.message);
+      if (isTrackedFileSource(source)) {
+        const job = await reindexTrackedFolder(source.id);
+        setNotice(job.status === "running" ? "Folder indexing is running." : "Folder reindex queued.");
+      } else {
+        const response = await runConnectorSourceImport(source.id);
+        setNotice(response.import_run.message);
+      }
       await refresh();
     } catch (caughtError) {
       setError(getApiErrorMessage(caughtError));
@@ -470,6 +498,7 @@ export function ConnectorsPage() {
               onToggleConnector={(enabled) => void handleToggle(selectedConnector, enabled)}
               onFilePreview={handleFilePreview}
               onFileImport={handleFileImport}
+              onAddTrackedFolder={handleAddTrackedFolder}
               onLogPreview={handleLogPreview}
               onLogImport={handleLogImport}
               onGitPreview={handleGitPreview}
@@ -613,6 +642,7 @@ function ConfigurePanel(props: {
   onToggleConnector: (enabled: boolean) => void;
   onFilePreview: () => void;
   onFileImport: () => void;
+  onAddTrackedFolder: () => void;
   onLogPreview: () => void;
   onLogImport: () => void;
   onGitPreview: () => void;
@@ -1892,38 +1922,98 @@ function CapabilityRow({ label, enabled, note }: { label: string; enabled: boole
 }
 
 function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   return (
-    <ManualConnectorPanel
-      form={
-        <>
-          <LabeledInput label="Folder path" value={props.fileForm.folderPath} onChange={(value) => props.setFileForm((current) => ({ ...current, folderPath: value }))} />
+    <div className="mt-5 space-y-5">
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-app-text">Connected folders</h3>
+            <p className="mt-1 text-sm text-app-muted">Add a folder once. MindOS indexes readable files in the background and keeps them searchable.</p>
+          </div>
+          <Badge>background indexing</Badge>
+        </div>
+        <div className="mt-4 space-y-3">
+          <LabeledInput label="Folder path" value={props.fileForm.folderPath} placeholder="D:\\Projects\\MindOS" onChange={(value) => props.setFileForm((current) => ({ ...current, folderPath: value }))} />
           <div className="grid grid-cols-2 gap-3">
             <LabeledInput label="Max files" type="number" value={String(props.fileForm.maxFiles)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxFiles: Number(value) }))} />
-            <LabeledInput label="Max KB" type="number" value={String(props.fileForm.maxFileSizeKb)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))} />
+            <LabeledInput label="Max depth" type="number" value={String(props.fileForm.maxDepth)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxDepth: Number(value) }))} />
           </div>
-          <Checkbox label="Recursive" checked={props.fileForm.recursive} onChange={(checked) => props.setFileForm((current) => ({ ...current, recursive: checked }))} />
-          <LabeledInput label="Extensions" value={props.fileForm.allowedExtensions} placeholder=".py,.ts,.md" onChange={(value) => props.setFileForm((current) => ({ ...current, allowedExtensions: value }))} />
-        </>
-      }
-      preview={props.filePreview ? <FilePreviewBlock preview={props.filePreview} /> : null}
-      result={props.fileResult ? <ImportResult result={props.fileResult} /> : null}
-      previewLoading={props.loading === "filePreview"}
-      importLoading={props.loading === "fileImport"}
-      clearLoading={props.loading === "clear:file_system"}
-      savedSources={props.savedSources}
-      importRuns={props.importRuns}
-      showHistory={props.showHistory}
-      setShowHistory={props.setShowHistory}
-      onPreview={props.onFilePreview}
-      onImport={props.onFileImport}
-      onClearEvents={props.onClearEvents}
-      onSaveSource={props.onSaveSource}
-      onRunSource={props.onRunSource}
-      onEditSource={props.onEditSource}
-      onDeleteSource={props.onDeleteSource}
-      onClearSource={props.onClearSource}
-      loading={props.loading}
-    />
+          <div className="flex flex-wrap items-center gap-3">
+            <Checkbox label="Recursive" checked={props.fileForm.recursive} onChange={(checked) => props.setFileForm((current) => ({ ...current, recursive: checked }))} />
+            <Checkbox label="Index readable files" checked={props.fileForm.indexingEnabled} onChange={(checked) => props.setFileForm((current) => ({ ...current, indexingEnabled: checked }))} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" onClick={props.onAddTrackedFolder} loading={props.loading === "addTrackedFolder"}>
+              Add folder
+            </Button>
+            <Button variant="secondary" onClick={props.onClearEvents} loading={props.loading === "clear:file_system"}>
+              Clear file memory
+            </Button>
+          </div>
+          <p className="text-xs text-app-muted">Only folders you add here are indexed. Search reads indexed memory, not the live filesystem.</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {props.savedSources.length === 0 ? (
+          <div className="rounded-md border border-dashed border-app-border px-3 py-4 text-sm text-app-muted">No connected folders yet.</div>
+        ) : (
+          props.savedSources.map((source) => (
+            <SavedSourceRow
+              key={source.id}
+              source={source}
+              loading={props.loading}
+              runLabel="Reindex"
+              onRun={() => props.onRunSource(source)}
+              onEdit={() => props.onEditSource(source)}
+              onDelete={() => props.onDeleteSource(source)}
+              onClear={() => props.onClearSource(source)}
+            />
+          ))
+        )}
+      </div>
+
+      <div className="border-t border-app-border pt-4">
+        <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => setShowAdvanced(!showAdvanced)}>
+          {showAdvanced ? "Hide advanced import tools" : "Advanced import tools"}
+        </button>
+        {showAdvanced ? (
+          <div className="mt-4 space-y-4">
+            <LabeledInput label="Max MB per file" type="number" value={String(props.fileForm.maxFileSizeMb)} onChange={(value) => props.setFileForm((current) => ({ ...current, maxFileSizeMb: Number(value) }))} />
+            <LabeledInput label="Extensions" value={props.fileForm.allowedExtensions} placeholder=".py,.ts,.md" onChange={(value) => props.setFileForm((current) => ({ ...current, allowedExtensions: value }))} />
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={props.onFilePreview} loading={props.loading === "filePreview"}>
+                Preview old import
+              </Button>
+              <Button variant="secondary" onClick={props.onFileImport} loading={props.loading === "fileImport"}>
+                Import once
+              </Button>
+              <Button variant="secondary" onClick={props.onSaveSource}>
+                Save source manually
+              </Button>
+            </div>
+            {props.filePreview ? <FilePreviewBlock preview={props.filePreview} /> : null}
+            {props.fileResult ? <ImportResult result={props.fileResult} /> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="border-t border-app-border pt-4">
+        <button type="button" className="text-sm font-medium text-violet-300 hover:text-violet-200" onClick={() => props.setShowHistory(!props.showHistory)}>
+          {props.showHistory ? "Hide index history" : "View index history"}
+        </button>
+        {props.showHistory ? (
+          <div className="mt-3 space-y-2">
+            {props.importRuns.length === 0 ? (
+              <p className="text-sm text-app-muted">No index runs.</p>
+            ) : (
+              props.importRuns.map((run) => <ImportRunRow key={run.id} run={run} />)
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -1997,6 +2087,8 @@ function ManualConnectorPanel({
   form,
   preview,
   result,
+  sourceTitle = "Saved Sources",
+  runLabel = "Re-import",
   previewLoading,
   importLoading,
   clearLoading,
@@ -2017,6 +2109,8 @@ function ManualConnectorPanel({
   form: ReactNode;
   preview: ReactNode;
   result: ReactNode;
+  sourceTitle?: string;
+  runLabel?: string;
   previewLoading: boolean;
   importLoading: boolean;
   clearLoading: boolean;
@@ -2055,7 +2149,7 @@ function ManualConnectorPanel({
       {result}
 
       <div className="border-t border-app-border pt-4">
-        <h3 className="text-sm font-semibold text-app-text">Saved Sources</h3>
+        <h3 className="text-sm font-semibold text-app-text">{sourceTitle}</h3>
         <div className="mt-3 space-y-2">
           {savedSources.length === 0 ? (
             <p className="text-sm text-app-muted">No saved sources.</p>
@@ -2065,6 +2159,7 @@ function ManualConnectorPanel({
                 key={source.id}
                 source={source}
                 loading={loading}
+                runLabel={runLabel}
                 onRun={() => onRunSource(source)}
                 onEdit={() => onEditSource(source)}
                 onDelete={() => onDeleteSource(source)}
@@ -2131,11 +2226,13 @@ function SaveSourcePanel({
         <Checkbox label="Enabled" checked={form.enabled} onChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))} />
         {connectorType === "file_system" ? (
           <>
-            <Checkbox label="Recursive" checked={form.recursive} onChange={(checked) => setForm((current) => ({ ...current, recursive: checked }))} />
+            <Checkbox label="Recursive indexing" checked={form.recursive} onChange={(checked) => setForm((current) => ({ ...current, recursive: checked }))} />
+            <Checkbox label="Index readable files" checked={form.indexingEnabled} onChange={(checked) => setForm((current) => ({ ...current, indexingEnabled: checked }))} />
             <div className="grid grid-cols-2 gap-3">
               <LabeledInput label="Max files" type="number" value={String(form.maxFiles)} onChange={(value) => setForm((current) => ({ ...current, maxFiles: Number(value) }))} />
-              <LabeledInput label="Max KB" type="number" value={String(form.maxFileSizeKb)} onChange={(value) => setForm((current) => ({ ...current, maxFileSizeKb: Number(value) }))} />
+              <LabeledInput label="Max depth" type="number" value={String(form.maxDepth)} onChange={(value) => setForm((current) => ({ ...current, maxDepth: Number(value) }))} />
             </div>
+            <LabeledInput label="Max MB per file" type="number" value={String(form.maxFileSizeMb)} onChange={(value) => setForm((current) => ({ ...current, maxFileSizeMb: Number(value) }))} />
             <LabeledInput label="Extensions" value={form.allowedExtensions} onChange={(value) => setForm((current) => ({ ...current, allowedExtensions: value }))} />
           </>
         ) : null}
@@ -2177,9 +2274,10 @@ function PanelHeader({ title, onClose }: { title: string; onClose: () => void })
   );
 }
 
-function SavedSourceRow({ source, loading, onRun, onEdit, onDelete, onClear }: {
+function SavedSourceRow({ source, loading, runLabel = "Re-import", onRun, onEdit, onDelete, onClear }: {
   source: ConnectorSource;
   loading: string | null;
+  runLabel?: string;
   onRun: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -2194,12 +2292,30 @@ function SavedSourceRow({ source, loading, onRun, onEdit, onDelete, onClear }: {
           <div className="mt-2 flex flex-wrap gap-2">
             <Badge>{source.last_import_status ?? "not imported"}</Badge>
             {source.last_import_at ? <Badge>{formatDate(source.last_import_at)}</Badge> : null}
+            {isTrackedFileSource(source) ? (
+              <>
+                <Badge variant={source.config?.index_status === "error" ? "danger" : source.config?.index_status === "indexing" || source.config?.index_status === "queued" ? "warning" : "success"}>
+                  {String(source.config?.index_status ?? "idle")}
+                </Badge>
+                <Badge>files {Number(source.config?.file_count ?? 0)}</Badge>
+                <Badge>inventory {Number(source.config?.inventory_count ?? source.config?.file_count ?? 0)}</Badge>
+                <Badge>content indexed {Number(source.config?.content_indexed_count ?? source.config?.indexed_count ?? 0)}</Badge>
+                {Number(source.config?.content_failed_count ?? 0) > 0 ? <Badge variant="warning">content failed {Number(source.config?.content_failed_count ?? 0)}</Badge> : null}
+                <Badge>skipped {Number(source.config?.skipped_count ?? 0)}</Badge>
+                {Number(source.config?.missing_count ?? 0) > 0 ? <Badge variant="warning">missing {Number(source.config?.missing_count ?? 0)}</Badge> : null}
+                {typeof source.config?.next_index_after === "string" ? <Badge>next {formatDate(source.config.next_index_after)}</Badge> : null}
+              </>
+            ) : null}
           </div>
+          {isTrackedFileSource(source) && typeof source.config?.last_error === "string" && source.config.last_error ? (
+            <p className="mt-2 text-xs text-red-200">{source.config.last_error}</p>
+          ) : null}
+          {isTrackedFileSource(source) ? <ContentFailedFilesDetails source={source} /> : null}
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button className="h-8 px-3 text-xs" variant="primary" onClick={onRun} loading={loading === `run:${source.id}`}>
-          Re-import
+          {isTrackedFileSource(source) ? "Reindex" : runLabel}
         </Button>
         <Button className="h-8 px-3 text-xs" variant="secondary" onClick={onEdit}>
           Edit
@@ -2213,6 +2329,41 @@ function SavedSourceRow({ source, loading, onRun, onEdit, onDelete, onClear }: {
       </div>
     </div>
   );
+}
+
+function ContentFailedFilesDetails({ source }: { source: ConnectorSource }) {
+  const failedFiles = contentFailedFiles(source);
+  if (!failedFiles.length) return null;
+  return (
+    <details className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-amber-100">Content extraction failed</summary>
+      <div className="mt-2 space-y-2">
+        {failedFiles.slice(0, 8).map((file, index) => (
+          <div key={`${file.relative_path}-${index}`} className="text-xs">
+            <p className="truncate text-app-text">{file.file_name || file.relative_path}</p>
+            <p className="mt-0.5 text-app-muted">
+              {file.reason || "Content extraction failed."}
+              {file.is_attachable ? " File is still searchable by name and attachable." : ""}
+            </p>
+          </div>
+        ))}
+        {failedFiles.length > 8 ? <p className="text-xs text-app-muted">+ {failedFiles.length - 8} more</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function contentFailedFiles(source: ConnectorSource) {
+  const raw = source.config?.content_failed_files;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => ({
+      relative_path: String(item.relative_path ?? ""),
+      file_name: String(item.file_name ?? item.relative_path ?? ""),
+      reason: String(item.reason ?? ""),
+      is_attachable: Boolean(item.is_attachable),
+    }));
 }
 
 function ImportRunRow({ run }: { run: ImportRun }) {
@@ -2375,6 +2526,21 @@ function toFilePayload(form: FileForm): FileImportPayload {
   };
 }
 
+function toTrackedFolderPayload(form: FileForm) {
+  return {
+    path: form.folderPath.trim(),
+    indexing_enabled: form.indexingEnabled,
+    recursive: form.recursive,
+    max_files: clampNumber(form.maxFiles, 1, 5000),
+    max_depth: clampNumber(form.maxDepth, 0, 10),
+    max_file_size_mb: clampNumber(form.maxFileSizeMb, 1, 25),
+    allowed_extensions: parseExtensions(form.allowedExtensions) ?? defaultIndexedExtensions.split(","),
+    exclude_patterns: ["node_modules", ".git", "dist", "build", "__pycache__"],
+    index_interval_minutes: 20,
+    enabled: true,
+  };
+}
+
 function toLogPayload(form: LogForm): LogImportPayload {
   return {
     file_path: form.filePath.trim(),
@@ -2402,9 +2568,16 @@ function sourceToForm(source?: ConnectorSource): SavedSourceForm {
     name: source.name,
     path: source.path,
     recursive: booleanConfig(config.recursive, true),
-    maxFiles: numberConfig(config.max_files, 100),
+    maxFiles: numberConfig(config.max_files, 2000),
+    maxDepth: numberConfig(config.max_depth, 5),
+    maxFileSizeMb: numberConfig(config.max_file_size_mb, 5),
     maxFileSizeKb: numberConfig(config.max_file_size_kb, 256),
-    allowedExtensions: Array.isArray(config.allowed_extensions) ? config.allowed_extensions.join(",") : "",
+    allowedExtensions: Array.isArray(config.include_patterns)
+      ? config.include_patterns.join(",")
+      : Array.isArray(config.allowed_extensions)
+        ? config.allowed_extensions.join(",")
+        : defaultIndexedExtensions,
+    indexingEnabled: booleanConfig(config.indexing_enabled, true),
     maxLines: numberConfig(config.max_lines, 1000),
     onlyErrors: booleanConfig(config.only_errors, false),
     groupSimilar: booleanConfig(config.group_similar, true),
@@ -2418,7 +2591,20 @@ function sourceToForm(source?: ConnectorSource): SavedSourceForm {
 function sourcePayload(connectorType: "file_system" | "logs" | "git", form: SavedSourceForm) {
   const base = { connector_type: connectorType, name: form.name.trim(), path: form.path.trim(), enabled: form.enabled };
   if (connectorType === "file_system") {
-    return { ...base, config: { recursive: form.recursive, max_files: clampNumber(form.maxFiles, 1, 1000), max_file_size_kb: clampNumber(form.maxFileSizeKb, 1, 2048), allowed_extensions: parseExtensions(form.allowedExtensions) } };
+    return {
+      ...base,
+      config: {
+        indexing_enabled: form.indexingEnabled,
+        recursive: form.recursive,
+        max_files: clampNumber(form.maxFiles, 1, 5000),
+        max_depth: clampNumber(form.maxDepth, 0, 10),
+        max_file_size_mb: clampNumber(form.maxFileSizeMb, 1, 25),
+        max_file_size_kb: clampNumber(form.maxFileSizeKb, 1, 2048),
+        include_patterns: parseExtensions(form.allowedExtensions),
+        allowed_extensions: parseExtensions(form.allowedExtensions),
+        exclude_patterns: ["node_modules", ".git", "dist", "build", "__pycache__"],
+      },
+    };
   }
   if (connectorType === "logs") {
     return { ...base, config: { max_lines: clampNumber(form.maxLines, 1, 10000), only_errors: form.onlyErrors, group_similar: form.groupSimilar } };
@@ -2445,6 +2631,10 @@ function booleanConfig(value: unknown, fallback: boolean) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Number.isNaN(value) ? min : Math.max(min, Math.min(max, value));
+}
+
+function isTrackedFileSource(source: ConnectorSource) {
+  return source.connector_type === "file_system" && source.config?.indexing_enabled === true;
 }
 
 function formatConnector(value: string) {
