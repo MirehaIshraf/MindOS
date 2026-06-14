@@ -1,4 +1,5 @@
 import html
+import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -62,6 +63,14 @@ from app.schemas.github import (
     GitHubSyncResponse,
     GitHubTestResponse,
 )
+from app.schemas.file_index import (
+    FileIndexJobResponse,
+    FileIndexJobsResponse,
+    TrackedFolderCreateRequest,
+    TrackedFolderResponse,
+    TrackedFoldersResponse,
+    TrackedFolderUpdateRequest,
+)
 from app.schemas.gmail import (
     GmailConnectResponse,
     GmailCredentialsUploadRequest,
@@ -74,6 +83,7 @@ from app.schemas.gmail import (
     GmailStatusResponse,
     GmailTestResponse,
 )
+from app.schemas.file_index import IndexedFileAttachmentReference
 from app.services.connector_source_service import connector_source_service
 from app.services.connector_registry_service import connector_registry_service
 from app.services.connector_service import ConnectorService
@@ -83,6 +93,7 @@ from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
 from app.services.github_service import GitHubConnectorError, github_service
 from app.services.gmail_service import GmailConnectorError, gmail_service
+from app.services.file_index_scheduler_service import file_index_scheduler_service
 from app.services.log_import_service import LogImportService
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -334,6 +345,7 @@ async def create_gmail_draft(request: Request) -> GmailDraftResponse:
         if _is_multipart_request(request):
             form = await request.form()
             attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
+            attachments.extend(_read_indexed_gmail_attachments(_form_string(form, "indexed_attachments")))
             return gmail_service.create_draft_with_attachments(
                 to=_form_string_list(form, "to"),
                 cc=_form_string_list(form, "cc"),
@@ -356,6 +368,7 @@ async def send_gmail_message(request: Request) -> GmailSendResponse:
         if _is_multipart_request(request):
             form = await request.form()
             attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
+            attachments.extend(_read_indexed_gmail_attachments(_form_string(form, "indexed_attachments")))
             return gmail_service.send_message_with_attachments(
                 to=_form_string_list(form, "to"),
                 cc=_form_string_list(form, "cc"),
@@ -439,8 +452,72 @@ async def _read_gmail_form_attachments(values: list[object]) -> list[dict[str, o
     return attachments
 
 
+def _read_indexed_gmail_attachments(raw_value: str) -> list[dict[str, object]]:
+    if not raw_value.strip():
+        return []
+    try:
+        raw_items = json.loads(raw_value)
+    except json.JSONDecodeError as error:
+        raise ValueError("Indexed attachment references must be valid JSON.") from error
+    if not isinstance(raw_items, list):
+        raise ValueError("Indexed attachment references must be a list.")
+    references = [IndexedFileAttachmentReference.model_validate(item) for item in raw_items]
+    return gmail_service.read_indexed_attachments(references)
+
+
 def _is_upload_file(value: object) -> bool:
     return hasattr(value, "read") and hasattr(value, "filename")
+
+
+@router.get("/file-system/tracked-folders", response_model=TrackedFoldersResponse)
+def list_tracked_folders() -> TrackedFoldersResponse:
+    return connector_source_service.list_tracked_folders()
+
+
+@router.post("/file-system/tracked-folders", response_model=TrackedFolderResponse)
+def create_tracked_folder(request: TrackedFolderCreateRequest) -> TrackedFolderResponse:
+    try:
+        folder = connector_source_service.create_tracked_folder(request)
+        if folder.enabled and folder.indexing_enabled:
+            file_index_scheduler_service.queue_source(folder.id, reason="folder_connected")
+        return connector_source_service.tracked_folder(folder.id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.put("/file-system/tracked-folders/{source_id}", response_model=TrackedFolderResponse)
+def update_tracked_folder(source_id: str, request: TrackedFolderUpdateRequest) -> TrackedFolderResponse:
+    try:
+        folder = connector_source_service.update_tracked_folder(source_id, request)
+        if folder.enabled and folder.indexing_enabled:
+            file_index_scheduler_service.queue_source(folder.id, reason="folder_updated")
+        return connector_source_service.tracked_folder(folder.id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Tracked folder not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.delete("/file-system/tracked-folders/{source_id}")
+def delete_tracked_folder(source_id: str) -> dict[str, str]:
+    if not connector_source_service.delete_source(source_id):
+        raise HTTPException(status_code=404, detail="Tracked folder not found.")
+    return {"status": "deleted"}
+
+
+@router.post("/file-system/tracked-folders/{source_id}/reindex", response_model=FileIndexJobResponse)
+def reindex_tracked_folder(source_id: str) -> FileIndexJobResponse:
+    try:
+        return file_index_scheduler_service.queue_source(source_id, reason="manual_reindex")
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Tracked folder not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/file-system/index-jobs", response_model=FileIndexJobsResponse)
+def list_file_index_jobs() -> FileIndexJobsResponse:
+    return file_index_scheduler_service.list_jobs()
 
 
 @router.get("/sources", response_model=ConnectorSourcesResponse)
@@ -474,6 +551,16 @@ def import_connector_source(source_id: str) -> dict[str, object]:
         return connector_source_service.run_source_import(source_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Saved source not found.") from error
+
+
+@router.post("/sources/{source_id}/index")
+def index_connector_source(source_id: str) -> dict[str, object]:
+    try:
+        return connector_source_service.index_source(source_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Saved source not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.delete("/sources/{source_id}/events")

@@ -7,3 +7,5 @@ sqlalchemy
 aiosqlite
 httpx
 chromadb
+pypdf
+python-docx

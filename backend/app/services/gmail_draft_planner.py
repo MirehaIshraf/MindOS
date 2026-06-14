@@ -22,6 +22,8 @@ class GmailDraftPlanner:
                             "You write clean email drafts from user-provided local task history. "
                             "Use only the provided facts. Do not invent work. Do not expose internal event names. "
                             "Do not mention MindOS task activity unless the user explicitly asks. "
+                            "If attachment filenames are provided, you may mention that the files are attached, "
+                            "but do not infer their contents from filenames. "
                             "Return JSON only with keys: to, subject, body, tone, source_summary."
                         ),
                     },
@@ -49,7 +51,7 @@ class GmailDraftPlanner:
             return GmailDraftPrepareResponse(
                 to=str(parsed.get("to") or "").strip(),
                 subject=subject,
-                body=self._clean_body(body),
+                body=self._ensure_attachment_sentence(self._clean_body(body), request.attachment_filenames),
                 tone=str(parsed.get("tone") or "professional").strip() or "professional",
                 source_summary=str(parsed.get("source_summary") or self._source_summary(request.recent_tasks)).strip(),
                 warnings=[],
@@ -75,6 +77,9 @@ class GmailDraftPlanner:
                 "Relevant memory:",
                 self._group_source_facts(request.memory_items) or "No additional memory was provided.",
                 "",
+                "Selected attachment filenames:",
+                ", ".join(request.attachment_filenames) if request.attachment_filenames else "No attachments selected.",
+                "",
                 "Return JSON only:",
                 '{"to":"","subject":"...","body":"...","tone":"professional","source_summary":"..."}',
                 "",
@@ -85,6 +90,8 @@ class GmailDraftPlanner:
                 "- human sounding",
                 "- no raw internal labels",
                 "- do not dump file names or counts unless they are clearly useful",
+                "- if selected attachments are listed, mention them naturally without describing their contents",
+                "- if no attachments are selected, do not claim anything is attached",
                 "- no fake claims",
                 "- if the user asks for Bengali, write Bengali; otherwise write English",
             ]
@@ -151,6 +158,7 @@ class GmailDraftPlanner:
                 "Best regards,"
             )
             source_summary = self._source_summary(request.recent_tasks)
+        body = self._ensure_attachment_sentence(body, request.attachment_filenames)
         return GmailDraftPrepareResponse(
             to="",
             subject="Summary of my work from the last 7 days",
@@ -167,6 +175,19 @@ class GmailDraftPlanner:
     def _source_summary(self, items: list[GmailDraftPrepareSourceItem]) -> str:
         count = len(items)
         return f"Used {count} task history item{'s' if count != 1 else ''} from the last 7 days." if count else "No recent task history was available."
+
+    def _ensure_attachment_sentence(self, body: str, filenames: list[str]) -> str:
+        clean_names = [name.strip() for name in filenames if name.strip()]
+        if not clean_names or re.search(r"\b(attached|attachment|included)\b", body, flags=re.IGNORECASE):
+            return body
+        if len(clean_names) == 1:
+            sentence = f"I have attached {clean_names[0]} for your review."
+        else:
+            sentence = f"I have attached {len(clean_names)} files for your review."
+        parts = body.rstrip().split("\n\n")
+        if len(parts) >= 2 and parts[-1].lower().startswith("best"):
+            return "\n\n".join([*parts[:-1], sentence, parts[-1]])
+        return f"{body.rstrip()}\n\n{sentence}"
 
     def _parse_json(self, raw: str) -> dict[str, Any]:
         cleaned = raw.strip()

@@ -16,6 +16,7 @@ from app.schemas.gmail import (
     GmailTestResponse,
 )
 from app.services.connector_registry_service import connector_registry_service
+from app.services.file_index_service import file_index_service
 from app.services.gmail_credentials_store import GmailCredentialsError, gmail_credentials_store
 from app.services.gmail_oauth_service import GmailOAuthError, gmail_oauth_service
 from app.services.gmail_token_store import gmail_token_store
@@ -33,8 +34,11 @@ GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS = {
     ".key",
     ".pem",
     ".ps1",
+    ".rar",
     ".sh",
     ".sqlite",
+    ".zip",
+    ".7z",
 }
 
 
@@ -156,6 +160,16 @@ class GmailService:
         return GmailRecentEmailsResponse(emails=emails, total=len(emails))
 
     def create_draft(self, request: GmailDraftRequest) -> GmailDraftResponse:
+        indexed_attachments = self.read_indexed_attachments(request.indexed_attachments)
+        if indexed_attachments:
+            return self.create_draft_with_attachments(
+                to=[request.to],
+                subject=request.subject,
+                body=request.body,
+                cc=request.cc,
+                bcc=request.bcc,
+                attachments=indexed_attachments,
+            )
         raw = self._build_raw_message([request.to], request.subject, request.body, cc=request.cc, bcc=request.bcc)
         return self._create_draft_from_raw(raw)
 
@@ -194,6 +208,17 @@ class GmailService:
             raise GmailConnectorError("Gmail is not connected.")
         if not status.capabilities.get("send_email"):
             raise GmailConnectorError("Gmail send is not connected yet. You can create a draft instead.")
+        indexed_attachments = self.read_indexed_attachments(request.indexed_attachments)
+        if indexed_attachments:
+            return self.send_message_with_attachments(
+                to=request.to,
+                subject=request.subject,
+                body=request.body,
+                confirmation=request.confirmation,
+                cc=request.cc,
+                bcc=request.bcc,
+                attachments=indexed_attachments,
+            )
         raw = self._build_raw_message(request.to, request.subject, request.body, cc=request.cc, bcc=request.bcc)
         return self._send_raw_message(raw)
 
@@ -267,6 +292,14 @@ class GmailService:
                 raise GmailConnectorError("Attachment total size is too large. Keep attachments under 20 MB.")
             safe_attachments.append({**attachment, "filename": filename, "content": content, "size": size})
         return safe_attachments
+
+    def read_indexed_attachments(self, references: list[Any] | None) -> list[GmailAttachmentPayload]:
+        if not references:
+            return []
+        try:
+            return file_index_service.read_indexed_attachments(list(references))
+        except ValueError as error:
+            raise GmailConnectorError(str(error)) from error
 
     def disconnect(self) -> GmailStatusResponse:
         gmail_oauth_service.disconnect()

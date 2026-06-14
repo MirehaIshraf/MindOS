@@ -18,6 +18,7 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.core.database import get_database_path, initialize_database
 from app.core.logging import setup_logging
+from app.services.file_index_scheduler_service import file_index_scheduler_service
 import logging
 
 
@@ -60,6 +61,7 @@ def startup() -> None:
         logger.info("MindOS storage initialized", extra={"storage": "sqlite", "database_path": str(get_database_path())})
     else:
         logger.info("MindOS storage initialized", extra={"storage": "memory"})
+    file_index_scheduler_service.start()
 
 
 @app.get("/")

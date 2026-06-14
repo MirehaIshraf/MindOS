@@ -28,8 +28,10 @@ from app.schemas.file_tasks import (
     FileTaskScanRequest,
     FileTaskUndoResult,
 )
+from app.schemas.file_index import IndexedFileSearchRequest, IndexedFileSearchResponse, ResolveIndexedAttachmentsRequest, ResolveIndexedAttachmentsResponse
 from app.schemas.gmail import GmailDraftPrepareRequest, GmailDraftPrepareResponse
 from app.services.document_summary_task_service import document_summary_task_service
+from app.services.file_index_service import file_index_service
 from app.services.file_task_execution_service import file_task_execution_service
 from app.services.file_task_llm_planner_service import file_task_llm_planner_service
 from app.services.file_task_planner_service import file_task_planner_service
@@ -144,6 +146,28 @@ def plan_browser_file_task_with_llm(request: FileTaskLlmPlanRequest) -> FileTask
     except Exception as error:
         logger.exception("Failed to prepare AI-assisted file task preview")
         raise HTTPException(status_code=500, detail=f"AI file task planning failed: {error}") from error
+
+
+@router.post("/files/search", response_model=IndexedFileSearchResponse)
+def search_indexed_files(request: IndexedFileSearchRequest) -> IndexedFileSearchResponse:
+    try:
+        return file_index_service.search(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to search indexed files")
+        raise HTTPException(status_code=500, detail=f"Indexed file search failed: {error}") from error
+
+
+@router.post("/files/resolve-attachments", response_model=ResolveIndexedAttachmentsResponse)
+def resolve_indexed_file_attachments(request: ResolveIndexedAttachmentsRequest) -> ResolveIndexedAttachmentsResponse:
+    try:
+        return file_index_service.resolve_attachments(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to resolve indexed file attachments")
+        raise HTTPException(status_code=500, detail=f"Attachment resolution failed: {error}") from error
 
 
 @router.post("/document/summary/prepare", response_model=DocumentSummaryPrepareResponse)

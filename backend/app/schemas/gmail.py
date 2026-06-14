@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.file_index import IndexedFileAttachmentReference
+
 
 REQUIRED_GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
@@ -53,6 +55,7 @@ class GmailDraftRequest(BaseModel):
     bcc: list[str] = Field(default_factory=list)
     subject: str
     body: str
+    indexed_attachments: list[IndexedFileAttachmentReference] = Field(default_factory=list)
 
     @field_validator("to", "subject", "body")
     @classmethod
@@ -77,6 +80,7 @@ class GmailSendRequest(BaseModel):
     subject: str
     body: str
     confirmation: bool = False
+    indexed_attachments: list[IndexedFileAttachmentReference] = Field(default_factory=list)
 
     @field_validator("to")
     @classmethod
@@ -118,6 +122,7 @@ class GmailDraftPrepareRequest(BaseModel):
     connected_email: str | None = None
     recent_tasks: list[GmailDraftPrepareSourceItem] = Field(default_factory=list)
     memory_items: list[GmailDraftPrepareSourceItem] = Field(default_factory=list)
+    attachment_filenames: list[str] = Field(default_factory=list)
     model_id: str | None = None
 
 
