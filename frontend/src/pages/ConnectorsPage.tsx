@@ -25,6 +25,7 @@ import {
   clearGitEvents,
   clearGitHubEvents,
   clearLogEvents,
+  connectJira,
   createConnectorSource,
   deleteConnectorSource,
   connectEmail,
@@ -33,6 +34,7 @@ import {
   createGmailTestDraft,
   disconnectEmail,
   disconnectGmail,
+  disconnectJira,
   getApiErrorMessage,
   getConnectors,
   getConnectorConfig,
@@ -40,8 +42,10 @@ import {
   getEmailStatus,
   getGmailStatus,
   getGitHubStatus,
+  getJiraStatus,
   getImportRuns,
   listGitHubRepos,
+  listJiraProjects,
   importFiles,
   importGitRepo,
   importLogs,
@@ -53,13 +57,16 @@ import {
   saveEmailConfig,
   saveGitHubConfig,
   saveGitHubSelection,
+  saveJiraConfig,
   removeGmailCredentials,
+  removeJiraCredentials,
   sendGmailDraft,
   syncEmailMessages,
   syncGitHubRepos,
   testEmailConnection,
   testGmailConnection,
   testGitHubConnection,
+  testJiraConnection,
   toggleConnector,
   updateConnectorConfig,
   updateConnectorSource,
@@ -83,6 +90,8 @@ import type {
   GmailDraftResponse,
   GmailStatusResponse,
   ImportRun,
+  JiraProject,
+  JiraStatusResponse,
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
@@ -542,6 +551,8 @@ function ConnectorCard({
   const githubLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
   const gmailEmail = typeof connector.config_summary?.email_address === "string" ? connector.config_summary.email_address : null;
   const gmailConnectedAt = typeof connector.config_summary?.connected_at === "string" ? connector.config_summary.connected_at : null;
+  const jiraProject = typeof connector.config_summary?.default_project_key === "string" ? connector.config_summary.default_project_key : "";
+  const jiraLastTested = typeof connector.config_summary?.last_tested_at === "string" ? connector.config_summary.last_tested_at : null;
   const emailProvider = typeof connector.config_summary?.provider_name === "string" ? connector.config_summary.provider_name : null;
   const emailAccount = typeof connector.config_summary?.account_label === "string" ? connector.config_summary.account_label : null;
   const emailLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
@@ -586,6 +597,17 @@ function ConnectorCard({
           <div>
             <span className="block uppercase">Connected</span>
             <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(gmailConnectedAt)}</span>
+          </div>
+        </div>
+      ) : connector.id === "jira" ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-app-muted">
+          <div>
+            <span className="block uppercase">Project</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{jiraProject || "--"}</span>
+          </div>
+          <div>
+            <span className="block uppercase">Last test</span>
+            <span className="mt-1 block truncate text-sm font-medium text-app-text">{formatDate(jiraLastTested)}</span>
           </div>
         </div>
       ) : connector.id === "email" ? (
@@ -671,6 +693,11 @@ function ConfigurePanel(props: {
             <Badge>{typeof connector.config_summary?.email_address === "string" ? connector.config_summary.email_address : "local OAuth"}</Badge>
             <Badge>connected: {formatDate(typeof connector.config_summary?.connected_at === "string" ? connector.config_summary.connected_at : null)}</Badge>
           </>
+        ) : connector.id === "jira" ? (
+          <>
+            <Badge>project: {typeof connector.config_summary?.default_project_key === "string" && connector.config_summary.default_project_key ? connector.config_summary.default_project_key : "--"}</Badge>
+            <Badge>last test: {formatDate(typeof connector.config_summary?.last_tested_at === "string" ? connector.config_summary.last_tested_at : null)}</Badge>
+          </>
         ) : connector.id === "email" ? (
           <>
             <Badge>events: {connector.event_count}</Badge>
@@ -692,6 +719,8 @@ function ConfigurePanel(props: {
         <GitHubPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
       ) : connector.id === "gmail" ? (
         <GmailPanel onRefresh={props.onRefresh} />
+      ) : connector.id === "jira" ? (
+        <JiraPanel connector={connector} onRefresh={props.onRefresh} />
       ) : connector.id === "email" ? (
         <EmailPanel connector={connector} onToggle={props.onToggleConnector} onRefresh={props.onRefresh} />
       ) : connector.id === "file_system" ? (
@@ -1285,6 +1314,286 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
         </CompactBlock>
       ) : null}
       {syncResult?.warnings.length ? <StatusMessage message={syncResult.warnings.join(" ")} variant="warning" /> : null}
+      {message ? <p className="text-sm text-app-muted">{message}</p> : null}
+    </div>
+  );
+}
+
+function JiraPanel({ connector, onRefresh }: { connector: Connector; onRefresh: () => void }) {
+  const [status, setStatus] = useState<JiraStatusResponse | null>(null);
+  const [projects, setProjects] = useState<JiraProject[]>([]);
+  const [siteUrl, setSiteUrl] = useState("");
+  const [email, setEmail] = useState("");
+  const [apiToken, setApiToken] = useState("");
+  const [defaultProjectKey, setDefaultProjectKey] = useState("");
+  const [defaultIssueType, setDefaultIssueType] = useState("Task");
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStatus() {
+      setLoading("jiraStatus");
+      try {
+        const response = await getJiraStatus();
+        if (!cancelled) {
+          applyStatus(response);
+        }
+      } catch (error) {
+        if (!cancelled) setMessage(getApiErrorMessage(error));
+      } finally {
+        if (!cancelled) setLoading(null);
+      }
+    }
+    void loadStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function applyStatus(nextStatus: JiraStatusResponse) {
+    setStatus(nextStatus);
+    setSiteUrl(nextStatus.site_url || "");
+    setEmail(nextStatus.email || "");
+    setDefaultProjectKey(nextStatus.default_project_key || "");
+    setDefaultIssueType(nextStatus.default_issue_type || "Task");
+  }
+
+  function payload() {
+    return {
+      site_url: siteUrl.trim(),
+      email: email.trim(),
+      api_token: apiToken.trim(),
+      default_project_key: defaultProjectKey.trim() || null,
+      default_issue_type: defaultIssueType.trim() || "Task",
+    };
+  }
+
+  function hasRequiredNewCredentials() {
+    return Boolean(siteUrl.trim() && email.trim() && apiToken.trim());
+  }
+
+  async function saveConfig() {
+    setLoading("jiraSave");
+    setMessage(null);
+    try {
+      const response = await saveJiraConfig(payload());
+      applyStatus(response);
+      setApiToken("");
+      setProjects([]);
+      setMessage("Jira credentials saved locally.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function saveIfTokenEntered() {
+    if (apiToken.trim()) {
+      const response = await saveJiraConfig(payload());
+      applyStatus(response);
+      setApiToken("");
+    }
+  }
+
+  async function testConnection() {
+    setLoading("jiraTest");
+    setMessage(null);
+    try {
+      await saveIfTokenEntered();
+      const response = await testJiraConnection();
+      setProjects(response.projects);
+      const nextStatus = await getJiraStatus();
+      applyStatus(nextStatus);
+      setMessage(response.message);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+      try {
+        applyStatus(await getJiraStatus());
+      } catch {
+        // Keep the original error visible.
+      }
+      onRefresh();
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function connect() {
+    setLoading("jiraConnect");
+    setMessage(null);
+    try {
+      await saveIfTokenEntered();
+      const response = await connectJira();
+      applyStatus(response.connector);
+      setMessage(response.message);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function disconnect() {
+    setLoading("jiraDisconnect");
+    setMessage(null);
+    try {
+      const response = await disconnectJira();
+      applyStatus(response.connector);
+      setMessage(response.message);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function clearCredentials() {
+    if (!window.confirm("Remove saved Jira credentials? Jira memory events are not affected.")) return;
+    setLoading("jiraClear");
+    setMessage(null);
+    try {
+      const response = await removeJiraCredentials();
+      applyStatus(response);
+      setApiToken("");
+      setProjects([]);
+      setMessage("Jira credentials removed.");
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function loadProjects() {
+    if (!connected) {
+      setMessage("Connect Jira before loading projects.");
+      return;
+    }
+    setLoading("jiraProjects");
+    setMessage(null);
+    try {
+      const response = await listJiraProjects();
+      setProjects(response.projects);
+      applyStatus(await getJiraStatus());
+      setMessage(`Loaded ${response.total} Jira projects.`);
+      onRefresh();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error));
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  const configured = status?.configured ?? connector.configured;
+  const connected = Boolean(status?.connected);
+  const canSave = hasRequiredNewCredentials();
+  const canTest = configured || hasRequiredNewCredentials();
+  return (
+    <div className="mt-5 space-y-4">
+      <div>
+        <p className="text-sm font-medium text-app-text">Jira</p>
+        <p className="mt-1 text-sm text-app-muted">Connect Jira Cloud so MindOS can read project context when needed.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={status?.status ?? connector.status} />
+        <Badge>Project: {status?.default_project_key || defaultProjectKey || "--"}</Badge>
+        <Badge>Last test: {formatDate(status?.last_tested_at ?? null)}</Badge>
+      </div>
+      {connected && status?.display_name ? <p className="text-sm text-app-muted">Connected as {status.display_name}</p> : null}
+      {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
+
+      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <p className="text-sm font-medium text-app-text">Connection</p>
+        <p className="mt-1 text-xs text-app-muted">
+          For Jira Cloud, use your Jira site URL, Atlassian account email, and Jira API token. Do not use the Atlassian Organization Admin API key here.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <LabeledInput label="Jira site URL" value={siteUrl} onChange={setSiteUrl} placeholder="https://your-company.atlassian.net" />
+          <LabeledInput label="Atlassian email" value={email} onChange={setEmail} placeholder="you@example.com" />
+          <LabeledInput
+            label="Jira API token"
+            type="password"
+            value={apiToken}
+            onChange={setApiToken}
+            placeholder={configured ? "Token saved. Enter a new token to replace it." : "Jira API token"}
+          />
+          <LabeledInput label="Default project key" value={defaultProjectKey} onChange={setDefaultProjectKey} placeholder="PROJ" />
+          <label className="block text-xs font-medium uppercase text-app-muted">
+            Default issue type
+            <select
+              className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+              value={defaultIssueType}
+              onChange={(event) => setDefaultIssueType(event.target.value)}
+            >
+              <option value="Task">Task</option>
+              <option value="Bug">Bug</option>
+              <option value="Story">Story</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => void saveConfig()} loading={loading === "jiraSave"} disabled={!canSave}>
+            Save
+          </Button>
+          <Button variant="secondary" onClick={() => void testConnection()} loading={loading === "jiraTest"} disabled={!canTest}>
+            Test connection
+          </Button>
+          {connected ? (
+            <Button variant="secondary" onClick={() => void disconnect()} loading={loading === "jiraDisconnect"}>
+              Disconnect
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={() => void connect()} loading={loading === "jiraConnect"} disabled={!canTest}>
+              Connect
+            </Button>
+          )}
+          <Button variant="danger" onClick={() => void clearCredentials()} loading={loading === "jiraClear"} disabled={!configured}>
+            Remove credentials
+          </Button>
+        </div>
+      </div>
+
+      {connected ? (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-app-text">Projects</p>
+              <p className="mt-1 text-xs text-app-muted">Load accessible Jira projects to confirm the connector can read project metadata.</p>
+            </div>
+            <Button variant="secondary" onClick={() => void loadProjects()} loading={loading === "jiraProjects"}>
+              Load projects
+            </Button>
+          </div>
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {projects.length === 0 ? (
+              <p className="text-sm text-app-muted">Load projects after connecting Jira.</p>
+            ) : (
+              projects.map((project) => (
+                <div key={project.id || project.key} className="flex items-start justify-between gap-3 rounded-md border border-app-border bg-zinc-900/60 px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-app-text">{project.key} · {project.name}</p>
+                    {project.project_type_key ? <p className="mt-1 text-xs text-app-muted">{project.project_type_key}</p> : null}
+                  </div>
+                  {project.simplified !== null && project.simplified !== undefined ? <Badge>{project.simplified ? "team-managed" : "company-managed"}</Badge> : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+          Connect Jira to load projects.
+        </div>
+      )}
+
       {message ? <p className="text-sm text-app-muted">{message}</p> : null}
     </div>
   );

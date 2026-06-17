@@ -75,6 +75,10 @@ GitHub is read-only in the current POC: token config -> user connects the connec
 
 The GitHub connector is primarily a configuration and context source. It stores selected repositories and read permissions; user-facing GitHub tasks/actions should be triggered later from Chat or Tasks, not exposed as a busy connector control panel. The token is stored locally in connector settings for now, hidden from config responses, never written to Memory, never logged intentionally, and never sent to the model. GitHub write actions such as creating issues, commenting, merging, pushing, or PR updates are not implemented.
 
+## Jira Connector Flow
+
+Jira is a connection/configuration POC: Jira Cloud site URL + Atlassian email + Jira API token -> Basic Auth -> `/rest/api/3/myself` connection test -> `/rest/api/3/project/search` project listing -> default project key/issue type stored for later task flows. Atlassian Organization Admin API keys and Organization IDs are not used. Jira issue creation and other write actions are not implemented.
+
 ## Email MCP Connector Flow
 
 Email MCP is a provider-agnostic custom/corporate/internal provider path, separate from Gmail. The current POC flow is: user configures provider name -> MCP/API base URL -> auth type and optional token/API key -> optional tool mapping -> test connection/capability discovery -> connect -> sync recent/unread/search messages -> normalize provider responses -> dedupe by provider/account/message id -> create or update `email_message` memory events -> chat/search can retrieve email context.

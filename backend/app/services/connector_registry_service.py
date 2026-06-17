@@ -210,7 +210,7 @@ CONNECTOR_DEFINITIONS = [
         id="jira",
         name="Jira",
         type="jira",
-        description="Import tickets and project activity.",
+        description="Connect Jira Cloud with API token auth.",
         default_enabled=False,
         configured_by_default=False,
         supports_toggle=True,
@@ -294,6 +294,7 @@ class ConnectorRegistryService:
             bool(config.get("token")) if definition.id == "github"
             else bool(config.get("credentials_configured")) if definition.id == "gmail"
             else self._email_configured(config) if definition.id == "email"
+            else self._jira_configured(config) if definition.id == "jira"
             else definition.configured_by_default or bool(config)
         )
         events = self._events_for_source(definition.event_source)
@@ -306,7 +307,7 @@ class ConnectorRegistryService:
         if definition.id == "gmail":
             gmail_heartbeat = self._get_heartbeat("gmail")
             status = "connected" if gmail_heartbeat.get("connected") else "configured" if configured else "needs_configuration"
-        if definition.id in {"github", "gmail", "email"} and enabled and configured and self._get_heartbeat(definition.id).get("last_error"):
+        if definition.id in {"github", "gmail", "email", "jira"} and enabled and configured and self._get_heartbeat(definition.id).get("last_error"):
             status = "error"
         saved_sources = [
             source for source in self._source_repository.list_sources() if source.connector_type == definition.id
@@ -326,7 +327,7 @@ class ConnectorRegistryService:
             summary["configured_keys"] = sorted(
                 key
                 for key in config.keys()
-                if key not in {"token", "api_key", "access_token", "refresh_token", "token_expires_at", "oauth_state"}
+                if key not in {"token", "api_token", "api_key", "access_token", "refresh_token", "token_expires_at", "oauth_state"}
             )
         if definition.id == "github":
             heartbeat = self._get_heartbeat("github")
@@ -370,6 +371,21 @@ class ConnectorRegistryService:
                     "last_sync_at": heartbeat.get("last_sync_at"),
                     "last_error": heartbeat.get("last_error"),
                     "selected_scope": config.get("sync_scope", "recent"),
+                }
+            )
+        if definition.id == "jira":
+            heartbeat = self._get_heartbeat("jira")
+            summary.update(
+                {
+                    "site_url": config.get("site_url"),
+                    "email": config.get("email"),
+                    "has_api_token": bool(config.get("api_token")),
+                    "default_project_key": config.get("default_project_key"),
+                    "default_issue_type": config.get("default_issue_type", "Task"),
+                    "display_name": heartbeat.get("display_name"),
+                    "project_count": heartbeat.get("project_count") or 0,
+                    "last_tested_at": heartbeat.get("last_tested_at"),
+                    "last_error": heartbeat.get("last_error"),
                 }
             )
         if heartbeat:
@@ -419,10 +435,13 @@ class ConnectorRegistryService:
             config = self._safe_gmail_config(config)
         elif definition.id == "email":
             config = self._safe_email_config(config)
+        elif definition.id == "jira":
+            config = self._safe_jira_config(config)
         configured = (
             bool(self.get_config_dict("github").get("token")) if definition.id == "github"
             else bool(self.get_config_dict("gmail").get("credentials_configured")) if definition.id == "gmail"
             else self._email_configured(self.get_config_dict("email")) if definition.id == "email"
+            else self._jira_configured(self.get_config_dict("jira")) if definition.id == "jira"
             else definition.configured_by_default or bool(config)
         )
         return ConnectorConfigResponse(
@@ -557,6 +576,15 @@ class ConnectorRegistryService:
             "sync_scope": config.get("sync_scope", "recent"),
         }
 
+    def _safe_jira_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "site_url": config.get("site_url"),
+            "email": config.get("email"),
+            "has_api_token": bool(config.get("api_token")),
+            "default_project_key": config.get("default_project_key"),
+            "default_issue_type": config.get("default_issue_type", "Task"),
+        }
+
     def _events_for_source(self, source: str | None) -> list[Any]:
         if not source:
             return []
@@ -581,6 +609,9 @@ class ConnectorRegistryService:
             return bool(self._get_heartbeat("gmail").get("connected"))
         if definition.id == "email":
             return bool(self._get_heartbeat("email").get("connected"))
+        if definition.id == "jira":
+            heartbeat = self._get_heartbeat("jira")
+            return bool(heartbeat.get("display_name") and not heartbeat.get("last_error"))
         if definition.supports_manual_import:
             return True
         if definition.supports_live_events and last_seen_at:
@@ -596,12 +627,14 @@ class ConnectorRegistryService:
         last_seen_at: datetime | None,
     ) -> str:
         if not enabled:
+            if definition.id == "jira" and configured:
+                return "configured"
             return "off"
         if not configured:
             return "needs_configuration"
         if connected:
             return "connected"
-        if definition.id in {"github", "gmail", "email"}:
+        if definition.id in {"github", "gmail", "email", "jira"}:
             return "configured"
         if definition.id in {"vscode", "browser"}:
             return "disconnected"
@@ -625,6 +658,9 @@ class ConnectorRegistryService:
             and config.get("api_base_url")
             and (auth_type == "none" or config.get("api_key"))
         )
+
+    def _jira_configured(self, config: dict[str, Any]) -> bool:
+        return bool(config.get("site_url") and config.get("email") and config.get("api_token"))
 
     def _get_setting(self, key: str, default: Any) -> Any:
         initialize_database()

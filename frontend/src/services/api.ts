@@ -69,6 +69,11 @@ import type {
   GitHubSyncRequest,
   GitHubSyncResponse,
   GitHubTestResponse,
+  JiraConfigRequest,
+  JiraConnectionResponse,
+  JiraProjectsResponse,
+  JiraStatusResponse,
+  JiraTestResponse,
   GmailConnectResponse,
   GmailDraftPrepareRequest,
   GmailDraftPrepareResponse,
@@ -824,6 +829,41 @@ export async function saveGitHubSelection(
 
 export async function syncGitHubRepos(payload: GitHubSyncRequest): Promise<GitHubSyncResponse> {
   const response = await api.post<GitHubSyncResponse>("/connectors/github/sync", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function getJiraStatus(): Promise<JiraStatusResponse> {
+  const response = await api.get<JiraStatusResponse>("/connectors/jira/status");
+  return response.data;
+}
+
+export async function saveJiraConfig(payload: JiraConfigRequest): Promise<JiraStatusResponse> {
+  const response = await api.post<JiraStatusResponse>("/connectors/jira/config", payload);
+  return response.data;
+}
+
+export async function testJiraConnection(): Promise<JiraTestResponse> {
+  const response = await api.post<JiraTestResponse>("/connectors/jira/test", {}, { timeout: 30000 });
+  return response.data;
+}
+
+export async function connectJira(): Promise<JiraConnectionResponse> {
+  const response = await api.post<JiraConnectionResponse>("/connectors/jira/connect", {}, { timeout: 30000 });
+  return response.data;
+}
+
+export async function disconnectJira(): Promise<JiraConnectionResponse> {
+  const response = await api.post<JiraConnectionResponse>("/connectors/jira/disconnect", {});
+  return response.data;
+}
+
+export async function removeJiraCredentials(): Promise<JiraStatusResponse> {
+  const response = await api.delete<JiraStatusResponse>("/connectors/jira/credentials");
+  return response.data;
+}
+
+export async function listJiraProjects(): Promise<JiraProjectsResponse> {
+  const response = await api.get<JiraProjectsResponse>("/connectors/jira/projects", { timeout: 30000 });
   return response.data;
 }
 

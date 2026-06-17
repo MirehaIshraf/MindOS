@@ -105,6 +105,15 @@ Preferred browser event types:
   `{ "repo_full_names": ["owner/repo"], "include_commits": true, "include_issues": true, "include_pull_requests": true, "max_items_per_type": 30 }`.
   Sync is limited to 5 repositories per request and up to 100 items per type. It requires GitHub to be connected, creates or updates `github_commit`, `github_issue`, and `github_pull_request` memory events with dedupe keys, and does not fetch file contents or perform GitHub writes.
 - `DELETE /connectors/github/events`: clears GitHub memory events and related relationships/vectors only. It does not clear the token.
+- `GET /connectors/jira/status`: returns Jira Cloud connector status, configured/connected flags, site URL, email, `has_api_token`, default project key, default issue type, last tested time, last error, display name, account id, and project count. It never returns the API token.
+- `POST /connectors/jira/config`: saves local Jira Cloud connection config. Request:
+  `{ "site_url": "https://your-company.atlassian.net", "email": "you@example.com", "api_token": "...", "default_project_key": "PROJ", "default_issue_type": "Task" }`.
+  The site URL must be HTTPS and look like an Atlassian Cloud site. Organization ID and Atlassian Organization Admin API keys are not used.
+- `POST /connectors/jira/test`: tests saved Jira config with Basic Auth against `/rest/api/3/myself`, then loads project metadata through `/rest/api/3/project/search`. Returns `{ "ok": true, "connected": true, "display_name": "...", "project_count": 3, "projects": [...] }`. Invalid credentials return JSON `400` with `Invalid Jira site URL, email, or API token.`
+- `POST /connectors/jira/connect`: tests Jira and enables the connector when successful. It does not create Jira issues.
+- `POST /connectors/jira/disconnect`: disables the Jira connector but leaves saved credentials local.
+- `DELETE /connectors/jira/credentials`: removes saved Jira config and disables the connector.
+- `GET /connectors/jira/projects`: lists accessible Jira projects through `/rest/api/3/project/search`. Requires the Jira connector to be connected.
 - `GET /connectors/gmail/status`: returns local Gmail connector status: `credentials_configured`, `connected`, `reconnect_required`, `email_address`, granted `scopes`, `last_error`, `connected_at`, `credential_file_name`, required scopes, and capabilities including `attachments: true` plus `max_attachment_total_mb: 20` when Gmail compose is connected. It never returns client secrets or tokens.
 - `POST /connectors/gmail/credentials/upload`: saves a user-provided Google OAuth desktop credentials JSON locally. Request:
   `{ "filename": "credentials.json", "content": "{...json...}" }`.

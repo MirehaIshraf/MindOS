@@ -63,6 +63,13 @@ from app.schemas.github import (
     GitHubSyncResponse,
     GitHubTestResponse,
 )
+from app.schemas.jira import (
+    JiraConfigRequest,
+    JiraConnectionResponse,
+    JiraProjectsResponse,
+    JiraStatusResponse,
+    JiraTestResponse,
+)
 from app.schemas.file_index import (
     FileIndexJobResponse,
     FileIndexJobsResponse,
@@ -94,6 +101,7 @@ from app.services.file_import_service import FileImportService
 from app.services.git_import_service import GitImportService
 from app.services.github_service import GitHubConnectorError, github_service
 from app.services.gmail_service import GmailConnectorError, gmail_service
+from app.services.jira_service import JiraConnectorError, jira_service
 from app.services.file_index_scheduler_service import file_index_scheduler_service
 from app.services.log_import_service import LogImportService
 
@@ -184,6 +192,50 @@ def sync_github(request: GitHubSyncRequest) -> GitHubSyncResponse:
 @router.delete("/github/events")
 def clear_github_events() -> dict[str, object]:
     return _clear_events_for_source("github")
+
+
+@router.get("/jira/status", response_model=JiraStatusResponse)
+def get_jira_status() -> JiraStatusResponse:
+    return jira_service.status()
+
+
+@router.post("/jira/config", response_model=JiraStatusResponse)
+def save_jira_config(request: JiraConfigRequest) -> JiraStatusResponse:
+    return jira_service.save_config(request)
+
+
+@router.post("/jira/test", response_model=JiraTestResponse)
+def test_jira_connection() -> JiraTestResponse:
+    try:
+        return jira_service.test_connection()
+    except JiraConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/jira/connect", response_model=JiraConnectionResponse)
+def connect_jira() -> JiraConnectionResponse:
+    try:
+        return jira_service.connect()
+    except JiraConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/jira/disconnect", response_model=JiraConnectionResponse)
+def disconnect_jira() -> JiraConnectionResponse:
+    return jira_service.disconnect()
+
+
+@router.delete("/jira/credentials", response_model=JiraStatusResponse)
+def remove_jira_credentials() -> JiraStatusResponse:
+    return jira_service.remove_credentials()
+
+
+@router.get("/jira/projects", response_model=JiraProjectsResponse)
+def list_jira_projects() -> JiraProjectsResponse:
+    try:
+        return jira_service.list_projects()
+    except JiraConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/email/status", response_model=EmailStatusResponse)

@@ -1373,6 +1373,62 @@ export type GitHubSyncResponse = {
   details: Record<string, unknown>;
 };
 
+export type JiraStatusResponse = {
+  enabled: boolean;
+  configured: boolean;
+  connected: boolean;
+  status: string;
+  site_url?: string | null;
+  email?: string | null;
+  has_api_token: boolean;
+  default_project_key?: string | null;
+  default_issue_type: string;
+  last_tested_at?: string | null;
+  last_error?: string | null;
+  display_name?: string | null;
+  account_id?: string | null;
+  project_count: number;
+};
+
+export type JiraConfigRequest = {
+  site_url: string;
+  email: string;
+  api_token: string;
+  default_project_key?: string | null;
+  default_issue_type?: string;
+};
+
+export type JiraProject = {
+  id: string;
+  key: string;
+  name: string;
+  project_type_key?: string | null;
+  simplified?: boolean | null;
+  style?: string | null;
+};
+
+export type JiraTestResponse = {
+  ok: boolean;
+  connected: boolean;
+  display_name?: string | null;
+  account_id?: string | null;
+  project_count: number;
+  projects: JiraProject[];
+  message: string;
+};
+
+export type JiraProjectsResponse = {
+  projects: JiraProject[];
+  total: number;
+};
+
+export type JiraConnectionResponse = {
+  status: string;
+  connected: boolean;
+  message: string;
+  connector: JiraStatusResponse;
+};
+
 export type GmailStatusResponse = {
   credentials_configured: boolean;
   connected: boolean;
