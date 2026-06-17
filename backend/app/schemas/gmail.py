@@ -49,6 +49,19 @@ class GmailTestResponse(BaseModel):
     message: str
 
 
+class GeneratedOutputAttachmentReference(BaseModel):
+    id: str
+    file_name: str
+
+    @field_validator("id", "file_name")
+    @classmethod
+    def generated_attachment_values_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be empty")
+        return cleaned
+
+
 class GmailDraftRequest(BaseModel):
     to: str
     cc: list[str] = Field(default_factory=list)
@@ -56,6 +69,7 @@ class GmailDraftRequest(BaseModel):
     subject: str
     body: str
     indexed_attachments: list[IndexedFileAttachmentReference] = Field(default_factory=list)
+    generated_attachments: list[GeneratedOutputAttachmentReference] = Field(default_factory=list)
 
     @field_validator("to", "subject", "body")
     @classmethod
@@ -81,6 +95,7 @@ class GmailSendRequest(BaseModel):
     body: str
     confirmation: bool = False
     indexed_attachments: list[IndexedFileAttachmentReference] = Field(default_factory=list)
+    generated_attachments: list[GeneratedOutputAttachmentReference] = Field(default_factory=list)
 
     @field_validator("to")
     @classmethod

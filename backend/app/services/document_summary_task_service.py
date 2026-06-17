@@ -17,6 +17,7 @@ from app.schemas.file_tasks import (
 )
 from app.schemas.file_index import IndexedFileAttachmentReference
 from app.services.file_index_service import file_index_service
+from app.services.generated_output_service import generated_output_service
 from app.services.model_router_service import model_router_service
 from app.services.relationship_service import relationship_service
 from app.services.task_memory_policy_service import should_create_memory_for_task
@@ -154,18 +155,14 @@ class DocumentSummaryTaskService:
         return response.model_copy(update={"warnings": [*warnings, *response.warnings], "files_skipped": skipped})
 
     def save_output(self, request: GeneratedSummarySaveRequest) -> GeneratedSummarySaveResponse:
-        output_dir = Path.home() / ".mindos" / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = generated_output_service.output_dir()
         extension = ".txt" if request.output_filename.lower().endswith(".txt") else ".md"
         safe_name = sanitize_filename_title(request.output_filename, extension, append_summary=False)
         path = self._unique_output_path(output_dir, safe_name)
         path.write_text(request.content, encoding="utf-8")
+        metadata = generated_output_service.metadata_for_path(path, source_task_id=request.task_id, source_step_id="document.create_output_file")
         return GeneratedSummarySaveResponse(
-            output_file=GeneratedSummaryOutputFile(
-                file_name=path.name,
-                path=str(path),
-                size_bytes=path.stat().st_size,
-            )
+            output_file=GeneratedSummaryOutputFile(**metadata)
         )
 
     def complete_summary(self, request: DocumentSummaryCompleteRequest) -> DocumentSummaryCompleteResponse:

@@ -83,7 +83,7 @@ class TaskIntentPlannerService:
             "log.analyze_selected_files, gmail.create_draft, gmail.send_email_after_confirmation, "
             "gmail.attach_selected_files, task.ask_user_to_choose_files, unsupported. "
             "Available high-level action types: file.search, file.organize, document.summaryFromSearch, "
-            "document.reportFromSearch, log.analyzeFromSearch, gmail.createDraft, gmail.sendEmail, multi_step, unsupported. "
+            "document.reportFromSearch, log.analyzeFromSearch, gmail.createDraft, gmail.sendEmail, gmail.sendGeneratedReport, multi_step, unsupported. "
             "Rules: 'summarize errors from the log files' means log.analyzeFromSearch. "
             "'create a summarization from the files of plan 2026' means document.summaryFromSearch. "
             "'find my resume and draft/send email' means file search first, then Gmail. "
@@ -139,6 +139,8 @@ class TaskIntentPlannerService:
         wants_send = bool(hints.get("wants_send")) and not wants_draft
         wants_file = bool(hints.get("has_file_search_words"))
 
+        if hints.get("wants_log_analysis") and wants_mail:
+            return self._log_then_gmail_plan(instruction, hints, recipients, wants_send, planner_method)
         if hints.get("wants_log_analysis"):
             return self._log_plan(instruction, hints, planner_method)
         if hints.get("wants_summary") and (wants_file or re.search(r"\b(files?|documents?|docs?)\b", instruction, flags=re.IGNORECASE)):
@@ -448,6 +450,18 @@ class TaskIntentPlannerService:
             TaskIntentPlanStep(id="step_4", type="document.create_output_file", output_format="markdown", filename_hint=self._log_filename_hint(query), requires_confirmation=True),
         ]
         return self._plan(intent="multi_step", primary_action="log.analyzeFromSearch", risk_level="medium", requires_user_selection=True, requires_confirmation=True, source_type="connected_logs", needs_file_search=True, needs_user_file_selection=True, needs_output_file=True, entities=self._base_entities(hints, file_queries=[query], topic_queries=[query], extensions=LOG_EXTENSIONS), steps=steps, explanation=f"Search connected folders for log files related to '{query}', then create a redacted analysis report.", planner_method=planner_method)
+
+    def _log_then_gmail_plan(self, instruction: str, hints: dict[str, Any], recipients: list[str], wants_send: bool, planner_method: str) -> TaskIntentPrepareResponse:
+        query = self._log_query(instruction, hints)
+        gmail_type = "gmail.send_email_after_confirmation" if wants_send else "gmail.create_draft"
+        steps = [
+            TaskIntentPlanStep(id="step_1", type="log.search_connected_logs", query=query, extensions=LOG_EXTENSIONS, latest_preference=bool(hints.get("latest_preference")), exact_file_hint=str(hints.get("exact_file_hint") or "") or None, purpose="Find relevant log-like files in connected folders", requires_user_selection=True),
+            TaskIntentPlanStep(id="step_2", type="file.select_candidates", requires_user_selection=True),
+            TaskIntentPlanStep(id="step_3", type="log.analyze_selected_files", query=query, files_from_step="step_2", requires_confirmation=True),
+            TaskIntentPlanStep(id="step_4", type="document.create_output_file", output_format="markdown", filename_hint=self._log_filename_hint(query), requires_confirmation=True),
+            TaskIntentPlanStep(id="step_5", type=gmail_type, to=recipients, subject_hint=f"Log analysis report: {query}", body_hint="Brief professional email with the generated log analysis report attached.", attachments_from_step="step_4", requires_confirmation=True),
+        ]
+        return self._plan(intent="multi_step", primary_action="gmail.sendGeneratedReport", risk_level="high" if wants_send else "medium", requires_user_selection=True, requires_confirmation=True, source_type="connected_logs", needs_file_search=True, needs_user_file_selection=True, needs_output_file=True, entities=self._base_entities(hints, file_queries=[query], topic_queries=[query], extensions=LOG_EXTENSIONS), steps=steps, explanation=f"Search connected folders for log files related to '{query}', create a report, then prepare Gmail.", planner_method=planner_method)
 
     def _organize_plan(self, instruction: str, hints: dict[str, Any], planner_method: str) -> TaskIntentPrepareResponse:
         return self._plan(intent="single_step", primary_action="file.organize", risk_level="medium", requires_user_selection=False, requires_confirmation=True, source_type="manual_files", needs_file_search=False, needs_user_file_selection=False, needs_output_file=False, entities=self._base_entities(hints), steps=[], explanation="Prepare a safe file organization preview after the user chooses a folder.", planner_method=planner_method)

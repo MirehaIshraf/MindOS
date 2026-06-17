@@ -72,6 +72,7 @@ from app.schemas.file_index import (
     TrackedFolderUpdateRequest,
 )
 from app.schemas.gmail import (
+    GeneratedOutputAttachmentReference,
     GmailConnectResponse,
     GmailCredentialsUploadRequest,
     GmailDraftRequest,
@@ -346,6 +347,7 @@ async def create_gmail_draft(request: Request) -> GmailDraftResponse:
             form = await request.form()
             attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
             attachments.extend(_read_indexed_gmail_attachments(_form_string(form, "indexed_attachments")))
+            attachments.extend(_read_generated_gmail_attachments(_form_string(form, "generated_attachments")))
             return gmail_service.create_draft_with_attachments(
                 to=_form_string_list(form, "to"),
                 cc=_form_string_list(form, "cc"),
@@ -369,6 +371,7 @@ async def send_gmail_message(request: Request) -> GmailSendResponse:
             form = await request.form()
             attachments = await _read_gmail_form_attachments(form.getlist("attachments"))
             attachments.extend(_read_indexed_gmail_attachments(_form_string(form, "indexed_attachments")))
+            attachments.extend(_read_generated_gmail_attachments(_form_string(form, "generated_attachments")))
             return gmail_service.send_message_with_attachments(
                 to=_form_string_list(form, "to"),
                 cc=_form_string_list(form, "cc"),
@@ -463,6 +466,19 @@ def _read_indexed_gmail_attachments(raw_value: str) -> list[dict[str, object]]:
         raise ValueError("Indexed attachment references must be a list.")
     references = [IndexedFileAttachmentReference.model_validate(item) for item in raw_items]
     return gmail_service.read_indexed_attachments(references)
+
+
+def _read_generated_gmail_attachments(raw_value: str) -> list[dict[str, object]]:
+    if not raw_value.strip():
+        return []
+    try:
+        raw_items = json.loads(raw_value)
+    except json.JSONDecodeError as error:
+        raise ValueError("Generated attachment references must be valid JSON.") from error
+    if not isinstance(raw_items, list):
+        raise ValueError("Generated attachment references must be a list.")
+    references = [GeneratedOutputAttachmentReference.model_validate(item) for item in raw_items]
+    return gmail_service.read_generated_attachments(references)
 
 
 def _is_upload_file(value: object) -> bool:

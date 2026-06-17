@@ -201,9 +201,14 @@ class IndexedDocumentSummaryPrepareRequest(BaseModel):
 
 
 class GeneratedSummaryOutputFile(BaseModel):
+    id: str
     file_name: str
     path: str
     size_bytes: int
+    mime_type: str
+    source_task_id: str | None = None
+    source_step_id: str | None = None
+    selected: bool = True
 
 
 class GeneratedSummarySaveRequest(BaseModel):

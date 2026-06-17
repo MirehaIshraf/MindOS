@@ -17,6 +17,7 @@ from app.schemas.gmail import (
 )
 from app.services.connector_registry_service import connector_registry_service
 from app.services.file_index_service import file_index_service
+from app.services.generated_output_service import GeneratedOutputError, generated_output_service
 from app.services.gmail_credentials_store import GmailCredentialsError, gmail_credentials_store
 from app.services.gmail_oauth_service import GmailOAuthError, gmail_oauth_service
 from app.services.gmail_token_store import gmail_token_store
@@ -160,15 +161,18 @@ class GmailService:
         return GmailRecentEmailsResponse(emails=emails, total=len(emails))
 
     def create_draft(self, request: GmailDraftRequest) -> GmailDraftResponse:
-        indexed_attachments = self.read_indexed_attachments(request.indexed_attachments)
-        if indexed_attachments:
+        attachments = [
+            *self.read_indexed_attachments(request.indexed_attachments),
+            *self.read_generated_attachments(request.generated_attachments),
+        ]
+        if attachments:
             return self.create_draft_with_attachments(
                 to=[request.to],
                 subject=request.subject,
                 body=request.body,
                 cc=request.cc,
                 bcc=request.bcc,
-                attachments=indexed_attachments,
+                attachments=attachments,
             )
         raw = self._build_raw_message([request.to], request.subject, request.body, cc=request.cc, bcc=request.bcc)
         return self._create_draft_from_raw(raw)
@@ -208,8 +212,11 @@ class GmailService:
             raise GmailConnectorError("Gmail is not connected.")
         if not status.capabilities.get("send_email"):
             raise GmailConnectorError("Gmail send is not connected yet. You can create a draft instead.")
-        indexed_attachments = self.read_indexed_attachments(request.indexed_attachments)
-        if indexed_attachments:
+        attachments = [
+            *self.read_indexed_attachments(request.indexed_attachments),
+            *self.read_generated_attachments(request.generated_attachments),
+        ]
+        if attachments:
             return self.send_message_with_attachments(
                 to=request.to,
                 subject=request.subject,
@@ -217,7 +224,7 @@ class GmailService:
                 confirmation=request.confirmation,
                 cc=request.cc,
                 bcc=request.bcc,
-                attachments=indexed_attachments,
+                attachments=attachments,
             )
         raw = self._build_raw_message(request.to, request.subject, request.body, cc=request.cc, bcc=request.bcc)
         return self._send_raw_message(raw)
@@ -299,6 +306,14 @@ class GmailService:
         try:
             return file_index_service.read_indexed_attachments(list(references))
         except ValueError as error:
+            raise GmailConnectorError(str(error)) from error
+
+    def read_generated_attachments(self, references: list[Any] | None) -> list[GmailAttachmentPayload]:
+        if not references:
+            return []
+        try:
+            return generated_output_service.read_gmail_attachments(list(references))
+        except GeneratedOutputError as error:
             raise GmailConnectorError(str(error)) from error
 
     def disconnect(self) -> GmailStatusResponse:
