@@ -152,6 +152,8 @@ File Inventory vs Content Index: inventory is operational connector metadata use
 
 Connected File Search Summary flow: user command -> `file.search` / `document.summaryFromSearch` / `document.reportFromSearch` classification -> `/tasks/files/search` over connected File System indexes only -> matched files preview with checkboxes -> selected readable `{source_id, relative_path}` references -> backend resolves files inside connected roots and extracts bounded text -> selected model creates summary/report preview -> user saves a new non-overwriting markdown output under `~/.mindos/outputs/`. If the user asks to email the result, Gmail receives only the generated output file after a separate editable preview and confirmation.
 
+Generated Report to Gmail flow: file search -> selected files -> summary/report generation -> saved output file in `~/.mindos/outputs/` -> generated attachment metadata `{id, file_name}` -> Gmail preview with the generated file visibly selected -> final confirmation -> Gmail draft/send. The backend resolves generated attachment references inside the safe outputs directory and never trusts arbitrary frontend paths.
+
 File task prepare flow: user instruction + root path -> `POST /tasks/file/prepare` -> `FileSnapshotService` scan -> deterministic planner -> safety validation -> preview plan -> user confirmation later.
 
 File task AI planning flow: browser scan -> deterministic instruction intent -> metadata-only `POST /tasks/file/plan-with-llm` when useful -> selected chat model returns JSON plan -> exact-intent fallback if the model fails -> backend validates allowed `create_folder` / `move_file` operations -> frontend validates against the browser scan again -> preview plan -> user confirmation -> browser execution.
@@ -186,7 +188,7 @@ The Gmail connector owns Gmail-specific OAuth, recent metadata reads, draft crea
 
 instruction -> attachment intent detection -> candidate search from recent task outputs, the current selected folder, or connected File System indexes -> manual Choose Files fallback -> checkbox selection -> validation -> preview -> confirmation -> Gmail draft/send.
 
-Indexed candidates are selected by source id and relative path, then resolved by the backend inside the connected folder root before Gmail receives bytes. Attachment validation blocks dangerous extensions, enforces the configured total-size cap, and prevents silent attachment. Attachment contents are only held long enough to submit the confirmed Gmail request; they are not indexed, sent to the LLM, or stored in Memory/Task History.
+Indexed candidates are selected by source id and relative path, then resolved by the backend inside the connected folder root before Gmail receives bytes. Generated summary/report attachments are selected by generated output id plus filename and resolved inside the MindOS outputs directory. Attachment validation blocks dangerous extensions, enforces the configured total-size cap, and prevents silent attachment. Attachment contents are only held long enough to submit the confirmed Gmail request; they are not indexed, sent to the LLM, or stored in Memory/Task History.
 
 ## GitHub And Local Git Future Flow
 
