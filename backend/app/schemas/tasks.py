@@ -145,6 +145,11 @@ class TaskHistoryResponse(BaseModel):
     total: int
 
 
+class TaskHistoryClearResponse(BaseModel):
+    ok: bool = True
+    deleted_count: int
+
+
 def normalize_evidence_items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []

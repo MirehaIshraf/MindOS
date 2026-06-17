@@ -5,6 +5,7 @@ import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import {
+  clearTaskHistory,
   completeDocumentSummary,
   createGmailDraftWithAttachments,
   executeTaskAction,
@@ -14,13 +15,19 @@ import {
   getModelSettings,
   getTaskActionCapabilities,
   getTrackedFolders,
+  prepareTaskIntent,
   prepareFileTaskPlan,
   prepareGmailDraft,
+  prepareIndexedDocumentSummary,
+  prepareLogAnalysisReport,
   resolveIndexedAttachments,
+  saveGeneratedSummaryOutput,
+  saveLogAnalysisReport,
   scanFileTask,
   searchIndexedFiles,
   sendGmailMessageWithAttachments,
 } from "../services/api";
+import { clearRecentTaskHistoryStorage, loadRecentTaskHistory, saveRecentTaskHistory } from "../services/taskHistoryStorage";
 import {
   executeBrowserFilePlan,
   undoBrowserFilePlan,
@@ -63,17 +70,26 @@ import type {
   FileTaskPlan,
   GmailDraftResponse,
   GmailStatusResponse,
+  IndexedFileSearchMatch,
+  LogAnalysisPrepareResponse,
   ModelConfig,
   NormalizedEmailMessage,
+  TaskIntentPrepareResponse,
   TaskActionExecuteResponse,
 } from "../types";
 
 type TaskUiState = "resting" | "typing" | "context" | "document_options" | "plan" | "action_preview";
 type TaskActionType =
+  | "multi_step"
   | "file.organize"
+  | "file.search"
   | "document.summary"
+  | "document.summaryFromSearch"
+  | "document.reportFromSearch"
+  | "log.analyzeFromSearch"
   | "gmail.createDraft"
   | "gmail.sendEmail"
+  | "gmail.sendGeneratedReport"
   | "gmail.replyDraft"
   | "gmail.searchEmails"
   | "gmail.summarizeEmails"
@@ -126,7 +142,7 @@ type ActionApprovalPhase = "idle" | "confirming" | "running" | "completed";
 
 type RecentTaskItem = {
   id: string;
-  type: "file_organize" | "document_summary" | "gmail_draft" | "gmail_sent";
+  type: "file_organize" | "document_summary" | "log_analysis_report" | "gmail_draft" | "gmail_sent";
   title: string;
   summary: string;
   status: "completed" | "partial" | "failed";
@@ -146,12 +162,20 @@ type DocumentSummarySelection = {
   warnings: string[];
 };
 
+type FileSearchSelection = {
+  query: string;
+  matches: IndexedFileSearchMatch[];
+  selectedKeys: string[];
+  emailRecipient: string;
+  style: DocumentSummaryStyle;
+  statusMessage: string;
+};
+
 type CloudSummaryWarning = {
   provider: string;
   displayName: string;
 } | null;
 
-const recentTasksStorageKey = "mindos.tasks.recent";
 const commandSuggestions = ["Organize Downloads", "Move PDFs", "Create project folders", "Rename screenshots"];
 
 const folderSuggestions = [
@@ -182,7 +206,12 @@ export function TasksPage() {
   const [filePlan, setFilePlan] = useState<FileTaskPlan | null>(null);
   const [documentSelection, setDocumentSelection] = useState<DocumentSummarySelection | null>(null);
   const [documentSummary, setDocumentSummary] = useState<DocumentSummaryPrepareResponse | null>(null);
+  const [documentSummarySource, setDocumentSummarySource] = useState<"browser_folder" | "indexed_search">("browser_folder");
   const [documentReadResult, setDocumentReadResult] = useState<BrowserDocumentReadResult | null>(null);
+  const [fileSearchSelection, setFileSearchSelection] = useState<FileSearchSelection | null>(null);
+  const [logAnalysisReport, setLogAnalysisReport] = useState<LogAnalysisPrepareResponse | null>(null);
+  const [logReportOutputFilename, setLogReportOutputFilename] = useState("log-error-analysis-report.md");
+  const [taskIntentPlan, setTaskIntentPlan] = useState<TaskIntentPrepareResponse | null>(null);
   const [preparedAction, setPreparedAction] = useState<PreparedAction | null>(null);
   const [actionCapabilities, setActionCapabilities] = useState<ActionCapabilityRegistry | null>(null);
   const [actionApprovalPhase, setActionApprovalPhase] = useState<ActionApprovalPhase>("idle");
@@ -217,6 +246,9 @@ export function TasksPage() {
   const [summarySaveLoading, setSummarySaveLoading] = useState(false);
   const [summarySaveMessage, setSummarySaveMessage] = useState<string | null>(null);
   const [recentTasks, setRecentTasks] = useState<RecentTaskItem[]>(() => loadRecentTasks());
+  const [clearTaskHistoryLoading, setClearTaskHistoryLoading] = useState(false);
+  const [clearTaskHistoryMessage, setClearTaskHistoryMessage] = useState<string | null>(null);
+  const [showClearTaskHistoryConfirm, setShowClearTaskHistoryConfirm] = useState(false);
   const pathInputRef = useRef<HTMLInputElement>(null);
 
   const visiblePath = browserFolder?.name || rootPath || inferredPathFromCommand(command) || "D:\\Downloads";
@@ -232,10 +264,11 @@ export function TasksPage() {
   const categories = useMemo(() => buildCategorySummary(scanResult?.files ?? []), [scanResult]);
 
   useEffect(() => {
-    localStorage.setItem(recentTasksStorageKey, JSON.stringify(recentTasks.slice(0, 20)));
+    saveRecentTaskHistory(recentTasks);
   }, [recentTasks]);
 
   function addRecentTask(item: Omit<RecentTaskItem, "id" | "createdAt">) {
+    setClearTaskHistoryMessage(null);
     setRecentTasks((current) => [
       {
         ...item,
@@ -246,11 +279,32 @@ export function TasksPage() {
     ].slice(0, 20));
   }
 
+  async function handleClearTaskHistory() {
+    setClearTaskHistoryLoading(true);
+    setClearTaskHistoryMessage(null);
+    try {
+      await clearTaskHistory();
+      clearRecentTaskHistoryStorage();
+      setRecentTasks([]);
+      setShowClearTaskHistoryConfirm(false);
+      setClearTaskHistoryMessage("No recent tasks yet.");
+    } catch (error) {
+      setClearTaskHistoryMessage(getErrorMessage(error));
+    } finally {
+      setClearTaskHistoryLoading(false);
+    }
+  }
+
   function resetPlan() {
     setFilePlan(null);
     setDocumentSelection(null);
     setDocumentSummary(null);
+    setDocumentSummarySource("browser_folder");
     setDocumentReadResult(null);
+    setFileSearchSelection(null);
+    setLogAnalysisReport(null);
+    setLogReportOutputFilename("log-error-analysis-report.md");
+    setTaskIntentPlan(null);
     setPreparedAction(null);
     setActionApprovalPhase("idle");
     setActionExecutionResult(null);
@@ -553,6 +607,111 @@ export function TasksPage() {
     setDocumentSummary(null);
     setGmailDraftResult(null);
     setGmailDraftMessage(null);
+    setFileSearchSelection(null);
+    setLogAnalysisReport(null);
+    setTaskIntentPlan(null);
+    if (shouldTryHybridPlanner(command.trim())) {
+      try {
+        const selectedModel = await getSelectedChatModel();
+        const plan = await prepareTaskIntent({
+          instruction: command.trim(),
+          model_id: selectedModel?.id ?? null,
+          use_llm_planner: true,
+        });
+        if (isLogAnalysisPlan(plan)) {
+          await prepareLogSearchFromTaskPlan(plan);
+          return;
+        }
+        if (isDocumentSearchSummaryPlan(plan)) {
+          await prepareDocumentSearchFromTaskPlan(plan);
+          return;
+        }
+        if (isFileSearchThenGmailPlan(plan)) {
+          await prepareFileSearchFromTaskPlan(plan);
+          return;
+        }
+        if (plan.primary_action === "file.organize") {
+          action = { actionType: "file.organize", label: "Organize folder", supported: true };
+        } else if (plan.primary_action === "unsupported") {
+          setPreparedAction(actionFromUnsupportedPlan(plan));
+          setUiState("action_preview");
+          return;
+        }
+      } catch (error) {
+        // Keep the existing deterministic UI paths if the planner endpoint/model is unavailable.
+        setPrepareStatus(null);
+      }
+    }
+    if (action.actionType === "multi_step") {
+      await prepareFileSearchFromTaskPlan(frontendMultiStepFallbackPlan(command.trim()));
+      return;
+    }
+    if (action.actionType === "log.analyzeFromSearch") {
+      await prepareLogSearchFromTaskPlan(frontendLogAnalysisFallbackPlan(command.trim()));
+      return;
+    }
+    if (isIndexedFileSearchAction(action.actionType)) {
+      setPrepareLoading(true);
+      try {
+        const query = extractFileSearchQuery(command.trim());
+        const tracked = await getTrackedFolders();
+        const indexedFolders = tracked.folders.filter((folder) => folder.enabled && folder.indexing_enabled && (folder.inventory_count || folder.indexed_count) > 0);
+        if (!indexedFolders.length) {
+          setFileSearchSelection({
+            query,
+            matches: [],
+            selectedKeys: [],
+            emailRecipient: extractEmailAddress(command) || "",
+            style: action.actionType === "document.reportFromSearch" ? "report" : "detailed",
+            statusMessage: "No connected File System folders are indexed yet.",
+          });
+        } else {
+          const response = await searchIndexedFiles({
+            query,
+            search_filename: true,
+            search_content: true,
+            connected_sources_only: true,
+            attachable_only: false,
+            readable_only: false,
+            limit: 20,
+          });
+          const readableMatches = response.matches.filter((match) => Boolean(match.readable));
+          const selected =
+            readableMatches.length === 1 && readableMatches[0].score >= 0.6
+              ? [`${readableMatches[0].source_id}:${readableMatches[0].relative_path}`]
+              : [];
+          setFileSearchSelection({
+            query,
+            matches: response.matches,
+            selectedKeys: selected,
+            emailRecipient: extractEmailAddress(command) || "",
+            style: action.actionType === "document.reportFromSearch" ? "report" : "detailed",
+            statusMessage: `Searched connected folders for "${query}".`,
+          });
+        }
+        setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          ...action,
+          title: action.label,
+          summary: `Searched connected folders for "${query}".`,
+          riskLevel: action.actionType === "gmail.sendGeneratedReport" ? "high" : "low",
+          requiresConfirmation: action.actionType !== "file.search",
+          canExecute: false,
+          blockedReasons: [],
+          missingRequirements: [],
+          sources: [{ type: "file_search", status: "available" }],
+          preview: {
+            note: `Searched connected folders for "${query}".`,
+          },
+        });
+        setUiState("action_preview");
+      } catch (error) {
+        setPrepareError(getErrorMessage(error));
+      } finally {
+        setPrepareLoading(false);
+      }
+      return;
+    }
     if (isEmailWriteAction(action.actionType)) {
       setPrepareLoading(true);
       let status: GmailStatusResponse | null = null;
@@ -843,6 +1002,334 @@ export function TasksPage() {
     setGmailDraftMessage(null);
   }
 
+  async function prepareFileSearchFromTaskPlan(plan: TaskIntentPrepareResponse) {
+    setPrepareLoading(true);
+    setTaskIntentPlan(plan);
+    try {
+      const query = fileSearchQueryFromPlan(plan);
+      const emailStep = gmailStepFromPlan(plan);
+      const tracked = await getTrackedFolders();
+      const indexedFolders = tracked.folders.filter((folder) => folder.enabled && folder.indexing_enabled && (folder.inventory_count || folder.indexed_count) > 0);
+      if (!indexedFolders.length) {
+        setFileSearchSelection({
+          query,
+          matches: [],
+          selectedKeys: [],
+          emailRecipient: emailStep?.to[0] || plan.entities.recipients[0] || extractEmailAddress(command) || "",
+          style: "detailed",
+          statusMessage: "No connected File System folders are indexed yet.",
+        });
+      } else {
+        const response = await searchIndexedFiles({
+          query,
+          search_filename: true,
+          search_content: true,
+          connected_sources_only: true,
+          attachable_only: true,
+          readable_only: false,
+          limit: 20,
+        });
+        const attachableMatches = response.matches.filter((match) => Boolean(match.attachable));
+        const selected =
+          attachableMatches.length === 1 || (attachableMatches.length > 0 && attachableMatches[0].score >= 0.75)
+            ? [`${attachableMatches[0].source_id}:${attachableMatches[0].relative_path}`]
+            : [];
+        setFileSearchSelection({
+          query,
+          matches: response.matches,
+          selectedKeys: selected,
+          emailRecipient: emailStep?.to[0] || plan.entities.recipients[0] || extractEmailAddress(command) || "",
+          style: "detailed",
+          statusMessage: `Searched connected folders for "${query}".`,
+        });
+      }
+      const wantsSend = emailStep?.type === "gmail.send_email_after_confirmation";
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: "multi_step",
+        label: wantsSend ? "Find file + Gmail send" : "Find file + Gmail draft",
+        supported: true,
+        title: wantsSend ? "Find file and prepare Gmail send" : "Find file and create Gmail draft",
+        summary: plan.explanation || `MindOS will search connected folders for "${query}", ask you to choose a file, then prepare Gmail.`,
+        riskLevel: wantsSend ? "high" : "medium",
+        requiresConfirmation: true,
+        executionActionType: wantsSend ? "gmail.sendEmail" : "gmail.createDraft",
+        canExecute: false,
+        blockedReasons: [],
+        missingRequirements: [],
+        sources: [
+          { type: "file_system", status: "available" },
+          { type: "gmail", status: "available" },
+        ],
+        preview: {
+          note: plan.explanation || "MindOS will search connected folders first, then prepare Gmail with your selected attachment.",
+          sourceSummary: `Searched connected folders for ${query}.`,
+          attachmentIntent: true,
+          attachmentQuery: query,
+          attachmentSearchStatus: plan.warnings.join(" "),
+        },
+      });
+      setUiState("action_preview");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+    }
+  }
+
+  async function prepareDocumentSearchFromTaskPlan(plan: TaskIntentPrepareResponse) {
+    setPrepareLoading(true);
+    setTaskIntentPlan(plan);
+    setPrepareStatus("Searching connected files...");
+    try {
+      const query = fileSearchQueryFromPlan(plan);
+      const isReport = plan.primary_action === "document.reportFromSearch" || plan.steps.some((step) => step.type === "document.create_report_from_files");
+      const tracked = await getTrackedFolders();
+      const indexedFolders = tracked.folders.filter((folder) => folder.enabled && folder.indexing_enabled && (folder.inventory_count || folder.indexed_count) > 0);
+      let matches: IndexedFileSearchMatch[] = [];
+      let selectedKeys: string[] = [];
+      let statusMessage = "No connected File System folders are indexed yet.";
+      if (indexedFolders.length) {
+        const response = await searchIndexedFiles({
+          query,
+          search_filename: true,
+          search_content: true,
+          connected_sources_only: true,
+          attachable_only: false,
+          readable_only: true,
+          extensions: plan.entities.extensions,
+          limit: 20,
+        });
+        matches = response.matches.filter(isLogLikeSearchMatch);
+        const readableMatches = matches.filter((match) => Boolean(match.readable));
+        selectedKeys =
+          readableMatches.length === 1 && readableMatches[0].score >= 0.6
+            ? [`${readableMatches[0].source_id}:${readableMatches[0].relative_path}`]
+            : [];
+        statusMessage = `Searched connected folders for files related to "${query}".`;
+      }
+      setFileSearchSelection({
+        query,
+        matches,
+        selectedKeys,
+        emailRecipient: "",
+        style: isReport ? "report" : "detailed",
+        statusMessage,
+      });
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: isReport ? "document.reportFromSearch" : "document.summaryFromSearch",
+        label: isReport ? "Report from connected files" : "Summary from connected files",
+        supported: true,
+        title: isReport ? "Create report from connected files" : "Summarize connected files",
+        summary: plan.user_facing_summary || plan.explanation || `Search connected folders for "${query}", then summarize selected files.`,
+        riskLevel: "low",
+        requiresConfirmation: true,
+        canExecute: false,
+        blockedReasons: [],
+        missingRequirements: [],
+        sources: [{ type: "file_search", status: "available" }],
+        preview: {
+          note: plan.user_facing_summary || plan.explanation || "MindOS will summarize only the files you select.",
+          sourceSummary: `Searched connected folders for files related to "${query}".`,
+          attachmentQuery: query,
+          attachmentSearchStatus: [...plan.warnings, ...plan.validation_repairs].join(" "),
+        },
+      });
+      setUiState("action_preview");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function prepareLogSearchFromTaskPlan(plan: TaskIntentPrepareResponse) {
+    setPrepareLoading(true);
+    setTaskIntentPlan(plan);
+    setPrepareStatus("Searching connected log files...");
+    try {
+      const query = logSearchQueryFromPlan(plan);
+      const extensions = logSearchExtensionsFromPlan(plan);
+      const latestPreference = logLatestPreferenceFromPlan(plan);
+      const exactHint = logExactFileHintFromPlan(plan);
+      const tracked = await getTrackedFolders();
+      const indexedFolders = tracked.folders.filter((folder) => folder.enabled && folder.indexing_enabled && (folder.inventory_count || folder.indexed_count) > 0);
+      let matches: IndexedFileSearchMatch[] = [];
+      let selectedKeys: string[] = [];
+      let statusMessage = "No connected File System folders are indexed yet.";
+      if (indexedFolders.length) {
+        const response = await searchIndexedFiles({
+          query,
+          search_filename: true,
+          search_content: true,
+          connected_sources_only: true,
+          attachable_only: false,
+          readable_only: true,
+          latest_preference: latestPreference,
+          extensions,
+          limit: 20,
+        });
+        matches = response.matches;
+        const readableMatches = matches.filter((match) => Boolean(match.readable));
+        if (exactHint) {
+          const normalizedHint = exactHint.toLowerCase();
+          selectedKeys = readableMatches
+            .filter((match) => match.file_name.toLowerCase().includes(normalizedHint) || match.relative_path.toLowerCase().includes(normalizedHint))
+            .map((match) => `${match.source_id}:${match.relative_path}`)
+            .slice(0, 5);
+        } else if (latestPreference) {
+          selectedKeys = readableMatches.slice(0, 3).map((match) => `${match.source_id}:${match.relative_path}`);
+        } else if (readableMatches.length === 1 || (readableMatches.length > 0 && readableMatches[0].score >= 0.75)) {
+          selectedKeys = [`${readableMatches[0].source_id}:${readableMatches[0].relative_path}`];
+        }
+        statusMessage = matches.length
+          ? `Searched connected folders for log files related to "${query}".`
+          : "No log-like files found in connected folders. Choose files manually or connect a logs folder.";
+      }
+      setFileSearchSelection({
+        query,
+        matches,
+        selectedKeys,
+        emailRecipient: "",
+        style: "report",
+        statusMessage,
+      });
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: "log.analyzeFromSearch",
+        label: "Analyze logs",
+        supported: true,
+        title: "Analyze connected logs",
+        summary: plan.explanation || `Find relevant log files and create an error analysis report for "${query}".`,
+        riskLevel: "medium",
+        requiresConfirmation: true,
+        canExecute: false,
+        blockedReasons: [],
+        missingRequirements: [],
+        sources: [{ type: "file_search", status: "available" }],
+        preview: {
+          note: "MindOS will analyze only the selected connected log files and save a separate report.",
+          sourceSummary: `Searched connected folders for "${query}".`,
+          attachmentQuery: query,
+          attachmentSearchStatus: plan.warnings.join(" "),
+        },
+      });
+      setUiState("action_preview");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handleContinueFromFileSearch() {
+    if (!fileSearchSelection || !taskIntentPlan) {
+      await handlePrepareIndexedFileSummary();
+      return;
+    }
+    const emailStep = gmailStepFromPlan(taskIntentPlan);
+    if (!emailStep) {
+      await handlePrepareIndexedFileSummary();
+      return;
+    }
+    const selectedMatches = fileSearchSelection.matches.filter((match) =>
+      fileSearchSelection.selectedKeys.includes(`${match.source_id}:${match.relative_path}`),
+    );
+    if (!selectedMatches.length) {
+      setPrepareError("Select at least one file before preparing Gmail.");
+      return;
+    }
+    setPrepareError(null);
+    setPrepareLoading(true);
+    try {
+      const resolved = await resolveIndexedAttachments(
+        selectedMatches.map((match) => ({ source_id: match.source_id, relative_path: match.relative_path })),
+      );
+      const resolvedByKey = new Map(resolved.attachments.map((item) => [`${item.source_id}:${item.relative_path}`, item]));
+      const candidates = selectedMatches.map((match) => {
+        const resolvedMatch = resolvedByKey.get(`${match.source_id}:${match.relative_path}`);
+        return {
+          id: `file_index:${match.source_id}:${match.relative_path}`,
+          name: match.file_name,
+          source_id: match.source_id,
+          relative_path: match.relative_path,
+          size_bytes: resolvedMatch?.size_bytes ?? match.size_bytes,
+          extension: (resolvedMatch?.extension || match.extension || "").toLowerCase(),
+          source: "file_index",
+          modified_at: match.modified_at ?? undefined,
+          score: 100,
+          reason: `${readableMatchReason(match.match_reason)} Connected folder file.`,
+          selected: Boolean(resolvedMatch?.attachable ?? match.attachable),
+          unavailableReason: resolvedMatch && !resolvedMatch.attachable ? resolvedMatch.reason || "File cannot be attached." : undefined,
+        } satisfies AttachmentCandidate;
+      });
+      setGmailAttachmentCandidates(candidates);
+      const capabilities = await getTaskActionCapabilities();
+      const status = await getGmailStatus();
+      setActionCapabilities(capabilities);
+      setGmailStatus(status);
+      const wantsSend = emailStep.type === "gmail.send_email_after_confirmation";
+      const executionActionType: TaskActionType = wantsSend ? "gmail.sendEmail" : "gmail.createDraft";
+      const sendAvailable = Boolean(capabilities.capabilities["gmail.sendEmail"]?.available || status.capabilities?.send_email);
+      const draftAvailable = Boolean(capabilities.capabilities["gmail.createDraft"]?.available || (status.connected && status.capabilities?.create_draft));
+      const canExecute = wantsSend ? sendAvailable : draftAvailable;
+      const selectedNames = candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.name);
+      const selectedModel = await getSelectedChatModel();
+      const planned = await prepareGmailDraft({
+        instruction: command.trim(),
+        connected_email: status.email_address ?? null,
+        recent_tasks: [],
+        attachment_filenames: selectedNames,
+        model_id: selectedModel?.id ?? null,
+      });
+      const fallbackDraft = buildAttachmentEmailDraft(taskIntentPlan, selectedNames);
+      const useFallbackBody = planned.warnings.some((warning) => warning.toLowerCase().includes("ai drafting was unavailable"));
+      const draft = {
+        to: fileSearchSelection.emailRecipient || emailStep.to[0] || planned.to || "",
+        cc: "",
+        bcc: "",
+        subject: planned.subject && !useFallbackBody ? planned.subject : fallbackDraft.subject,
+        body: planned.body && !useFallbackBody ? planned.body : fallbackDraft.body,
+        message_id: "",
+      };
+      setGmailDraft(ensureAttachmentMention(draft, selectedNames));
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: executionActionType,
+        label: wantsSend ? "Send Gmail" : "Create Gmail draft",
+        supported: canExecute,
+        title: wantsSend ? "Gmail send preview" : "Gmail draft preview",
+        summary: wantsSend ? "Send a Gmail email with selected attachment after confirmation." : "Create a Gmail draft with the selected attachment.",
+        riskLevel: wantsSend ? "high" : "medium",
+        requiresConfirmation: true,
+        executionActionType,
+        canExecute,
+        blockedReasons: canExecute ? [] : [status.connected ? "Required Gmail capability is not available." : "Gmail is not connected. Open Connectors -> Gmail and connect it."],
+        missingRequirements: canExecute ? [] : [wantsSend ? "gmail.sendEmail" : "gmail.createDraft"],
+        sources: [
+          { type: "file_search", status: "available" },
+          { type: "gmail", status: status.connected ? "connected" : "disconnected" },
+        ],
+        preview: {
+          ...draft,
+          note: wantsSend ? "Review this email and selected attachment before sending." : "Review this draft and selected attachment before creating it in Gmail.",
+          warning: planned.warnings.join(" "),
+          sourceSummary: `Searched connected folders for ${fileSearchSelection.query}.`,
+          attachmentIntent: true,
+          attachmentQuery: fileSearchSelection.query,
+        },
+      });
+      setUiState("action_preview");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+    }
+  }
+
   function updateGmailAttachmentCandidates(nextCandidates: AttachmentCandidate[]) {
     setGmailAttachmentCandidates(nextCandidates);
     setGmailDraft((current) => ensureAttachmentMention(current, selectedAttachmentCandidates(nextCandidates).map((candidate) => candidate.name)));
@@ -1057,6 +1544,123 @@ export function TasksPage() {
     }
   }
 
+  async function handlePrepareIndexedFileSummary() {
+    if (!fileSearchSelection) return;
+    const selectedMatches = fileSearchSelection.matches.filter((match) =>
+      fileSearchSelection.selectedKeys.includes(`${match.source_id}:${match.relative_path}`),
+    );
+    if (!selectedMatches.length) {
+      setPrepareError("Select at least one readable file.");
+      return;
+    }
+    setPrepareError(null);
+    setPrepareLoading(true);
+    setPrepareStatus("Preparing summary from selected files...");
+    try {
+      const selectedModel = await getSelectedChatModel();
+      const outputFilename = summaryFilenameWasEdited
+        ? normalizedSummaryFilename(summaryOutputFilename, "markdown")
+        : normalizedSummaryFilename(
+            `${fileSearchSelection.query}-${fileSearchSelection.style === "report" ? "report" : "summary"}.md`,
+            "markdown",
+          );
+      const summary = await prepareIndexedDocumentSummary({
+        query: fileSearchSelection.query,
+        style: fileSearchSelection.style,
+        output_format: "markdown",
+        output_filename: outputFilename,
+        files: selectedMatches.map((match) => ({
+          source_id: match.source_id,
+          relative_path: match.relative_path,
+        })),
+        model_id: selectedModel?.id ?? null,
+      });
+      setDocumentSummarySource("indexed_search");
+      setDocumentSummary(summary);
+      setDocumentReadResult(null);
+      if (!summaryFilenameWasEdited) {
+        setSummaryOutputFilename(normalizedSummaryFilename(summary.output_filename_suggestion, "markdown"));
+      }
+      setUiState("plan");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handlePrepareLogAnalysisReport() {
+    if (!fileSearchSelection) return;
+    const selectedMatches = fileSearchSelection.matches.filter((match) =>
+      fileSearchSelection.selectedKeys.includes(`${match.source_id}:${match.relative_path}`),
+    );
+    if (!selectedMatches.length) {
+      setPrepareError("Select at least one log file before analyzing.");
+      return;
+    }
+    setPrepareError(null);
+    setPrepareLoading(true);
+    setPrepareStatus("Analyzing selected logs...");
+    try {
+      setDocumentSummary(null);
+      setDocumentReadResult(null);
+      const selectedModel = await getSelectedChatModel();
+      const report = await prepareLogAnalysisReport({
+        query: fileSearchSelection.query,
+        output_format: "markdown",
+        output_filename: logReportOutputFilename,
+        files: selectedMatches.map((match) => ({
+          source_id: match.source_id,
+          relative_path: match.relative_path,
+        })),
+        model_id: selectedModel?.id ?? null,
+      });
+      setLogAnalysisReport(report);
+      setLogReportOutputFilename(normalizedSummaryFilename(report.output_filename_suggestion || logReportOutputFilename, "markdown"));
+      setUiState("plan");
+    } catch (error) {
+      setPrepareError(getErrorMessage(error));
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handleSaveLogAnalysisReport() {
+    if (!logAnalysisReport || logAnalysisReport.status !== "preview") return;
+    setSummarySaveLoading(true);
+    setSummarySaveMessage(null);
+    try {
+      const finalOutputFilename = normalizedSummaryFilename(logReportOutputFilename || logAnalysisReport.output_filename_suggestion, "markdown");
+      const saved = await saveLogAnalysisReport({
+        task_id: logAnalysisReport.task_id,
+        output_filename: finalOutputFilename,
+        report_markdown: logAnalysisReport.report_markdown,
+      });
+      addRecentTask({
+        type: "log_analysis_report",
+        title: logAnalysisReport.report_title || "Created log analysis report",
+        summary: `Analyzed ${logAnalysisReport.files_used.length} log file${logAnalysisReport.files_used.length === 1 ? "" : "s"} - saved ${saved.output_file.file_name}`,
+        status: "completed",
+        contextName: "MindOS outputs",
+        outputFileName: saved.output_file.file_name,
+        details: {
+          files_used_count: logAnalysisReport.files_used.length,
+          files_skipped_count: logAnalysisReport.files_skipped.length,
+          warnings_count: logAnalysisReport.warnings.length,
+          provider: logAnalysisReport.provider || "",
+          model: logAnalysisReport.model_display_name || logAnalysisReport.model || "",
+        },
+      });
+      setSummarySaveMessage(`Saved report: ${saved.output_file.file_name}. Original log files were not changed.`);
+    } catch (error) {
+      setSummarySaveMessage(getErrorMessage(error));
+    } finally {
+      setSummarySaveLoading(false);
+    }
+  }
+
   async function handleSaveSummary() {
     if (!browserFolder || !documentSummary || documentSummary.status !== "preview") return;
     setSummarySaveLoading(true);
@@ -1111,8 +1715,129 @@ export function TasksPage() {
     }
   }
 
+  async function handleSaveSummaryUnified() {
+    if (!documentSummary || documentSummary.status !== "preview") return;
+    if (documentSummarySource === "browser_folder") {
+      await handleSaveSummary();
+      return;
+    }
+    setSummarySaveLoading(true);
+    setSummarySaveMessage(null);
+    try {
+      const finalOutputFilename = normalizedSummaryFilename(summaryOutputFilename || documentSummary.output_filename_suggestion, documentSummary.output_format ?? summaryOutputFormat);
+      const response = await saveGeneratedSummaryOutput({
+        task_id: documentSummary.task_id,
+        output_filename: finalOutputFilename,
+        content: documentSummary.summary_markdown,
+      });
+      const savedFileName = response.output_file.file_name;
+      let message = `Saved summary: ${savedFileName}. Original files were not changed.`;
+      try {
+        const completion = await completeDocumentSummary({
+          task_id: documentSummary.task_id,
+          folder_name: "MindOS outputs",
+          output_file_name: savedFileName,
+          files_used_count: documentSummary.files_used.length,
+          files_skipped_count: documentSummary.files_skipped.length,
+          summary_style: documentSummary.summary_style ?? summaryStyle,
+          output_format: documentSummary.output_format ?? summaryOutputFormat,
+          file_types_used: fileTypesFromPaths(documentSummary.files_used),
+          summary_title: documentSummary.summary_title,
+          topic: documentSummary.topic,
+          naming_confidence: documentSummary.naming_confidence ?? "low",
+        });
+        if (completion.warning) message = `${message} ${completion.warning}`;
+      } catch (memoryError) {
+        message = `${message} MindOS could not record the memory event: ${getErrorMessage(memoryError)}`;
+      }
+      addRecentTask({
+        type: "document_summary",
+        title: documentSummary.summary_title || "Created document summary",
+        summary: `Used ${documentSummary.files_used.length} files - skipped ${documentSummary.files_skipped.length} - saved ${savedFileName}`,
+        status: "completed",
+        folderName: "MindOS outputs",
+        outputFileName: savedFileName,
+        details: {
+          files_used_count: documentSummary.files_used.length,
+          files_skipped_count: documentSummary.files_skipped.length,
+          output_format: documentSummary.output_format ?? summaryOutputFormat,
+          summary_style: documentSummary.summary_style ?? summaryStyle,
+          file_types_used: fileTypesFromPaths(documentSummary.files_used).join(", "),
+          topic: documentSummary.topic || "",
+          naming_confidence: documentSummary.naming_confidence ?? "low",
+        },
+      });
+      setSummarySaveMessage(message);
+      if (fileSearchSelection?.emailRecipient) {
+        await prepareGeneratedSummaryEmail(savedFileName, documentSummary.summary_markdown, fileSearchSelection.emailRecipient);
+      }
+    } catch (error) {
+      setSummarySaveMessage(getErrorMessage(error));
+    } finally {
+      setSummarySaveLoading(false);
+    }
+  }
+
+  async function prepareGeneratedSummaryEmail(fileName: string, content: string, recipient: string) {
+    const file = new File([content], fileName, { type: fileName.endsWith(".txt") ? "text/plain" : "text/markdown" });
+    const capabilities = await getTaskActionCapabilities();
+    const status = await getGmailStatus();
+    setActionCapabilities(capabilities);
+    setGmailStatus(status);
+    const sendAvailable = Boolean(capabilities.capabilities["gmail.sendEmail"]?.available || status.capabilities?.send_email);
+    const draftAvailable = Boolean(capabilities.capabilities["gmail.createDraft"]?.available || (status.connected && status.capabilities?.create_draft));
+    const executionActionType: TaskActionType = sendAvailable ? "gmail.sendEmail" : "gmail.createDraft";
+    const subject = documentSummary?.summary_title || `Summary: ${fileSearchSelection?.query || "selected files"}`;
+    const draft = {
+      to: recipient,
+      cc: "",
+      bcc: "",
+      subject,
+      body: `Hi,\n\nI attached the generated summary file: ${fileName}.\n\nBest,\nMindOS`,
+      message_id: "",
+    };
+    setGmailDraft(draft);
+    setGmailAttachmentCandidates([
+      {
+        id: `generated:${fileName}:${Date.now()}`,
+        name: fileName,
+        size_bytes: file.size,
+        extension: fileName.endsWith(".txt") ? ".txt" : ".md",
+        source: "manual_picker",
+        score: 100,
+        reason: "Generated summary output.",
+        selected: true,
+        file,
+      },
+    ]);
+    setPreparedAction({
+      id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      actionType: "gmail.sendEmail",
+      label: "Send generated report",
+      supported: true,
+      title: "Gmail send preview",
+      summary: `Send generated summary to ${recipient}.`,
+      riskLevel: "high",
+      requiresConfirmation: true,
+      executionActionType,
+      canExecute: sendAvailable || draftAvailable,
+      blockedReasons: sendAvailable || draftAvailable ? [] : ["Gmail is not connected. You can still use the saved summary file."],
+      missingRequirements: sendAvailable || draftAvailable ? [] : ["gmail.sendEmail"],
+      sources: [
+        { type: "file_search", status: "available" },
+        { type: "gmail", status: status.connected ? "connected" : "disconnected" },
+      ],
+      preview: {
+        ...draft,
+        note: "Review this Gmail preview. The generated summary file is attached.",
+        sourceSummary: `Generated from ${documentSummary?.files_used.length || 0} selected file(s).`,
+      },
+    });
+    setUiState("action_preview");
+  }
+
   function handleEdit() {
-    setUiState("context");
+    setUiState(documentSummarySource === "indexed_search" && fileSearchSelection ? "action_preview" : "context");
   }
 
   function handleRunPlanRequest() {
@@ -1320,7 +2045,18 @@ export function TasksPage() {
                 setSummaryOutputFilename(filename);
               }}
               onEdit={handleEdit}
-              onSave={() => void handleSaveSummary()}
+              onSave={() => void handleSaveSummaryUnified()}
+            />
+          ) : null}
+          {uiState === "plan" && logAnalysisReport ? (
+            <LogAnalysisPreviewCard
+              report={logAnalysisReport}
+              outputFilename={logReportOutputFilename}
+              saving={summarySaveLoading}
+              saveMessage={summarySaveMessage}
+              onOutputFilenameChange={setLogReportOutputFilename}
+              onEdit={handleEdit}
+              onSave={() => void handleSaveLogAnalysisReport()}
             />
           ) : null}
           {uiState === "action_preview" && preparedAction ? (
@@ -1334,10 +2070,23 @@ export function TasksPage() {
               gmailDraftMessage={gmailDraftMessage}
               gmailAttachmentCandidates={gmailAttachmentCandidates}
               emailSearchMessages={emailSearchMessages}
+              fileSearchSelection={fileSearchSelection}
               recentTasks={recentTasks}
               onGmailDraftChange={setGmailDraft}
               onGmailAttachmentsChange={updateGmailAttachmentCandidates}
               onManualGmailAttachmentFiles={handleManualGmailAttachmentFiles}
+              onFileSearchSelectionChange={setFileSearchSelection}
+              onPrepareIndexedFileSummary={() => {
+                if (preparedAction.actionType === "log.analyzeFromSearch") {
+                  void handlePrepareLogAnalysisReport();
+                } else {
+                  void handleContinueFromFileSearch();
+                }
+              }}
+              onChooseFilesManually={() => {
+                setUiState("context");
+                pathInputRef.current?.focus();
+              }}
               onCreateGmailDraft={() => void handleCreateGmailDraft()}
               onEdit={() => setUiState("typing")}
               onCancel={() => {
@@ -1369,7 +2118,19 @@ export function TasksPage() {
             />
           ) : null}
         </Card>
-        <RecentTasksCard tasks={recentTasks} />
+        <RecentTasksCard
+          tasks={recentTasks}
+          message={clearTaskHistoryMessage}
+          clearing={clearTaskHistoryLoading}
+          onClearHistory={() => setShowClearTaskHistoryConfirm(true)}
+        />
+        {showClearTaskHistoryConfirm ? (
+          <ClearTaskHistoryDialog
+            clearing={clearTaskHistoryLoading}
+            onCancel={() => setShowClearTaskHistoryConfirm(false)}
+            onConfirm={() => void handleClearTaskHistory()}
+          />
+        ) : null}
       </main>
     </div>
   );
@@ -1491,6 +2252,18 @@ function DetectedActionChip({ action, fileIntent }: { action: ClassifiedTaskActi
             : "By type"
       : action.actionType === "document.summary"
         ? "Readable files"
+        : action.actionType === "file.search"
+          ? "Connected folders"
+          : action.actionType === "log.analyzeFromSearch"
+            ? "Connected logs"
+          : action.actionType === "document.summaryFromSearch"
+            ? "Selected indexed files"
+            : action.actionType === "document.reportFromSearch"
+              ? "Report"
+          : action.actionType === "gmail.sendGeneratedReport"
+                ? "Gmail after confirmation"
+                : action.actionType === "multi_step"
+                  ? "File search first"
         : isEmailWriteAction(action.actionType)
           ? action.actionType === "gmail.sendEmail"
             ? "Send with confirmation"
@@ -1521,10 +2294,14 @@ function ActionPreviewRenderer({
   gmailDraftMessage,
   gmailAttachmentCandidates,
   emailSearchMessages,
+  fileSearchSelection,
   recentTasks,
   onGmailDraftChange,
   onGmailAttachmentsChange,
   onManualGmailAttachmentFiles,
+  onFileSearchSelectionChange,
+  onPrepareIndexedFileSummary,
+  onChooseFilesManually,
   onCreateGmailDraft,
   onEdit,
   onCancel,
@@ -1538,10 +2315,14 @@ function ActionPreviewRenderer({
   gmailDraftMessage: string | null;
   gmailAttachmentCandidates: AttachmentCandidate[];
   emailSearchMessages: NormalizedEmailMessage[];
+  fileSearchSelection: FileSearchSelection | null;
   recentTasks: RecentTaskItem[];
   onGmailDraftChange: (draft: { to: string; cc: string; bcc: string; subject: string; body: string; message_id: string }) => void;
   onGmailAttachmentsChange: (candidates: AttachmentCandidate[]) => void;
   onManualGmailAttachmentFiles: (files: FileList | null) => void;
+  onFileSearchSelectionChange: (selection: FileSearchSelection | null) => void;
+  onPrepareIndexedFileSummary: () => void;
+  onChooseFilesManually: () => void;
   onCreateGmailDraft: () => void;
   onEdit: () => void;
   onCancel: () => void;
@@ -1575,7 +2356,137 @@ function ActionPreviewRenderer({
   if (action.actionType === "github.lookup") {
     return <LookupPreview icon={<Github size={16} />} action={action} title="Look up GitHub context" onEdit={onEdit} onCancel={onCancel} />;
   }
+  if (isIndexedFileSearchAction(action.actionType) || action.actionType === "multi_step" || action.actionType === "log.analyzeFromSearch") {
+    return (
+      <FileSearchResultsPreview
+        action={action}
+        selection={fileSearchSelection}
+        onSelectionChange={onFileSearchSelectionChange}
+        onContinue={onPrepareIndexedFileSummary}
+        onChooseFilesManually={onChooseFilesManually}
+        onEdit={onEdit}
+        onCancel={onCancel}
+      />
+    );
+  }
   return <UnsupportedPreview action={action} onEdit={onEdit} onCancel={onCancel} />;
+}
+
+function FileSearchResultsPreview({
+  action,
+  selection,
+  onSelectionChange,
+  onContinue,
+  onChooseFilesManually,
+  onEdit,
+  onCancel,
+}: {
+  action: PreparedAction;
+  selection: FileSearchSelection | null;
+  onSelectionChange: (selection: FileSearchSelection | null) => void;
+  onContinue: () => void;
+  onChooseFilesManually: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  const readableMatches = selection?.matches.filter((match) => Boolean(match.readable)) ?? [];
+  const selectableMatches = selection?.matches.filter((match) => (action.actionType === "multi_step" ? Boolean(match.attachable) : Boolean(match.readable))) ?? [];
+  const selectedCount = selection?.selectedKeys.length ?? 0;
+  const canContinue = action.actionType !== "file.search" && selectedCount > 0;
+  const isLogAnalysis = action.actionType === "log.analyzeFromSearch";
+
+  function toggle(match: IndexedFileSearchMatch, checked: boolean) {
+    if (!selection) return;
+    const selectable = action.actionType === "multi_step" ? Boolean(match.attachable) : Boolean(match.readable);
+    if (!selectable) return;
+    const key = `${match.source_id}:${match.relative_path}`;
+    const selectedKeys = checked
+      ? Array.from(new Set([...selection.selectedKeys, key]))
+      : selection.selectedKeys.filter((item) => item !== key);
+    onSelectionChange({ ...selection, selectedKeys });
+  }
+
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
+            <Search size={16} />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-app-text">{isLogAnalysis ? "Log files found" : "Files found"}</h2>
+            <p className="mt-1 text-xs text-app-muted">
+              MindOS searched your connected folders{selection?.query ? ` for "${selection.query}"` : ""}
+              {isLogAnalysis ? ". Choose the logs to analyze." : "."}
+            </p>
+          </div>
+        </div>
+        <Badge variant={selectableMatches.length ? "success" : "warning"}>
+          {action.actionType === "multi_step" ? `${selectableMatches.length} attachable` : `${readableMatches.length} readable`}
+        </Badge>
+      </div>
+      {selection?.statusMessage ? <p className="mt-3 text-xs text-app-muted">{selection.statusMessage}</p> : null}
+      <div className="mt-3 space-y-2">
+        {selection?.matches.length ? (
+          selection.matches.map((match) => {
+            const key = `${match.source_id}:${match.relative_path}`;
+            const checked = selection.selectedKeys.includes(key);
+            const selectable = action.actionType === "multi_step" ? Boolean(match.attachable) : Boolean(match.readable);
+            return (
+              <label key={key} className="flex gap-3 rounded-md border border-app-border bg-zinc-900/60 px-3 py-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={!selectable || action.actionType === "file.search"}
+                  onChange={(event) => toggle(match, event.target.checked)}
+                  className="mt-1 h-4 w-4 accent-violet-500"
+                />
+                <FileText size={15} className="mt-1 shrink-0 text-app-muted" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-app-text">{match.file_name}</span>
+                  <span className="mt-1 block truncate text-app-muted">
+                    {match.source_name || "Connected folder"} - {match.relative_path}
+                  </span>
+                  <span className="mt-1 block text-app-muted">{readableMatchReason(match.match_reason)}</span>
+                  {match.matched_excerpt ? <span className="mt-1 block line-clamp-2 text-zinc-400">{match.matched_excerpt}</span> : null}
+                </span>
+                <span className="shrink-0 space-y-1 text-right">
+                  <Badge variant={selectable ? "success" : "warning"}>
+                    {action.actionType === "multi_step" ? (selectable ? "Attachable" : "Blocked") : match.readable ? "Readable" : "Inventory only"}
+                  </Badge>
+                  <span className="block text-[11px] text-app-muted">{formatBytes(match.size_bytes)}</span>
+                  <span className="block text-[11px] text-app-muted">{match.modified_at ? formatShortDate(match.modified_at) : ""}</span>
+                </span>
+              </label>
+            );
+          })
+        ) : (
+          <div className="rounded-md border border-app-border bg-zinc-900/60 px-3 py-3">
+            <p className="text-xs font-medium text-app-text">{isLogAnalysis ? "No matching log files found in connected folders." : "No matching readable files found in connected folders."}</p>
+            <p className="mt-1 text-xs text-app-muted">{isLogAnalysis ? "Try another log filename, error term, or connected folder search." : "You can choose files manually or try another search."}</p>
+          </div>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Try another search
+        </Button>
+        {!isLogAnalysis ? (
+          <Button type="button" variant="secondary" className="h-9 px-3" onClick={onChooseFilesManually}>
+            Choose files manually
+          </Button>
+        ) : null}
+        {action.actionType !== "file.search" ? (
+          <Button type="button" variant="primary" className="h-9 px-3" disabled={!canContinue} onClick={onContinue}>
+            {isLogAnalysis ? "Analyze selected logs" : "Continue with selected files"}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function GmailDraftPreview({
@@ -2490,6 +3401,96 @@ function DocumentSummaryPreviewCard({
   );
 }
 
+function LogAnalysisPreviewCard({
+  report,
+  outputFilename,
+  saving,
+  saveMessage,
+  onOutputFilenameChange,
+  onEdit,
+  onSave,
+}: {
+  report: LogAnalysisPrepareResponse;
+  outputFilename: string;
+  saving: boolean;
+  saveMessage: string | null;
+  onOutputFilenameChange: (filename: string) => void;
+  onEdit: () => void;
+  onSave: () => void;
+}) {
+  const canSave = report.status === "preview" && report.report_markdown.trim().length > 0;
+  const statusVariant = report.status === "preview" ? "success" : report.status === "empty" ? "default" : "danger";
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-app-text">Log analysis preview</h2>
+          <p className="mt-1 text-xs text-app-muted">Secrets are redacted before analysis. Original logs are not changed.</p>
+        </div>
+        <Badge variant={statusVariant}>{report.status}</Badge>
+      </div>
+      {report.provider && report.provider !== "ollama" && report.provider !== "fake" ? (
+        <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Redacted log excerpts were sent to the cloud model provider for this preview.
+        </p>
+      ) : null}
+      <div className="mt-3 grid gap-2 text-xs text-app-muted sm:grid-cols-3">
+        <span>Files analyzed: {report.files_used.length}</span>
+        <span>Skipped: {report.files_skipped.length}</span>
+        <span>Output: {outputFilename}</span>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_240px]">
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Report title</span>
+          <div className="rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-xs text-app-text">
+            {report.report_title || "Log analysis report"}
+          </div>
+        </label>
+        <label className="space-y-1 text-xs text-app-muted">
+          <span>Output filename</span>
+          <input
+            value={outputFilename}
+            onChange={(event) => onOutputFilenameChange(event.target.value)}
+            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
+          />
+        </label>
+      </div>
+      {report.files_used.length ? <CompactList title="Logs analyzed" items={report.files_used.slice(0, 8).map((file) => ({ label: file }))} /> : null}
+      {report.evidence.length ? (
+        <CompactList
+          title="Evidence captured"
+          items={report.evidence.slice(0, 6).map((file) => ({
+            label: file.relative_path,
+            detail: `${file.error_lines.length} error lines - ${file.repeated_patterns.length} repeated patterns`,
+          }))}
+          tone="muted"
+        />
+      ) : null}
+      {report.files_skipped.length ? (
+        <CompactList
+          title="Skipped"
+          items={report.files_skipped.slice(0, 8).map((file) => ({ label: file.relative_path, detail: file.reason }))}
+          tone="muted"
+        />
+      ) : null}
+      {report.warnings.length ? <CompactList title="Warnings" items={report.warnings.map((warning) => ({ label: warning }))} tone="warning" /> : null}
+      {report.planner_warning ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{report.planner_warning}</p> : null}
+      <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-app-border bg-zinc-900/70 p-3">
+        <pre className="whitespace-pre-wrap break-words text-xs leading-5 text-app-text">{report.report_markdown}</pre>
+      </div>
+      {saveMessage ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{saveMessage}</p> : null}
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button type="button" variant="primary" className="h-9 px-3" loading={saving} disabled={!canSave} onClick={onSave}>
+          Save report
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function RunConfirmationCard({ plan, onCancel, onConfirm }: { plan: FileTaskPlan; onCancel: () => void; onConfirm: () => void }) {
   return (
     <div className="rounded-lg border border-violet-500/30 bg-violet-500/10 p-3">
@@ -2573,10 +3574,20 @@ function ExecutionResultCard({
   );
 }
 
-function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
-  if (!tasks.length) return null;
+function RecentTasksCard({
+  tasks,
+  message,
+  clearing,
+  onClearHistory,
+}: {
+  tasks: RecentTaskItem[];
+  message: string | null;
+  clearing: boolean;
+  onClearHistory: () => void;
+}) {
   function taskBadge(task: RecentTaskItem) {
     if (task.type === "document_summary") return "Summary";
+    if (task.type === "log_analysis_report") return "Log report";
     if (task.type === "gmail_sent") return "Email sent";
     if (task.type === "gmail_draft") return "Gmail draft";
     return "File task";
@@ -2589,8 +3600,16 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
           <p className="text-sm font-medium text-app-text">Recent Tasks</p>
           <p className="mt-1 text-xs text-app-muted">Local task history only. Operational file tasks are not added to Memory.</p>
         </div>
-        <Badge variant="default">{tasks.length}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="default">{tasks.length}</Badge>
+          {tasks.length ? (
+            <Button type="button" variant="secondary" className="h-8 px-3 text-xs" loading={clearing} onClick={onClearHistory}>
+              Clear history
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {!tasks.length ? <p className="rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-xs text-app-muted">{message || "No recent tasks yet."}</p> : null}
       <div className="space-y-2">
         {tasks.slice(0, 6).map((task) => (
           <div key={task.id} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
@@ -2600,7 +3619,7 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
                 <p className="mt-1 text-xs text-app-muted">{task.summary}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant={task.type === "document_summary" ? "success" : task.type === "gmail_draft" || task.type === "gmail_sent" ? "info" : "default"}>
+                <Badge variant={task.type === "document_summary" || task.type === "log_analysis_report" ? "success" : task.type === "gmail_draft" || task.type === "gmail_sent" ? "info" : "default"}>
                   {taskBadge(task)}
                 </Badge>
                 <Badge variant={task.status === "completed" ? "success" : task.status === "partial" ? "warning" : "danger"}>
@@ -2618,6 +3637,43 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
         ))}
       </div>
     </Card>
+  );
+}
+
+function ClearTaskHistoryDialog({
+  clearing,
+  onCancel,
+  onConfirm,
+}: {
+  clearing: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-md rounded-xl border border-app-border bg-zinc-950 p-5 shadow-xl shadow-black/40">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-app-text">Clear task history?</p>
+            <p className="mt-2 text-sm leading-6 text-app-muted">
+              This will remove local task history items from the Recent Tasks list. It will not delete Memory, Gmail drafts/emails,
+              connector data, or files.
+            </p>
+          </div>
+          <button type="button" className="rounded-md p-1 text-app-muted hover:bg-zinc-900 hover:text-app-text" onClick={onCancel} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={clearing}>
+            Cancel
+          </Button>
+          <Button type="button" variant="danger" loading={clearing} onClick={onConfirm}>
+            Clear task history
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2722,6 +3778,28 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
       reason: "MindOS cannot safely prepare destructive tasks from the Tasks page.",
     };
   }
+  if (isLogAnalysisInstruction(text)) {
+    return { actionType: "log.analyzeFromSearch", label: "Analyze logs", supported: true };
+  }
+  if (/\b(summary|summarize|summarise|summarization|summarisation|report|recap)\b/.test(text) && /\b(file|files|document|documents|docs?|pdf|pdfs|docx|markdown|md|txt|text)\b/.test(text)) {
+    return { actionType: /\breport\b/.test(text) ? "document.reportFromSearch" : "document.summaryFromSearch", label: /\breport\b/.test(text) ? "Report from connected files" : "Summary from connected files", supported: true };
+  }
+  if (/\b(search|find|look up|lookup)\b/.test(text) && /\b(file|files|document|documents|notes|pdf|pdfs|docx|markdown|md|txt|text)\b/.test(text)) {
+    if (/\b(report)\b/.test(text)) {
+      return { actionType: "document.reportFromSearch", label: "Report from connected files", supported: true };
+    }
+    if (/\b(summary|summarize|recap|send|email|mail|gmail)\b/.test(text) || extractEmailAddress(instruction)) {
+      return {
+        actionType: extractEmailAddress(instruction) || /\b(send|email|mail|gmail)\b/.test(text) ? "gmail.sendGeneratedReport" : "document.summaryFromSearch",
+        label: extractEmailAddress(instruction) || /\b(send|email|mail|gmail)\b/.test(text) ? "Summary email from connected files" : "Summary from connected files",
+        supported: true,
+      };
+    }
+    return { actionType: "file.search", label: "Search connected files", supported: true };
+  }
+  if (/\b(gmail|email|mail|send|draft|compose|write)\b/.test(text) && /\b(find|search|attach|attachment|resume|cv|curriculum vitae|file|document|pdf)\b/.test(text)) {
+    return { actionType: "multi_step", label: "Find file + Gmail", supported: true };
+  }
   if (/\b(gmail|email|mail)\b/.test(text) && /\b(reply|respond)\b/.test(text)) {
     return { actionType: "gmail.replyDraft", label: "Create reply draft", supported: true };
   }
@@ -2767,6 +3845,10 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
 
 function isFolderTaskAction(actionType: TaskActionType) {
   return actionType === "file.organize" || actionType === "document.summary";
+}
+
+function isIndexedFileSearchAction(actionType: TaskActionType) {
+  return actionType === "file.search" || actionType === "document.summaryFromSearch" || actionType === "document.reportFromSearch" || actionType === "gmail.sendGeneratedReport";
 }
 
 function isEmailWriteAction(actionType: TaskActionType) {
@@ -2848,6 +3930,321 @@ function extractEmailAddress(value: string) {
   return match?.[0] ?? "";
 }
 
+function extractFileSearchQuery(value: string) {
+  let text = value
+    .replace(/\[[^\]]+\]\(mailto:[^)]+\)/gi, " ")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
+    .toLowerCase();
+  text = text
+    .replace(/\b(search|find|look up|lookup|files?|documents?|docs?|notes?|about|for|and|give|me|make|create|generate|summary|summarize|summarise|summarization|summarisation|report|send|email|mail|gmail|to|the|a|an|it|this|these|from|of|connected|folders?)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || value.trim() || "selected files";
+}
+
+function shouldTryHybridPlanner(value: string) {
+  const text = value.toLowerCase();
+  if (!text.trim()) return false;
+  if (/\b(organize|organise|move|sort|clean|rename|copy|summarize|summarise|summary|summarization|report|analy[sz]e|find|search|gmail|email|mail|send|draft|compose|write)\b/.test(text)) return true;
+  const hasEmail = /\b(gmail|email|mail|send|draft|compose|write)\b/.test(text) || Boolean(extractEmailAddress(value));
+  const hasFile = /\b(find|search|attach|attachment|resume|cv|curriculum vitae|file|files|document|documents|pdf|docx|txt|md|log|logs)\b/.test(text);
+  const hasSummarySend = /\b(search|find)\b/.test(text) && /\b(summary|summarize|report)\b/.test(text) && hasEmail;
+  return (hasEmail && hasFile) || hasSummarySend;
+}
+
+function isLogAnalysisInstruction(value: string) {
+  const text = value.toLowerCase();
+  const hasLog = /\b(log|logs|logfile|logfiles|app\.log|error log|debug log)\b/.test(text) || /\.(log|txt)\b/.test(text);
+  const hasAnalysis = /\b(analy[sz]e|find|diagnose|investigate|report|errors?|exceptions?|failed|failure|traceback|stacktrace|timeout|crash)\b/.test(text);
+  return hasLog && hasAnalysis;
+}
+
+function isFileSearchThenGmailPlan(plan: TaskIntentPrepareResponse) {
+  if (plan.intent !== "multi_step") return false;
+  const hasSearch = plan.steps.some((step) => step.type === "file.search_connected_folders");
+  const hasDocumentSummary = plan.steps.some((step) => step.type === "document.summarize_selected_files" || step.type === "document.create_report_from_files" || step.type === "document.create_output_file");
+  const hasGmail = plan.steps.some((step) => step.type === "gmail.create_draft" || step.type === "gmail.send_email_after_confirmation");
+  return hasSearch && hasGmail && !hasDocumentSummary;
+}
+
+function isLogAnalysisPlan(plan: TaskIntentPrepareResponse) {
+  return plan.primary_action === "log.analyzeFromSearch" || plan.steps.some((step) => step.type === "log.search_connected_logs" || step.type === "log.analyze_selected_files");
+}
+
+function isDocumentSearchSummaryPlan(plan: TaskIntentPrepareResponse) {
+  return (
+    plan.primary_action === "document.summaryFromSearch" ||
+    plan.primary_action === "document.reportFromSearch" ||
+    (plan.steps.some((step) => step.type === "file.search_connected_folders") &&
+      plan.steps.some((step) => step.type === "document.summarize_selected_files" || step.type === "document.create_report_from_files"))
+  );
+}
+
+function fileSearchQueryFromPlan(plan: TaskIntentPrepareResponse) {
+  const fileSearchStep = plan.steps.find((step) => step.type === "file.search_connected_folders");
+  return fileSearchStep?.query || plan.entities.file_queries[0] || plan.entities.topic_queries[0] || "selected files";
+}
+
+function logSearchQueryFromPlan(plan: TaskIntentPrepareResponse) {
+  const fileSearchStep = plan.steps.find((step) => step.type === "log.search_connected_logs" || step.type === "file.search_connected_folders");
+  return fileSearchStep?.query || plan.entities.topic_queries[0] || plan.entities.file_queries[0] || "error failure exception";
+}
+
+function logSearchExtensionsFromPlan(plan: TaskIntentPrepareResponse) {
+  const stepExtensions = plan.steps.find((step) => step.type === "log.search_connected_logs" || step.type === "file.search_connected_folders")?.extensions ?? [];
+  const extensions = [...stepExtensions, ...plan.entities.extensions].filter(Boolean);
+  return extensions.length ? Array.from(new Set(extensions.map((extension) => (extension.startsWith(".") ? extension : `.${extension}`).toLowerCase()))) : [".log", ".txt", ".out", ".err"];
+}
+
+function logLatestPreferenceFromPlan(plan: TaskIntentPrepareResponse) {
+  return Boolean(plan.entities.latest_preference || plan.steps.some((step) => step.latest_preference));
+}
+
+function logExactFileHintFromPlan(plan: TaskIntentPrepareResponse) {
+  return plan.entities.exact_file_hint || plan.steps.find((step) => step.exact_file_hint)?.exact_file_hint || "";
+}
+
+function isLogLikeSearchMatch(match: IndexedFileSearchMatch) {
+  const extension = (match.extension || "").toLowerCase();
+  const haystack = `${match.file_name} ${match.relative_path} ${match.matched_excerpt || ""}`.toLowerCase();
+  if (extension === ".log" || extension === ".out" || extension === ".err") return true;
+  if (extension !== ".txt") return false;
+  return /\b(log|error|app|server|backend|frontend|api|debug|trace|exception|stacktrace|traceback|failed|failure|timeout|refused|500|nullpointerexception|sqlexception)\b/.test(haystack);
+}
+
+function actionFromUnsupportedPlan(plan: TaskIntentPrepareResponse): PreparedAction {
+  return {
+    id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    actionType: "unsupported",
+    label: "Choose action",
+    supported: false,
+    title: "Choose what MindOS should do",
+    summary: plan.user_facing_summary || plan.explanation || "MindOS needs one more hint before preparing this task.",
+    riskLevel: "low",
+    requiresConfirmation: false,
+    canExecute: false,
+    blockedReasons: plan.validation_repairs.length ? plan.validation_repairs : ["Planner confidence was too low."],
+    missingRequirements: [],
+    sources: [],
+    preview: {
+      note: "Possible actions: search files and summarize them, analyze log files, organize a folder, or draft/send Gmail.",
+      warning: [...plan.warnings, ...plan.validation_repairs].join(" "),
+    },
+  };
+}
+
+function exactLogFileHint(value: string) {
+  const match = value.match(/(?:^|\s)([\w .()_-]+\.(?:log|txt))\b/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function extractLogAnalysisQuery(value: string) {
+  const exact = exactLogFileHint(value);
+  if (exact) return exact;
+  let text = value.toLowerCase();
+  text = text
+    .replace(/\b(find|analyze|analyse|diagnose|investigate|create|make|generate|report|errors?|exceptions?|latest|recent|newest|last|logs?|logfiles?|log files?|files?|about|for|in|the|a|an|and|from|connected|folders?)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || "error failure exception";
+}
+
+function gmailStepFromPlan(plan: TaskIntentPrepareResponse) {
+  return plan.steps.find((step) => step.type === "gmail.create_draft" || step.type === "gmail.send_email_after_confirmation") ?? null;
+}
+
+function buildAttachmentEmailDraft(plan: TaskIntentPrepareResponse, filenames: string[]) {
+  const emailStep = gmailStepFromPlan(plan);
+  const firstFile = filenames[0] || "the selected file";
+  const subject = emailStep?.subject_hint || (fileSearchQueryFromPlan(plan).includes("resume") ? "Resume for your review" : "Requested file");
+  const attachmentLine = filenames.length === 1 ? `I have attached ${firstFile} for your review.` : `I have attached ${filenames.length} selected files for your review.`;
+  return {
+    subject,
+    body: `Hi,\n\n${attachmentLine}\n\nBest regards,`,
+  };
+}
+
+function frontendMultiStepFallbackPlan(instruction: string): TaskIntentPrepareResponse {
+  const lower = instruction.toLowerCase();
+  const wantsDraft = /\b(draft|compose|write|create a draft)\b/.test(lower);
+  const wantsSend = /\b(send|email|mail)\b/.test(lower) && !wantsDraft;
+  const query = /\b(resume|cv|curriculum vitae)\b/.test(lower) ? "resume cv curriculum vitae" : extractFileSearchQuery(instruction);
+  const recipient = extractEmailAddress(instruction);
+  return {
+    intent: "multi_step",
+    primary_action: wantsSend ? "gmail.sendEmail" : "gmail.createDraft",
+    risk_level: wantsSend ? "high" : "medium",
+    requires_user_selection: true,
+    requires_confirmation: true,
+    confidence: 0.78,
+    source_type: "connected_files",
+    needs_file_search: true,
+    needs_user_file_selection: true,
+    needs_output_file: false,
+    entities: {
+      recipients: recipient ? [recipient] : [],
+      file_queries: [query],
+      topic_queries: [],
+      explicit_file_names: [],
+      action_words: [],
+      connector_words: [],
+      attachment_words: [],
+      output_words: [],
+      risk_words: wantsSend ? ["send"] : [],
+      date_range: null,
+      output_format: null,
+      extensions: [],
+      latest_preference: false,
+      exact_file_hint: null,
+      possible_intents: [wantsSend ? "gmail.sendEmail" : "gmail.createDraft"],
+    },
+    steps: [
+      {
+        id: "step_1",
+        type: "file.search_connected_folders",
+        query,
+        purpose: `Find ${query} attachment candidates`,
+        requires_user_selection: true,
+        requires_confirmation: false,
+        to: [],
+        subject_hint: null,
+        body_hint: null,
+        attachments_from_step: null,
+        files_from_step: null,
+        extensions: [],
+        latest_preference: false,
+        exact_file_hint: null,
+        output_format: null,
+        filename_hint: null,
+      },
+      {
+        id: "step_2",
+        type: wantsSend ? "gmail.send_email_after_confirmation" : "gmail.create_draft",
+        query: null,
+        purpose: wantsSend ? "Send Gmail after confirmation" : "Create Gmail draft",
+        requires_user_selection: false,
+        requires_confirmation: true,
+        to: recipient ? [recipient] : [],
+        subject_hint: query.includes("resume") ? "Resume for your review" : "Requested file",
+        body_hint: "Brief professional email with the selected attachment.",
+        attachments_from_step: "step_1",
+        files_from_step: null,
+        extensions: [],
+        latest_preference: false,
+        exact_file_hint: null,
+        output_format: null,
+        filename_hint: null,
+      },
+    ],
+    explanation: wantsSend
+      ? `Search connected folders for ${query}, ask you to choose the file, then prepare Gmail send for confirmation.`
+      : `Search connected folders for ${query}, ask you to choose the file, then create a Gmail draft.`,
+    user_facing_summary: wantsSend
+      ? `Search connected folders for ${query}, ask you to choose the file, then prepare Gmail send for confirmation.`
+      : `Search connected folders for ${query}, ask you to choose the file, then create a Gmail draft.`,
+    planner_method: "fallback",
+    warnings: ["Using deterministic multi-step fallback."],
+    validation_repairs: [],
+  };
+}
+
+function frontendLogAnalysisFallbackPlan(instruction: string): TaskIntentPrepareResponse {
+  const query = extractLogAnalysisQuery(instruction);
+  const exactFileHint = exactLogFileHint(instruction);
+  const latestPreference = /\b(latest|recent|newest|last)\b/i.test(instruction);
+  const filenameHint = `${query || "log-error-analysis"}-report.md`;
+  return {
+    intent: "multi_step",
+    primary_action: "log.analyzeFromSearch",
+    risk_level: "medium",
+    requires_user_selection: true,
+    requires_confirmation: true,
+    confidence: 0.78,
+    source_type: "connected_logs",
+    needs_file_search: true,
+    needs_user_file_selection: true,
+    needs_output_file: true,
+    entities: {
+      recipients: [],
+      file_queries: [query],
+      topic_queries: [query],
+      explicit_file_names: exactFileHint ? [exactFileHint] : [],
+      action_words: ["analyze"],
+      connector_words: ["logs"],
+      attachment_words: [],
+      output_words: ["report"],
+      risk_words: [],
+      date_range: null,
+      output_format: "markdown",
+      extensions: [".log", ".txt", ".out", ".err"],
+      latest_preference: latestPreference,
+      exact_file_hint: exactFileHint || null,
+      possible_intents: ["log.analyzeFromSearch"],
+    },
+    steps: [
+      {
+        id: "step_1",
+        type: "log.search_connected_logs",
+        query,
+        purpose: "Find relevant connected log files",
+        requires_user_selection: true,
+        requires_confirmation: false,
+        to: [],
+        subject_hint: null,
+        body_hint: null,
+        attachments_from_step: null,
+        files_from_step: null,
+        extensions: [".log", ".txt", ".out", ".err"],
+        latest_preference: latestPreference,
+        exact_file_hint: exactFileHint || null,
+        output_format: null,
+        filename_hint: null,
+      },
+      {
+        id: "step_2",
+        type: "log.analyze_selected_files",
+        query,
+        purpose: "Create a safe log analysis report from selected files",
+        requires_user_selection: false,
+        requires_confirmation: true,
+        to: [],
+        subject_hint: null,
+        body_hint: null,
+        attachments_from_step: null,
+        files_from_step: "step_1",
+        extensions: [],
+        latest_preference: false,
+        exact_file_hint: null,
+        output_format: "markdown",
+        filename_hint: filenameHint,
+      },
+      {
+        id: "step_3",
+        type: "document.create_output_file",
+        query: null,
+        purpose: "Save report to MindOS outputs after preview",
+        requires_user_selection: false,
+        requires_confirmation: true,
+        to: [],
+        subject_hint: null,
+        body_hint: null,
+        attachments_from_step: null,
+        files_from_step: "step_2",
+        extensions: [],
+        latest_preference: false,
+        exact_file_hint: null,
+        output_format: "markdown",
+        filename_hint: filenameHint,
+      },
+    ],
+    explanation: `Search connected folders for ${query}, let you choose log files, then create a redacted analysis report.`,
+    user_facing_summary: `Search connected folders for log files related to "${query}", then create a redacted analysis report.`,
+    planner_method: "fallback",
+    warnings: ["Using deterministic log-analysis fallback."],
+    validation_repairs: [],
+  };
+}
+
 function summarizeEmailMessages(messages: NormalizedEmailMessage[]) {
   if (!messages.length) return "No matching emails found.";
   const senders = [...new Set(messages.map((message) => message.from).filter(Boolean))].slice(0, 4);
@@ -2893,6 +4290,7 @@ function toGmailDraftSourceItem(task: RecentTaskItem) {
 function groupRecentTasksForEmail(history: RecentTaskItem[]) {
   if (!history.length) return "";
   const documentSummaries = history.filter((task) => task.type === "document_summary");
+  const logReports = history.filter((task) => task.type === "log_analysis_report");
   const fileTasks = history.filter((task) => task.type === "file_organize");
   const gmailDrafts = history.filter((task) => task.type === "gmail_draft");
   const gmailSent = history.filter((task) => task.type === "gmail_sent");
@@ -2906,13 +4304,18 @@ function groupRecentTasksForEmail(history: RecentTaskItem[]) {
     const moved = fileTasks.reduce((sum, task) => sum + Number(task.details.moved_files || 0), 0);
     lines.push(`File organization: I organized ${fileTasks.length} folder task${fileTasks.length === 1 ? "" : "s"}${moved ? ` and moved ${moved} files` : ""}.`);
   }
+  if (logReports.length) {
+    const saved = logReports.map((task) => task.outputFileName).filter(Boolean);
+    lines.push(`Log analysis: I created ${logReports.length} log analysis report${logReports.length === 1 ? "" : "s"}.`);
+    if (saved.length) lines.push(`Saved reports included ${saved.slice(0, 5).join(", ")}.`);
+  }
   if (gmailDrafts.length) {
     lines.push(`Email workflow: I created ${gmailDrafts.length} Gmail draft${gmailDrafts.length === 1 ? "" : "s"} for review.`);
   }
   if (gmailSent.length) {
     lines.push(`Email workflow: I sent ${gmailSent.length} email${gmailSent.length === 1 ? "" : "s"} after confirmation.`);
   }
-  const other = history.filter((task) => !["document_summary", "file_organize", "gmail_draft", "gmail_sent"].includes(task.type));
+  const other = history.filter((task) => !["document_summary", "log_analysis_report", "file_organize", "gmail_draft", "gmail_sent"].includes(task.type));
   for (const task of other.slice(0, 4)) {
     lines.push(`${task.title}: ${task.summary}`);
   }
@@ -2964,16 +4367,12 @@ function safetyBulletsForAction(action: PreparedAction) {
 
 function loadRecentTasks(): RecentTaskItem[] {
   try {
-    const raw = localStorage.getItem(recentTasksStorageKey);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
+    return loadRecentTaskHistory<RecentTaskItem>()
       .filter((item): item is RecentTaskItem => {
         return (
           item &&
           typeof item.id === "string" &&
-          (item.type === "file_organize" || item.type === "document_summary" || item.type === "gmail_draft" || item.type === "gmail_sent") &&
+          (item.type === "file_organize" || item.type === "document_summary" || item.type === "log_analysis_report" || item.type === "gmail_draft" || item.type === "gmail_sent") &&
           typeof item.title === "string" &&
           typeof item.summary === "string" &&
           typeof item.createdAt === "string"
@@ -3113,6 +4512,19 @@ function normalizedSummaryFilename(filename: string, format: "markdown" | "text"
 function uniqueFileTypes(readResult: BrowserDocumentReadResult | null) {
   if (!readResult) return [];
   return [...new Set(readResult.files_read.map((file) => file.file_type || extensionToFileType(file.extension)))].sort();
+}
+
+function fileTypesFromPaths(paths: string[]) {
+  return Array.from(
+    new Set(
+      paths
+        .map((path) => {
+          const match = path.toLowerCase().match(/\.[a-z0-9]+$/);
+          return match ? match[0].replace(".", "") : "";
+        })
+        .filter(Boolean),
+    ),
+  );
 }
 
 function extensionToFileType(extension: string) {

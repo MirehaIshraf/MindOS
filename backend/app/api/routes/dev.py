@@ -48,10 +48,12 @@ def clear_events() -> dict[str, str]:
 
 
 @router.delete("/clear-tasks")
-def clear_tasks() -> dict[str, str]:
-    task_service.clear_tasks()
+def clear_tasks() -> dict[str, object]:
+    deleted_count = task_service.clear_tasks()
     return {
         "status": "cleared",
+        "ok": True,
+        "deleted_count": deleted_count,
     }
 
 

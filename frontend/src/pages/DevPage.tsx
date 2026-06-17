@@ -29,6 +29,7 @@ import {
   seedSampleEvents,
   testLLM,
 } from "../services/api";
+import { clearRecentTaskHistoryStorage } from "../services/taskHistoryStorage";
 import type {
   BackendHealth,
   BackendStatus,
@@ -243,8 +244,9 @@ export function DevPage() {
     setError(null);
     setMessage(null);
     try {
-      await clearTasks();
-      setMessage("Cleared local task history.");
+      const response = await clearTasks();
+      clearRecentTaskHistoryStorage();
+      setMessage(`Cleared local task history${typeof response.deleted_count === "number" ? ` (${response.deleted_count} backend items)` : ""}.`);
       await refreshAll();
     } catch {
       setError("Could not clear tasks.");
@@ -483,6 +485,7 @@ export function DevPage() {
         clear_saved_sources: clearSavedSources,
         clear_model_settings: clearModelSettings,
       });
+      clearRecentTaskHistoryStorage();
       setClearAllResult(response);
       setMessage(
         `Cleared ${response.events_deleted} events, ${response.tasks_deleted} tasks, ${response.chats_deleted} chat sessions, and ${response.relationships_deleted} relationships.`,

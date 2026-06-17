@@ -141,6 +141,8 @@ class IndexedFileSearchRequest(BaseModel):
     search_filename: bool = True
     connected_sources_only: bool = True
     attachable_only: bool = False
+    readable_only: bool = False
+    latest_preference: bool = False
     limit: int = Field(default=20, ge=1, le=100)
 
     @field_validator("query")
@@ -165,6 +167,8 @@ class IndexedFileSearchMatch(BaseModel):
     matched_excerpt: str = ""
     content_index_status: str = "unknown"
     attachable: bool = False
+    readable: bool = False
+    source_name: str | None = None
 
 
 class IndexedFileSearchResponse(BaseModel):

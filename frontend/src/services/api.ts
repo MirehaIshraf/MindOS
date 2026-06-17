@@ -43,6 +43,8 @@ import type {
   DocumentSummaryPrepareResponse,
   DocumentSummaryCompleteRequest,
   DocumentSummaryCompleteResponse,
+  GeneratedSummarySaveRequest,
+  GeneratedSummarySaveResponse,
   EmailStatusResponse,
   EmailSyncRequest,
   EmailSyncResponse,
@@ -81,11 +83,15 @@ import type {
   LogImportPayload,
   LogImportResult,
   LogPreviewResult,
+  LogAnalysisPrepareRequest,
+  LogAnalysisPrepareResponse,
+  LogAnalysisSaveRequest,
   ImportRunsResponse,
   FileIndexJob,
   FileIndexJobsResponse,
   IndexedFileSearchRequest,
   IndexedFileSearchResponse,
+  IndexedDocumentSummaryPrepareRequest,
   IndexedAttachmentReference,
   ModelConfig,
   ModelSettingsResponse,
@@ -108,6 +114,9 @@ import type {
   SearchStatsResponse,
   SeedSampleEventsResponse,
   TaskHistoryResponse,
+  TaskHistoryClearResponse,
+  TaskIntentPrepareRequest,
+  TaskIntentPrepareResponse,
   ActionCapabilityRegistry,
   TaskActionExecuteRequest,
   TaskActionExecuteResponse,
@@ -194,8 +203,8 @@ export async function clearEvents(): Promise<{ status: "cleared" }> {
   return response.data;
 }
 
-export async function clearTasks(): Promise<{ status: "cleared" }> {
-  const response = await api.delete<{ status: "cleared" }>("/dev/clear-tasks");
+export async function clearTasks(): Promise<{ status: "cleared"; ok?: boolean; deleted_count?: number }> {
+  const response = await api.delete<{ status: "cleared"; ok?: boolean; deleted_count?: number }>("/dev/clear-tasks");
   return response.data;
 }
 
@@ -527,6 +536,16 @@ export async function getTaskHistory(limit = 20): Promise<TaskHistoryResponse> {
   return response.data;
 }
 
+export async function clearTaskHistory(): Promise<TaskHistoryClearResponse> {
+  const response = await api.delete<TaskHistoryClearResponse>("/tasks/history");
+  return response.data;
+}
+
+export async function prepareTaskIntent(payload: TaskIntentPrepareRequest): Promise<TaskIntentPrepareResponse> {
+  const response = await api.post<TaskIntentPrepareResponse>("/tasks/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
 export async function getTaskActionCapabilities(): Promise<ActionCapabilityRegistry> {
   const response = await api.get<ActionCapabilityRegistry>("/tasks/actions/capabilities");
   return response.data;
@@ -569,6 +588,26 @@ export async function prepareDocumentSummary(payload: DocumentSummaryPrepareRequ
 
 export async function completeDocumentSummary(payload: DocumentSummaryCompleteRequest): Promise<DocumentSummaryCompleteResponse> {
   const response = await api.post<DocumentSummaryCompleteResponse>("/tasks/document/summary/complete", payload);
+  return response.data;
+}
+
+export async function prepareIndexedDocumentSummary(payload: IndexedDocumentSummaryPrepareRequest): Promise<DocumentSummaryPrepareResponse> {
+  const response = await api.post<DocumentSummaryPrepareResponse>("/tasks/document/summary/from-indexed-files", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function saveGeneratedSummaryOutput(payload: GeneratedSummarySaveRequest): Promise<GeneratedSummarySaveResponse> {
+  const response = await api.post<GeneratedSummarySaveResponse>("/tasks/document/summary/save-output", payload, { timeout: 30000 });
+  return response.data;
+}
+
+export async function prepareLogAnalysisReport(payload: LogAnalysisPrepareRequest): Promise<LogAnalysisPrepareResponse> {
+  const response = await api.post<LogAnalysisPrepareResponse>("/tasks/logs/analyze/prepare", payload, { timeout: 130000 });
+  return response.data;
+}
+
+export async function saveLogAnalysisReport(payload: LogAnalysisSaveRequest): Promise<GeneratedSummarySaveResponse> {
+  const response = await api.post<GeneratedSummarySaveResponse>("/tasks/logs/analyze/save", payload, { timeout: 30000 });
   return response.data;
 }
 

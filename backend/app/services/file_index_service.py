@@ -21,6 +21,7 @@ from app.schemas.file_index import (
     ResolveIndexedAttachmentsResponse,
     ResolvedIndexedAttachment,
 )
+from app.schemas.file_tasks import DocumentSummaryInputFile, DocumentSummarySkippedFile
 from app.services.file_snapshot_service import is_hidden, validate_root_path
 
 
@@ -211,6 +212,9 @@ class FileIndexService:
                     continue
                 if request.attachable_only and record.get("is_attachable") is not True:
                     continue
+                readable = str(record.get("content_index_status") or "") == "indexed"
+                if request.readable_only and not readable:
+                    continue
                 file_name = str(record.get("file_name") or "")
                 relative_path = str(record.get("relative_path") or file_name)
                 score, reason = self._score_file_match(
@@ -238,6 +242,8 @@ class FileIndexService:
                     matched_excerpt="",
                     content_index_status=str(record.get("content_index_status") or "unknown"),
                     attachable=bool(record.get("is_attachable")),
+                    readable=readable,
+                    source_name=source.name,
                 )
 
         for event in self._events.list_all_events(include_hidden=True):
@@ -261,6 +267,9 @@ class FileIndexService:
             if extensions and extension not in extensions:
                 continue
             if request.attachable_only and extension in BLOCKED_ATTACHMENT_EXTENSIONS:
+                continue
+            readable = str(metadata.get("content_index_status") or "indexed") == "indexed"
+            if request.readable_only and not readable:
                 continue
             file_name = str(metadata.get("file_name") or event.title)
             relative_path = str(metadata.get("relative_path") or file_name)
@@ -290,9 +299,16 @@ class FileIndexService:
                         "matched_excerpt": matched_excerpt,
                         "content_index_status": "indexed",
                         "attachable": existing.attachable or extension not in BLOCKED_ATTACHMENT_EXTENSIONS,
+                        "readable": True,
+                        "source_name": source_cache.get(source_id).name if source_cache.get(source_id) else existing.source_name,
                     }
                 )
             else:
+                source_name = None
+                if source_id:
+                    if source_id not in source_cache:
+                        source_cache[source_id] = self._sources.get_source(source_id)
+                    source_name = source_cache[source_id].name if source_cache.get(source_id) else None
                 matches_by_key[key] = IndexedFileSearchMatch(
                     event_id=event.id,
                     source_id=source_id,
@@ -306,10 +322,15 @@ class FileIndexService:
                     matched_excerpt=matched_excerpt,
                     content_index_status="indexed",
                     attachable=extension not in BLOCKED_ATTACHMENT_EXTENSIONS,
+                    readable=True,
+                    source_name=source_name,
                 )
 
         matches = list(matches_by_key.values())
-        matches.sort(key=lambda item: (item.score, item.modified_at or ""), reverse=True)
+        if request.latest_preference:
+            matches.sort(key=lambda item: (item.modified_at or "", item.score), reverse=True)
+        else:
+            matches.sort(key=lambda item: (item.score, item.modified_at or ""), reverse=True)
         return IndexedFileSearchResponse(matches=matches[: request.limit])
 
     def resolve_attachments(self, request: ResolveIndexedAttachmentsRequest) -> ResolveIndexedAttachmentsResponse:
@@ -335,6 +356,9 @@ class FileIndexService:
             extension = file_name[file_name.rfind(".") :].lower() if "." in file_name else ""
             return self._resolved_attachment(reference, file_name, extension, 0, False, str(error))
 
+    def resolve_connected_file_path(self, reference: IndexedFileAttachmentReference) -> Path:
+        return self._resolve_connected_file_path(reference)
+
     def read_indexed_attachments(self, references: list[IndexedFileAttachmentReference]) -> list[dict[str, object]]:
         attachments: list[dict[str, object]] = []
         total_size = 0
@@ -359,6 +383,51 @@ class FileIndexService:
                 }
             )
         return attachments
+
+    def read_indexed_documents(
+        self,
+        references: list[IndexedFileAttachmentReference],
+        *,
+        max_chars_per_file: int = 30_000,
+        max_total_chars: int = 120_000,
+    ) -> tuple[list[DocumentSummaryInputFile], list[DocumentSummarySkippedFile], list[str], str]:
+        files: list[DocumentSummaryInputFile] = []
+        skipped: list[DocumentSummarySkippedFile] = []
+        warnings: list[str] = []
+        total_chars = 0
+        folder_name = "connected folders"
+
+        for reference in references[:20]:
+            try:
+                source = self._sources.get_source(reference.source_id)
+                if source and folder_name == "connected folders":
+                    folder_name = source.name or Path(source.path).name or folder_name
+                path = self._resolve_connected_file_path(reference)
+                extension = path.suffix.lower()
+                if extension not in READABLE_CONTENT_EXTENSIONS:
+                    skipped.append(DocumentSummarySkippedFile(relative_path=reference.relative_path, reason="File type is not readable for summaries."))
+                    continue
+                if path.stat().st_size > 5 * 1024 * 1024:
+                    skipped.append(DocumentSummarySkippedFile(relative_path=reference.relative_path, reason="File exceeds the 5 MB summary limit."))
+                    continue
+                remaining = max_total_chars - total_chars
+                if remaining <= 0:
+                    skipped.append(DocumentSummarySkippedFile(relative_path=reference.relative_path, reason="Summary text limit reached."))
+                    continue
+                text = self._extract_text(path, min(max_chars_per_file, remaining)).strip()
+                if not text:
+                    skipped.append(DocumentSummarySkippedFile(relative_path=reference.relative_path, reason="No readable text extracted."))
+                    continue
+                total_chars += len(text)
+                files.append(DocumentSummaryInputFile(relative_path=reference.relative_path, extension=extension, text=text))
+            except Exception as error:
+                skipped.append(DocumentSummarySkippedFile(relative_path=reference.relative_path, reason=str(error)))
+
+        if len(references) > 20:
+            warnings.append("Only the first 20 selected files were read for this summary.")
+        if total_chars >= max_total_chars:
+            warnings.append(f"Summary used the first {max_total_chars:,} extracted characters due to size limits.")
+        return files, skipped, warnings, folder_name
 
     def _source_allowed_for_search(self, source: ConnectorSource, request: IndexedFileSearchRequest) -> bool:
         if request.source_ids and source.id not in request.source_ids:

@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.core.dependencies import get_event_repository, get_task_repository
+from app.core.dependencies import get_event_repository, get_file_task_repository, get_task_repository
 from app.domain.enums import EmbeddingStatus, EventSource, TaskStatus, TaskType
 from app.integrations.tools.mock_email_tool import MockEmailTool
 from app.integrations.tools.mock_github_tool import MockGitHubTool
 from app.integrations.tools.mock_jira_tool import MockJiraTool
-from app.repositories.base import EventRepository, TaskRepository
+from app.repositories.base import EventRepository, FileTaskRepository, TaskRepository
 from app.schemas.tasks import (
     TaskCancelRequest,
     TaskConfirmRequest,
@@ -28,9 +28,11 @@ class TaskService:
         self,
         task_repository: TaskRepository | None = None,
         event_repository: EventRepository | None = None,
+        file_task_repository: FileTaskRepository | None = None,
     ) -> None:
         self._task_repository = task_repository or get_task_repository()
         self._event_repository = event_repository or get_event_repository()
+        self._file_task_repository = file_task_repository or get_file_task_repository()
         self._pending_confirmations: dict[str, dict] = {}
         self._email_tool = MockEmailTool()
         self._jira_tool = MockJiraTool()
@@ -318,12 +320,15 @@ class TaskService:
             )
         return TaskHistoryResponse(tasks=items, total=len(items))
 
-    def clear_tasks(self) -> None:
+    def clear_tasks(self) -> int:
+        deleted_count = self.count_tasks()
         self._pending_confirmations.clear()
         self._task_repository.clear_tasks()
+        self._file_task_repository.clear()
+        return deleted_count
 
     def count_tasks(self) -> int:
-        return self._task_repository.count_tasks()
+        return self._task_repository.count_tasks() + self._file_task_repository.count()
 
     def _complete_read_only_task(self, task_type: TaskType, preview: TaskPreview) -> dict:
         if task_type == TaskType.suggest_branch_name:

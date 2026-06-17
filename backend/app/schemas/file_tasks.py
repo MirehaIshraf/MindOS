@@ -113,7 +113,7 @@ class DocumentSummaryPrepareRequest(BaseModel):
     files_skipped: list[DocumentSummarySkippedFile] = Field(default_factory=list)
     output_format: Literal["markdown", "text"] = "markdown"
     output_filename: str | None = None
-    summary_style: Literal["brief", "detailed", "file_by_file"] = "detailed"
+    summary_style: Literal["brief", "detailed", "file_by_file", "report"] = "detailed"
     model_id: str | None = None
 
     @field_validator("instruction", "folder_name")
@@ -138,7 +138,7 @@ class DocumentSummaryPrepareResponse(BaseModel):
     model_display_name: str | None = None
     planner_warning: str | None = None
     output_format: Literal["markdown", "text"] = "markdown"
-    summary_style: Literal["brief", "detailed", "file_by_file"] = "detailed"
+    summary_style: Literal["brief", "detailed", "file_by_file", "report"] = "detailed"
     topic: str | None = None
     naming_confidence: Literal["high", "medium", "low"] = "low"
     naming_method: Literal["llm", "deterministic", "fallback"] = "fallback"
@@ -150,7 +150,7 @@ class DocumentSummaryCompleteRequest(BaseModel):
     output_file_name: str
     files_used_count: int = Field(default=0, ge=0)
     files_skipped_count: int = Field(default=0, ge=0)
-    summary_style: Literal["brief", "detailed", "file_by_file"] = "detailed"
+    summary_style: Literal["brief", "detailed", "file_by_file", "report"] = "detailed"
     output_format: Literal["markdown", "text"] = "markdown"
     file_types_used: list[str] = Field(default_factory=list)
     summary_title: str | None = None
@@ -170,6 +170,123 @@ class DocumentSummaryCompleteResponse(BaseModel):
     task_type: str = "document_summary"
     memory_event_id: str | None = None
     warning: str | None = None
+
+
+class IndexedDocumentSummaryFileReference(BaseModel):
+    source_id: str
+    relative_path: str
+
+    @field_validator("source_id", "relative_path")
+    @classmethod
+    def indexed_file_reference_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be empty")
+        return value.strip()
+
+
+class IndexedDocumentSummaryPrepareRequest(BaseModel):
+    query: str
+    style: Literal["brief", "detailed", "file_by_file", "report"] = "detailed"
+    output_format: Literal["markdown", "text"] = "markdown"
+    output_filename: str | None = None
+    files: list[IndexedDocumentSummaryFileReference] = Field(default_factory=list)
+    model_id: str | None = None
+
+    @field_validator("query")
+    @classmethod
+    def indexed_summary_query_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be empty")
+        return value.strip()
+
+
+class GeneratedSummaryOutputFile(BaseModel):
+    file_name: str
+    path: str
+    size_bytes: int
+
+
+class GeneratedSummarySaveRequest(BaseModel):
+    task_id: str
+    output_filename: str
+    content: str
+
+    @field_validator("task_id", "output_filename", "content")
+    @classmethod
+    def generated_output_values_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be empty")
+        return value
+
+
+class GeneratedSummarySaveResponse(BaseModel):
+    ok: bool = True
+    output_file: GeneratedSummaryOutputFile
+
+
+class LogAnalysisFileReference(BaseModel):
+    source_id: str
+    relative_path: str
+
+    @field_validator("source_id", "relative_path")
+    @classmethod
+    def log_file_reference_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be empty")
+        return value.strip()
+
+
+class LogAnalysisPrepareRequest(BaseModel):
+    query: str
+    files: list[LogAnalysisFileReference] = Field(default_factory=list)
+    output_format: Literal["markdown"] = "markdown"
+    output_filename: str | None = None
+    model_id: str | None = None
+
+    @field_validator("query")
+    @classmethod
+    def log_analysis_query_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be empty")
+        return value.strip()
+
+
+class LogEvidenceFile(BaseModel):
+    relative_path: str
+    error_lines: list[str] = Field(default_factory=list)
+    surrounding_context: list[str] = Field(default_factory=list)
+    repeated_patterns: list[str] = Field(default_factory=list)
+    last_lines: list[str] = Field(default_factory=list)
+    chars_used: int = 0
+
+
+class LogAnalysisPrepareResponse(BaseModel):
+    task_id: str
+    status: Literal["preview", "empty", "failed"]
+    report_title: str
+    report_markdown: str
+    files_used: list[str] = Field(default_factory=list)
+    files_skipped: list[DocumentSummarySkippedFile] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    output_filename_suggestion: str = "log-error-analysis-report.md"
+    evidence: list[LogEvidenceFile] = Field(default_factory=list)
+    model: str | None = None
+    provider: str | None = None
+    model_display_name: str | None = None
+    planner_warning: str | None = None
+
+
+class LogAnalysisSaveRequest(BaseModel):
+    task_id: str
+    output_filename: str
+    report_markdown: str
+
+    @field_validator("task_id", "output_filename", "report_markdown")
+    @classmethod
+    def log_analysis_save_values_must_not_be_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must not be empty")
+        return value
 
 
 class FileOperation(BaseModel):

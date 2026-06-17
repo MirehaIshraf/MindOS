@@ -565,6 +565,11 @@ export type TaskHistoryResponse = {
   total: number;
 };
 
+export type TaskHistoryClearResponse = {
+  ok: boolean;
+  deleted_count: number;
+};
+
 export type ActionRiskLevel = "safe" | "low" | "medium" | "high";
 
 export type ActionCapability = {
@@ -582,6 +587,7 @@ export type ActionCapabilityRegistry = {
 export type PreparedTaskAction = {
   id: string;
   action_type:
+    | "multi_step"
     | "gmail.createDraft"
     | "gmail.searchEmails"
     | "gmail.summarizeEmails"
@@ -594,6 +600,9 @@ export type PreparedTaskAction = {
     | "github.createPullRequest"
     | "file.organize"
     | "document.summary"
+    | "document.summaryFromSearch"
+    | "document.reportFromSearch"
+    | "log.analyzeFromSearch"
     | "unsupported";
   title: string;
   summary: string;
@@ -605,6 +614,79 @@ export type PreparedTaskAction = {
   preview: Record<string, unknown>;
   sources: Array<Record<string, unknown>>;
   created_at: string;
+};
+
+export type TaskIntentPlanStep = {
+  id: string;
+  type:
+    | "file.search_connected_folders"
+    | "file.select_candidates"
+    | "document.summarize_selected_files"
+    | "document.create_report_from_files"
+    | "document.create_output_file"
+    | "log.search_connected_logs"
+    | "log.analyze_selected_files"
+    | "gmail.create_draft"
+    | "gmail.send_email_after_confirmation"
+    | "gmail.attach_selected_files"
+    | "task.ask_user_to_choose_files"
+    | "unsupported";
+  query?: string | null;
+  purpose?: string | null;
+  requires_user_selection: boolean;
+  requires_confirmation: boolean;
+  to: string[];
+  subject_hint?: string | null;
+  body_hint?: string | null;
+  attachments_from_step?: string | null;
+  files_from_step?: string | null;
+  extensions: string[];
+  latest_preference: boolean;
+  exact_file_hint?: string | null;
+  output_format?: string | null;
+  filename_hint?: string | null;
+};
+
+export type TaskIntentPrepareRequest = {
+  instruction: string;
+  model_id?: string | null;
+  use_llm_planner?: boolean;
+};
+
+export type TaskIntentPrepareResponse = {
+  intent: "multi_step" | "single_step" | "unsupported";
+  primary_action: string;
+  risk_level: ActionRiskLevel;
+  requires_user_selection: boolean;
+  requires_confirmation: boolean;
+  entities: {
+    recipients: string[];
+    file_queries: string[];
+    topic_queries: string[];
+    explicit_file_names: string[];
+    action_words: string[];
+    connector_words: string[];
+    attachment_words: string[];
+    output_words: string[];
+    risk_words: string[];
+    date_range?: string | null;
+    output_format?: string | null;
+    extensions: string[];
+    latest_preference: boolean;
+    exact_file_hint?: string | null;
+    possible_intents: string[];
+  };
+  steps: TaskIntentPlanStep[];
+  explanation: string;
+  user_facing_summary?: string;
+  confidence: number;
+  source_type: string;
+  needs_file_search: boolean;
+  needs_user_file_selection: boolean;
+  needs_output_file: boolean;
+  planner_method: "llm" | "deterministic" | "fallback";
+  warnings: string[];
+  validation_repairs: string[];
 };
 
 export type TaskActionExecuteRequest = {
@@ -748,7 +830,7 @@ export type FileTaskRecentResponse = {
   total: number;
 };
 
-export type DocumentSummaryStyle = "brief" | "detailed" | "file_by_file";
+export type DocumentSummaryStyle = "brief" | "detailed" | "file_by_file" | "report";
 
 export type DocumentSummaryPrepareRequest = {
   instruction: string;
@@ -807,6 +889,69 @@ export type DocumentSummaryCompleteResponse = {
   task_type: "document_summary";
   memory_event_id?: string | null;
   warning?: string | null;
+};
+
+export type IndexedDocumentSummaryPrepareRequest = {
+  query: string;
+  style?: DocumentSummaryStyle;
+  output_format?: "markdown" | "text";
+  output_filename?: string | null;
+  files: IndexedAttachmentReference[];
+  model_id?: string | null;
+};
+
+export type GeneratedSummarySaveRequest = {
+  task_id: string;
+  output_filename: string;
+  content: string;
+};
+
+export type GeneratedSummarySaveResponse = {
+  ok: boolean;
+  output_file: {
+    file_name: string;
+    path: string;
+    size_bytes: number;
+  };
+};
+
+export type LogAnalysisPrepareRequest = {
+  query: string;
+  files: IndexedAttachmentReference[];
+  output_format?: "markdown";
+  output_filename?: string | null;
+  model_id?: string | null;
+};
+
+export type LogEvidenceFile = {
+  relative_path: string;
+  error_lines: string[];
+  surrounding_context: string[];
+  repeated_patterns: string[];
+  last_lines: string[];
+  chars_used: number;
+};
+
+export type LogAnalysisPrepareResponse = {
+  task_id: string;
+  status: "preview" | "empty" | "failed";
+  report_title: string;
+  report_markdown: string;
+  files_used: string[];
+  files_skipped: Array<{ relative_path: string; reason: string }>;
+  warnings: string[];
+  output_filename_suggestion: string;
+  evidence: LogEvidenceFile[];
+  model?: string | null;
+  provider?: string | null;
+  model_display_name?: string | null;
+  planner_warning?: string | null;
+};
+
+export type LogAnalysisSaveRequest = {
+  task_id: string;
+  output_filename: string;
+  report_markdown: string;
 };
 
 export type Connector = {
@@ -972,6 +1117,8 @@ export type IndexedFileSearchRequest = {
   search_filename?: boolean;
   connected_sources_only?: boolean;
   attachable_only?: boolean;
+  readable_only?: boolean;
+  latest_preference?: boolean;
   limit?: number;
 };
 
@@ -988,6 +1135,8 @@ export type IndexedFileSearchMatch = {
   matched_excerpt: string;
   content_index_status: string;
   attachable: boolean;
+  readable?: boolean;
+  source_name?: string | null;
 };
 
 export type IndexedFileSearchResponse = {

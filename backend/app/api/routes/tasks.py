@@ -5,19 +5,26 @@ from fastapi import APIRouter, HTTPException, Query
 from app.schemas.tasks import (
     TaskCancelRequest,
     TaskConfirmRequest,
+    TaskHistoryClearResponse,
     TaskExecuteRequest,
     TaskHistoryResponse,
     TaskPlanningRequest,
     TaskPlanningResponse,
     TaskResponse,
 )
-from app.schemas.task_actions import ActionCapabilityRegistry, TaskActionExecuteRequest, TaskActionExecuteResponse
+from app.schemas.task_actions import ActionCapabilityRegistry, TaskActionExecuteRequest, TaskActionExecuteResponse, TaskIntentPrepareRequest, TaskIntentPrepareResponse
 from app.schemas.file_tasks import (
     DocumentSummaryCompleteRequest,
     DocumentSummaryCompleteResponse,
     DocumentSummaryPrepareRequest,
     DocumentSummaryPrepareResponse,
     FileSnapshotResponse,
+    GeneratedSummarySaveRequest,
+    GeneratedSummarySaveResponse,
+    IndexedDocumentSummaryPrepareRequest,
+    LogAnalysisPrepareRequest,
+    LogAnalysisPrepareResponse,
+    LogAnalysisSaveRequest,
     FileTaskExecuteRequest,
     FileTaskExecutionResult,
     FileTaskLlmPlanRequest,
@@ -37,7 +44,9 @@ from app.services.file_task_llm_planner_service import file_task_llm_planner_ser
 from app.services.file_task_planner_service import file_task_planner_service
 from app.services.file_snapshot_service import file_snapshot_service
 from app.services.gmail_draft_planner import gmail_draft_planner
+from app.services.log_analysis_task_service import log_analysis_task_service
 from app.services.task_action_execution_service import TaskActionExecutionError, task_action_execution_service
+from app.services.task_intent_planner_service import task_intent_planner_service
 from app.services.task_service import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -67,6 +76,17 @@ def plan_task(request: TaskPlanningRequest) -> TaskPlanningResponse:
         raise HTTPException(status_code=500, detail=f"Task planning failed: {error}") from error
 
 
+@router.post("/prepare", response_model=TaskIntentPrepareResponse)
+def prepare_task_intent(request: TaskIntentPrepareRequest) -> TaskIntentPrepareResponse:
+    try:
+        return task_intent_planner_service.prepare(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare task intent")
+        raise HTTPException(status_code=500, detail=f"Task preparation failed: {error}") from error
+
+
 @router.post("/confirm", response_model=TaskResponse)
 def confirm_task(request: TaskConfirmRequest) -> TaskResponse:
     return task_service.confirm_task(request)
@@ -90,6 +110,11 @@ def pending_tasks() -> TaskHistoryResponse:
 @router.get("/history", response_model=TaskHistoryResponse)
 def task_history(limit: int = Query(default=20, ge=1, le=100)) -> TaskHistoryResponse:
     return task_service.list_history(limit=limit)
+
+
+@router.delete("/history", response_model=TaskHistoryClearResponse)
+def clear_task_history() -> TaskHistoryClearResponse:
+    return TaskHistoryClearResponse(deleted_count=task_service.clear_tasks())
 
 
 @router.get("/actions/capabilities", response_model=ActionCapabilityRegistry)
@@ -179,6 +204,50 @@ def prepare_document_summary_task(request: DocumentSummaryPrepareRequest) -> Doc
     except Exception as error:
         logger.exception("Failed to prepare document summary")
         raise HTTPException(status_code=500, detail=f"Document summary preparation failed: {error}") from error
+
+
+@router.post("/document/summary/from-indexed-files", response_model=DocumentSummaryPrepareResponse)
+def prepare_document_summary_from_indexed_files(request: IndexedDocumentSummaryPrepareRequest) -> DocumentSummaryPrepareResponse:
+    try:
+        return document_summary_task_service.prepare_summary_from_indexed_files(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare document summary from indexed files")
+        raise HTTPException(status_code=500, detail=f"Indexed document summary preparation failed: {error}") from error
+
+
+@router.post("/document/summary/save-output", response_model=GeneratedSummarySaveResponse)
+def save_generated_document_summary_output(request: GeneratedSummarySaveRequest) -> GeneratedSummarySaveResponse:
+    try:
+        return document_summary_task_service.save_output(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to save generated summary output")
+        raise HTTPException(status_code=500, detail=f"Generated summary save failed: {error}") from error
+
+
+@router.post("/logs/analyze/prepare", response_model=LogAnalysisPrepareResponse)
+def prepare_log_analysis_report(request: LogAnalysisPrepareRequest) -> LogAnalysisPrepareResponse:
+    try:
+        return log_analysis_task_service.prepare(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare log analysis report")
+        raise HTTPException(status_code=500, detail=f"Log analysis failed: {error}") from error
+
+
+@router.post("/logs/analyze/save", response_model=GeneratedSummarySaveResponse)
+def save_log_analysis_report(request: LogAnalysisSaveRequest) -> GeneratedSummarySaveResponse:
+    try:
+        return log_analysis_task_service.save(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to save log analysis report")
+        raise HTTPException(status_code=500, detail=f"Log analysis report save failed: {error}") from error
 
 
 @router.post("/document/summary/complete", response_model=DocumentSummaryCompleteResponse)
