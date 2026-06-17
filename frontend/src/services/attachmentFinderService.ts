@@ -25,9 +25,11 @@ export type AttachmentCandidate = {
   path?: string;
   relative_path?: string;
   source_id?: string;
+  generated_id?: string;
+  mime_type?: string;
   size_bytes: number;
   extension: string;
-  source: "manual_picker" | "recent_task_output" | "selected_folder_scan" | "file_index";
+  source: "manual_picker" | "recent_task_output" | "selected_folder_scan" | "file_index" | "generated_output";
   modified_at?: string;
   score: number;
   reason: string;
@@ -281,7 +283,7 @@ export function candidatesFromManualFiles(files: File[]): AttachmentCandidate[] 
 export function validateAttachments(candidates: AttachmentCandidate[]) {
   const selected = selectedAttachmentCandidates(candidates);
   const blocked = selected.filter((candidate) => GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS.has(extensionForName(candidate.name)));
-  const unavailable = selected.filter((candidate) => !candidate.file && !isIndexedAttachmentCandidate(candidate));
+  const unavailable = selected.filter((candidate) => !candidate.file && !isIndexedAttachmentCandidate(candidate) && !isGeneratedAttachmentCandidate(candidate));
   const totalBytes = selected.reduce((total, candidate) => total + candidate.size_bytes, 0);
   const warnings: string[] = [];
   if (blocked.length) warnings.push(`Remove blocked attachment: ${blocked[0].name}`);
@@ -304,8 +306,18 @@ export function selectedIndexedAttachments(candidates: AttachmentCandidate[]) {
     .map((candidate) => ({ source_id: candidate.source_id as string, relative_path: candidate.relative_path as string }));
 }
 
+export function selectedGeneratedAttachments(candidates: AttachmentCandidate[]) {
+  return selectedAttachmentCandidates(candidates)
+    .filter(isGeneratedAttachmentCandidate)
+    .map((candidate) => ({ id: candidate.generated_id as string, file_name: candidate.name }));
+}
+
 export function isIndexedAttachmentCandidate(candidate: AttachmentCandidate) {
   return candidate.source === "file_index" && Boolean(candidate.source_id && candidate.relative_path && !candidate.unavailableReason);
+}
+
+export function isGeneratedAttachmentCandidate(candidate: AttachmentCandidate) {
+  return candidate.source === "generated_output" && Boolean(candidate.generated_id && candidate.name && !candidate.unavailableReason);
 }
 
 function scoreCandidate({

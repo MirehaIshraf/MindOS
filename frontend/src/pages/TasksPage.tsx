@@ -48,6 +48,7 @@ import {
   isIndexedAttachmentCandidate,
   selectedAttachmentCandidates,
   selectedAttachmentFiles,
+  selectedGeneratedAttachments,
   selectedIndexedAttachments,
   validateAttachments,
   type AttachmentCandidate,
@@ -70,6 +71,7 @@ import type {
   FileTaskPlan,
   GmailDraftResponse,
   GmailStatusResponse,
+  GeneratedSummarySaveResponse,
   IndexedFileSearchMatch,
   LogAnalysisPrepareResponse,
   ModelConfig,
@@ -1100,7 +1102,7 @@ export function TasksPage() {
           extensions: plan.entities.extensions,
           limit: 20,
         });
-        matches = response.matches.filter(isLogLikeSearchMatch);
+        matches = response.matches;
         const readableMatches = matches.filter((match) => Boolean(match.readable));
         selectedKeys =
           readableMatches.length === 1 && readableMatches[0].score >= 0.6
@@ -1357,6 +1359,7 @@ export function TasksPage() {
       const selectedAttachments = selectedAttachmentCandidates(gmailAttachmentCandidates);
       const selectedManualFiles = selectedAttachmentFiles(gmailAttachmentCandidates);
       const selectedIndexedRefs = selectedIndexedAttachments(gmailAttachmentCandidates);
+      const selectedGeneratedRefs = selectedGeneratedAttachments(gmailAttachmentCandidates);
       const attachmentValidation = validateAttachments(gmailAttachmentCandidates);
       if (!attachmentValidation.ok) {
         setGmailDraftMessage(attachmentValidation.warnings[0]);
@@ -1378,6 +1381,7 @@ export function TasksPage() {
             confirmation: true,
             attachments: attachmentFiles,
             indexed_attachments: selectedIndexedRefs,
+            generated_attachments: selectedGeneratedRefs,
           });
           messageId = sent.message_id ?? null;
           result = {
@@ -1396,6 +1400,7 @@ export function TasksPage() {
             body: gmailDraft.body,
             attachments: attachmentFiles,
             indexed_attachments: selectedIndexedRefs,
+            generated_attachments: selectedGeneratedRefs,
           });
           draftId = draftResponse.draft_id;
           messageId = draftResponse.message_id ?? null;
@@ -1654,6 +1659,14 @@ export function TasksPage() {
         },
       });
       setSummarySaveMessage(`Saved report: ${saved.output_file.file_name}. Original log files were not changed.`);
+      if (taskIntentPlan && gmailStepFromPlan(taskIntentPlan)) {
+        await prepareGeneratedSummaryEmail(saved.output_file, {
+          title: logAnalysisReport.report_title || "Log analysis report",
+          summaryKind: "report",
+          sourceFiles: logAnalysisReport.files_used,
+          sourceSummary: `Created log analysis report from ${logAnalysisReport.files_used.length} selected log file(s).`,
+        });
+      }
     } catch (error) {
       setSummarySaveMessage(getErrorMessage(error));
     } finally {
@@ -1768,8 +1781,13 @@ export function TasksPage() {
         },
       });
       setSummarySaveMessage(message);
-      if (fileSearchSelection?.emailRecipient) {
-        await prepareGeneratedSummaryEmail(savedFileName, documentSummary.summary_markdown, fileSearchSelection.emailRecipient);
+      if (taskIntentPlan && gmailStepFromPlan(taskIntentPlan)) {
+        await prepareGeneratedSummaryEmail(response.output_file, {
+          title: documentSummary.summary_title || "Created summary report",
+          summaryKind: documentSummary.summary_style === "report" ? "report" : "summary",
+          sourceFiles: documentSummary.files_used,
+          sourceSummary: `Created ${documentSummary.summary_style === "report" ? "report" : "summary"} from ${documentSummary.files_used.length} selected file(s).`,
+        });
       }
     } catch (error) {
       setSummarySaveMessage(getErrorMessage(error));
@@ -1778,59 +1796,95 @@ export function TasksPage() {
     }
   }
 
-  async function prepareGeneratedSummaryEmail(fileName: string, content: string, recipient: string) {
-    const file = new File([content], fileName, { type: fileName.endsWith(".txt") ? "text/plain" : "text/markdown" });
+  async function prepareGeneratedSummaryEmail(
+    outputFile: GeneratedSummarySaveResponse["output_file"],
+    context: { title: string; summaryKind: "summary" | "report"; sourceFiles: string[]; sourceSummary: string },
+  ) {
+    const emailStep = taskIntentPlan ? gmailStepFromPlan(taskIntentPlan) : null;
+    const recipient = fileSearchSelection?.emailRecipient || emailStep?.to[0] || taskIntentPlan?.entities.recipients[0] || extractEmailAddress(command) || "";
+    const fileName = outputFile.file_name;
     const capabilities = await getTaskActionCapabilities();
     const status = await getGmailStatus();
     setActionCapabilities(capabilities);
     setGmailStatus(status);
+    const wantsSend = emailStep?.type === "gmail.send_email_after_confirmation";
     const sendAvailable = Boolean(capabilities.capabilities["gmail.sendEmail"]?.available || status.capabilities?.send_email);
     const draftAvailable = Boolean(capabilities.capabilities["gmail.createDraft"]?.available || (status.connected && status.capabilities?.create_draft));
-    const executionActionType: TaskActionType = sendAvailable ? "gmail.sendEmail" : "gmail.createDraft";
-    const subject = documentSummary?.summary_title || `Summary: ${fileSearchSelection?.query || "selected files"}`;
+    const executionActionType: TaskActionType = wantsSend ? "gmail.sendEmail" : "gmail.createDraft";
+    const canExecute = wantsSend ? sendAvailable : draftAvailable;
+    const subjectFallback = context.title || `${context.summaryKind === "report" ? "Report" : "Summary"}: ${fileSearchSelection?.query || "selected files"}`;
+    let subject = subjectFallback;
+    let body = `Hello,\n\nI've attached the ${context.summaryKind} file: ${fileName}. Please review it and let me know if you need any changes or additional details.\n\nBest regards,`;
+    try {
+      const selectedModel = await getSelectedChatModel();
+      const planned = await prepareGmailDraft({
+        instruction: command.trim() || `Email the generated ${context.summaryKind}.`,
+        connected_email: status.email_address ?? null,
+        recent_tasks: [
+          {
+            type: context.summaryKind === "report" ? "log_analysis_report" : "document_summary",
+            title: context.title,
+            summary: `${context.sourceSummary} Output: ${fileName}. Source files: ${context.sourceFiles.slice(0, 6).join(", ")}.`,
+            status: "completed",
+            context_name: "MindOS outputs",
+            output_file_name: fileName,
+          },
+        ],
+        attachment_filenames: [fileName],
+        model_id: selectedModel?.id ?? null,
+      });
+      const useFallbackBody = planned.warnings.some((warning) => warning.toLowerCase().includes("ai drafting was unavailable"));
+      subject = planned.subject && !useFallbackBody ? planned.subject : subjectFallback;
+      body = planned.body && !useFallbackBody ? planned.body : body;
+    } catch {
+      // Keep deterministic body if the draft planner is unavailable.
+    }
     const draft = {
       to: recipient,
       cc: "",
       bcc: "",
       subject,
-      body: `Hi,\n\nI attached the generated summary file: ${fileName}.\n\nBest,\nMindOS`,
+      body,
       message_id: "",
     };
     setGmailDraft(draft);
     setGmailAttachmentCandidates([
       {
-        id: `generated:${fileName}:${Date.now()}`,
+        id: outputFile.id,
+        generated_id: outputFile.id,
         name: fileName,
-        size_bytes: file.size,
-        extension: fileName.endsWith(".txt") ? ".txt" : ".md",
-        source: "manual_picker",
+        path: outputFile.path,
+        size_bytes: outputFile.size_bytes,
+        extension: extensionForFileName(fileName),
+        mime_type: outputFile.mime_type,
+        source: "generated_output",
         score: 100,
-        reason: "Generated summary output.",
+        reason: `Generated ${context.summaryKind}.`,
         selected: true,
-        file,
       },
     ]);
     setPreparedAction({
       id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      actionType: "gmail.sendEmail",
-      label: "Send generated report",
+      actionType: executionActionType,
+      label: wantsSend ? "Send generated report" : "Create draft with generated report",
       supported: true,
-      title: "Gmail send preview",
-      summary: `Send generated summary to ${recipient}.`,
-      riskLevel: "high",
+      title: wantsSend ? "Gmail send preview" : "Gmail draft preview",
+      summary: wantsSend ? `Send generated ${context.summaryKind} to ${recipient}.` : `Create Gmail draft with generated ${context.summaryKind}.`,
+      riskLevel: wantsSend ? "high" : "medium",
       requiresConfirmation: true,
       executionActionType,
-      canExecute: sendAvailable || draftAvailable,
-      blockedReasons: sendAvailable || draftAvailable ? [] : ["Gmail is not connected. You can still use the saved summary file."],
-      missingRequirements: sendAvailable || draftAvailable ? [] : ["gmail.sendEmail"],
+      canExecute,
+      blockedReasons: canExecute ? [] : [status.connected ? "Required Gmail capability is not available." : `Report created. Gmail is not connected, so MindOS cannot ${wantsSend ? "send it" : "create a draft"} yet.`],
+      missingRequirements: canExecute ? [] : [wantsSend ? "gmail.sendEmail" : "gmail.createDraft"],
       sources: [
         { type: "file_search", status: "available" },
         { type: "gmail", status: status.connected ? "connected" : "disconnected" },
       ],
       preview: {
         ...draft,
-        note: "Review this Gmail preview. The generated summary file is attached.",
-        sourceSummary: `Generated from ${documentSummary?.files_used.length || 0} selected file(s).`,
+        note: wantsSend ? "Review this Gmail preview. The generated file is attached and will only be sent after confirmation." : "Review this Gmail preview. The generated file is attached and will only become a draft after confirmation.",
+        sourceSummary: context.sourceSummary,
+        attachmentIntent: true,
       },
     });
     setUiState("action_preview");
@@ -4441,6 +4495,7 @@ function formatShortDate(value: string) {
 
 function attachmentSourceLabel(source: AttachmentCandidate["source"]) {
   if (source === "manual_picker") return "Manual";
+  if (source === "generated_output") return "Generated report";
   if (source === "recent_task_output") return "Recent task";
   if (source === "selected_folder_scan") return "Selected folder";
   return "Connected folder";
@@ -4474,7 +4529,13 @@ function rankAttachmentCandidates(candidates: AttachmentCandidate[], latestPrefe
 function isAttachmentCandidateSelectable(candidate: AttachmentCandidate) {
   if (candidate.unavailableReason) return false;
   if (candidate.file) return true;
+  if (candidate.source === "generated_output" && candidate.generated_id) return true;
   return isIndexedAttachmentCandidate(candidate);
+}
+
+function extensionForFileName(fileName: string) {
+  const index = fileName.lastIndexOf(".");
+  return index > 0 ? fileName.slice(index).toLowerCase() : "";
 }
 
 function readableMatchReason(reason: string) {

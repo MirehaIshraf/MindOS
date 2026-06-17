@@ -909,9 +909,14 @@ export type GeneratedSummarySaveRequest = {
 export type GeneratedSummarySaveResponse = {
   ok: boolean;
   output_file: {
+    id: string;
     file_name: string;
     path: string;
     size_bytes: number;
+    mime_type: string;
+    source_task_id?: string | null;
+    source_step_id?: string | null;
+    selected?: boolean;
   };
 };
 
@@ -1146,6 +1151,11 @@ export type IndexedFileSearchResponse = {
 export type IndexedAttachmentReference = {
   source_id: string;
   relative_path: string;
+};
+
+export type GeneratedOutputAttachmentReference = {
+  id: string;
+  file_name: string;
 };
 
 export type ResolvedIndexedAttachment = {
@@ -1405,6 +1415,7 @@ export type GmailDraftRequest = {
   subject: string;
   body: string;
   indexed_attachments?: IndexedAttachmentReference[];
+  generated_attachments?: GeneratedOutputAttachmentReference[];
 };
 
 export type GmailDraftResponse = {
@@ -1422,6 +1433,7 @@ export type GmailSendRequest = {
   body: string;
   confirmation: boolean;
   indexed_attachments?: IndexedAttachmentReference[];
+  generated_attachments?: GeneratedOutputAttachmentReference[];
 };
 
 export type GmailSendResponse = {

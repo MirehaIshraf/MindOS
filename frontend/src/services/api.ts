@@ -93,6 +93,7 @@ import type {
   IndexedFileSearchResponse,
   IndexedDocumentSummaryPrepareRequest,
   IndexedAttachmentReference,
+  GeneratedOutputAttachmentReference,
   ModelConfig,
   ModelSettingsResponse,
   IngestEventRequest,
@@ -859,7 +860,7 @@ export async function createGmailDraft(payload: GmailDraftRequest | FormData): P
   return response.data;
 }
 
-export async function createGmailDraftWithAttachments(payload: GmailDraftRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[] }): Promise<GmailDraftResponse> {
+export async function createGmailDraftWithAttachments(payload: GmailDraftRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[]; generated_attachments?: GeneratedOutputAttachmentReference[] }): Promise<GmailDraftResponse> {
   const response = await api.post<GmailDraftResponse>("/connectors/gmail/drafts", buildGmailMultipartFormData(payload, false));
   return response.data;
 }
@@ -874,7 +875,7 @@ export async function sendGmailMessage(payload: GmailSendRequest | FormData): Pr
   return response.data;
 }
 
-export async function sendGmailMessageWithAttachments(payload: GmailSendRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[] }): Promise<GmailSendResponse> {
+export async function sendGmailMessageWithAttachments(payload: GmailSendRequest & { attachments: File[]; indexed_attachments?: IndexedAttachmentReference[]; generated_attachments?: GeneratedOutputAttachmentReference[] }): Promise<GmailSendResponse> {
   const response = await api.post<GmailSendResponse>(
     "/connectors/gmail/send",
     buildGmailMultipartFormData(
@@ -897,6 +898,7 @@ function buildGmailMultipartFormData(
     body: string;
     attachments: File[];
     indexed_attachments?: IndexedAttachmentReference[];
+    generated_attachments?: GeneratedOutputAttachmentReference[];
   },
   confirmation: boolean,
 ) {
@@ -909,6 +911,9 @@ function buildGmailMultipartFormData(
   formData.append("confirmation", String(confirmation));
   if (payload.indexed_attachments?.length) {
     formData.append("indexed_attachments", JSON.stringify(payload.indexed_attachments));
+  }
+  if (payload.generated_attachments?.length) {
+    formData.append("generated_attachments", JSON.stringify(payload.generated_attachments));
   }
   payload.attachments.forEach((file) => formData.append("attachments", file, file.name));
   return formData;
