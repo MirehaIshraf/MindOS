@@ -139,6 +139,7 @@ Before adding a new feature:
 - Gmail attachments must never be added silently. Show attachment candidates or manual file choices in preview, require user selection and confirmation, block dangerous file types, enforce size limits, and never store attachment contents in Memory or Task History. Attachment filenames may appear in lightweight Task History.
 - Gmail indexed attachments must be resolved from connected File System source ids plus relative paths on the backend. Never trust frontend absolute paths, never search outside connected indexed folders, and never send attachment contents to an LLM or Memory.
 - Attachment discovery must search connected folder file inventory as well as content-indexed memory. A safe file whose text extraction failed can still be found by filename and attached after user selection and confirmation.
+- Connected-folder file search summary tasks must search only user-connected indexed File System folders. Show matched files with user selection before reading file contents unless the user selected exact files explicitly. Generated summaries/reports may be saved as new non-overwriting output files, and Gmail send of a generated report still requires a separate editable preview and final confirmation.
 - Generic Email MCP remains provider-agnostic for custom/corporate/internal providers and should not be confused with Gmail.
 - Future GitHub/local Git write actions require preview, exact capability checks, and explicit confirmation. GitHub API actions belong to the GitHub connector; local repo status/diff/commit/push belongs to the local Git connector.
 - Git commit/push tasks must use allowlisted Git commands only.
@@ -175,6 +176,10 @@ Generated document summary filenames must be sanitized, should use meaningful in
 
 Tasks must render action-specific workflows. Do not make the Tasks page file-system-first for every command: folder picker, scan, and file plan controls should appear only for file organization and document summary actions. Gmail draft/send tasks should show an editable Gmail preview, optional user-selected attachments, and a final confirmation before any send.
 
+Task intent should not be rule-only for multi-step work. Use hybrid deterministic hints plus LLM planning where available, validate allowed steps, and fall back to exact deterministic plans. File-dependent Gmail tasks must search connected folders and show file candidates before generating the Gmail preview.
+
+Do not rely on rule-only task categorization for dynamic user requests. The selected LLM should produce a structured task plan when available, while deterministic code extracts hints and provides exact fallback only. Backend validation must repair, clarify, or block unsafe/misclassified plans before any preview or execution.
+
 Gmail task actions use the dedicated Gmail connector. Generic Email MCP actions remain separate and should be used only for explicitly selected custom/corporate MCP provider tasks. Draft/send content must be generated from provided facts only, previewed, and editable before creation/send. Do not index Gmail draft bodies, sent bodies, attachment contents, or store email provider credentials in Memory.
 
 Never execute external side-effect actions without user confirmation. Gmail, GitHub, local Git, file, and future provider actions must follow preview -> capability check -> confirmation -> execution; never execute raw LLM tool calls. Email send must always require explicit confirmation immediately before execution.
@@ -183,5 +188,7 @@ Never silently disable risky action buttons. Always show a user-facing blocked r
 Do not create memory events for operational file tasks. File organize, move, copy, rename, create-folder, cleanup, scan, prepare, execute, and undo activity belongs in Task History only. Only completed document summary tasks should create indexed Memory events, and those events must stay lightweight.
 
 Do not store full source document text in task history or memory. This includes extracted PDF/DOCX text. Document summary task history should store only lightweight counts, filenames, folder names, output format, summary style, and file types.
+
+Clearing Task History must clear only task-history records and the browser-local Recent Tasks list. It must not delete Memory events, connector credentials/data, Gmail/email data, indexed file records, chats, settings, or files unless the user explicitly asks for those scopes.
 
 Future direction may include OpenClaw/Hermes-style agentic execution, but only after the data collection and memory layers are stable.

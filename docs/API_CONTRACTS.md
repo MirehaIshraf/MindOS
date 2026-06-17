@@ -187,18 +187,24 @@ Tasks are experimental. File/document/Gmail task POCs are active behind preview,
 - `GET /tasks`
 - `POST /tasks/execute`
 - `POST /tasks/plan`
+- `POST /tasks/prepare`: hybrid task intent planner for preview-first task flows. Request:
+  `{ "instruction": "find my resume and create a draft mail to send it to person@example.com", "model_id": null, "use_llm_planner": true }`.
+  Response:
+  `{ "intent": "multi_step", "primary_action": "gmail.createDraft", "confidence": 0.82, "source_type": "connected_files", "needs_file_search": true, "needs_user_file_selection": true, "needs_output_file": false, "risk_level": "medium", "requires_user_selection": true, "requires_confirmation": true, "entities": { "recipients": ["person@example.com"], "file_queries": ["resume cv curriculum vitae"], "topic_queries": [], "explicit_file_names": [], "extensions": [], "date_range": null, "output_format": null, "possible_intents": ["gmail.createDraft"] }, "steps": [{ "id": "step_1", "type": "file.search_connected_folders", "query": "resume cv curriculum vitae", "purpose": "Find resume attachment candidates", "requires_user_selection": true }, { "id": "step_2", "type": "gmail.create_draft", "to": ["person@example.com"], "attachments_from_step": "step_1", "requires_confirmation": true }], "user_facing_summary": "...", "explanation": "...", "planner_method": "llm|deterministic|fallback", "warnings": [], "validation_repairs": [] }`.
+  The planner never executes steps. It is LLM-first when a selected model is available: deterministic code extracts hints, the model returns JSON, then backend validation repairs or blocks unsafe/misclassified plans. Deterministic fallback is used only when the LLM is unavailable/invalid. Allowed step types are `file.search_connected_folders`, `file.select_candidates`, `document.summarize_selected_files`, `document.create_report_from_files`, `document.create_output_file`, `log.search_connected_logs`, `log.analyze_selected_files`, `gmail.create_draft`, `gmail.send_email_after_confirmation`, `gmail.attach_selected_files`, `task.ask_user_to_choose_files`, and `unsupported`. Unsafe model steps fall back or block.
 - `POST /tasks/confirm`
 - `POST /tasks/cancel`
 - `GET /tasks/pending`
 - `GET /tasks/history`
+- `DELETE /tasks/history`: clears local Task History only and returns `{ "ok": true, "deleted_count": 11 }`. It does not delete Memory events, connector credentials/data, chat history, Gmail/email data, indexed file records, or files.
 
 File System Task Adapter routes:
 
 - `POST /tasks/files/search`: search already-indexed connected folder files. It does not read arbitrary files during search. Request:
-  `{ "query": "resume cv curriculum vitae", "source_ids": ["..."], "extensions": [".pdf", ".docx"], "search_content": true, "search_filename": true, "connected_sources_only": true, "attachable_only": true, "limit": 20 }`.
+  `{ "query": "resume cv curriculum vitae", "source_ids": ["..."], "extensions": [".pdf", ".docx"], "search_content": true, "search_filename": true, "connected_sources_only": true, "attachable_only": true, "readable_only": false, "latest_preference": false, "limit": 20 }`.
   Response:
-  `{ "matches": [{ "event_id": null, "source_id": "...", "file_name": "resume.pdf", "relative_path": "CV/resume.pdf", "extension": ".pdf", "size_bytes": 12345, "modified_at": "...", "score": 0.87, "match_reason": "filename matched resume", "matched_excerpt": "", "content_index_status": "failed", "attachable": true }] }`.
-  Matches can come from file inventory even when content indexing failed, so `event_id` may be `null`. Content matches include `event_id`, `matched_excerpt`, and `content_index_status: "indexed"`. Inventory records are connector metadata, not Memory events.
+  `{ "matches": [{ "event_id": null, "source_id": "...", "source_name": "Downloads", "file_name": "resume.pdf", "relative_path": "CV/resume.pdf", "extension": ".pdf", "size_bytes": 12345, "modified_at": "...", "score": 0.87, "match_reason": "filename matched resume", "matched_excerpt": "", "content_index_status": "failed", "attachable": true, "readable": false }] }`.
+  Matches can come from file inventory even when content indexing failed, so `event_id` may be `null`. Content matches include `event_id`, `matched_excerpt`, `readable: true`, and `content_index_status: "indexed"`. Inventory records are connector metadata, not Memory events. `readable_only` limits results to files whose extracted text is available for summary/report tasks.
 - `POST /tasks/files/resolve-attachments`: resolve selected indexed file candidates before Gmail attachment use. Request:
   `{ "files": [{ "source_id": "...", "relative_path": "CV/resume.pdf" }] }`.
   Response:
@@ -223,6 +229,18 @@ File System Task Adapter routes:
   `{ "instruction": "Summarize these documents", "folder_name": "Notes", "files": [{ "relative_path": "notes.md", "extension": ".md", "text": "..." }], "files_skipped": [], "output_format": "markdown", "output_filename": "mindos-summary.md", "summary_style": "detailed" }`.
   Response includes `task_id`, `status`, `summary_title`, `summary_markdown`, `files_used`, `files_skipped`, `warnings`, `output_filename_suggestion`, `output_format`, `summary_style`, `topic`, `naming_confidence`, `naming_method`, `model`, `provider`, and `model_display_name`.
   The backend does not read files from disk for this endpoint. Browser-selected file text is extracted in the frontend with limits, then sent to the selected model for a preview. Frontend extraction supports `.txt`, `.md`, `.log`, `.json`, `.csv`, selectable-text `.pdf`, and `.docx`; no OCR is performed. Saving the summary file is a separate user-confirmed browser File System Access API action.
+- `POST /tasks/document/summary/from-indexed-files`: create a summary/report preview from selected connected-folder search results. Request:
+  `{ "query": "black hole", "style": "report", "output_format": "markdown", "output_filename": "black-hole-report.md", "files": [{ "source_id": "...", "relative_path": "research/black-holes.md" }], "model_id": null }`.
+  The backend resolves each file only inside its connected File System source root, reads bounded supported text from selected files, and returns the same `DocumentSummaryPrepareResponse` shape. It does not scan outside connected folders, modify originals, or create memory events.
+- `POST /tasks/document/summary/save-output`: save generated markdown/text output from a connected-folder summary/report. Request:
+  `{ "task_id": "...", "output_filename": "black-hole-report.md", "content": "# Black hole report\n..." }`.
+  Response includes `{ "task_id": "...", "status": "saved", "output_file": { "file_name": "black-hole-report.md", "path": "C:\\Users\\...\\.mindos\\outputs\\black-hole-report.md", "size_bytes": 1234 } }`. Filenames are sanitized and never overwritten; collisions receive a numeric suffix.
+- `POST /tasks/logs/analyze/prepare`: create a log analysis report preview from selected connected-folder log files. Request:
+  `{ "query": "database connection failure", "files": [{ "source_id": "...", "relative_path": "logs/app.log" }], "output_format": "markdown", "output_filename": "database-connection-log-report.md", "model_id": null }`.
+  Response includes `task_id`, `status`, `report_title`, `report_markdown`, `files_used`, `files_skipped`, `warnings`, `output_filename_suggestion`, redacted `evidence`, and model/provider metadata. The backend resolves files only inside enabled indexed File System sources, reads bounded `.log`/`.txt`/`.out`/`.err` content, redacts secrets before model use/report generation, and never modifies originals or creates Memory events.
+- `POST /tasks/logs/analyze/save`: save a generated log analysis report to the local MindOS outputs folder. Request:
+  `{ "task_id": "...", "output_filename": "database-connection-log-report.md", "report_markdown": "# Log Error Analysis\n..." }`.
+  Response matches the generated-output save response and never overwrites existing files; collisions receive a numeric suffix.
 - `POST /tasks/document/summary/complete`: record a completed document summary after the browser saves the output file. Request:
   `{ "task_id": "...", "folder_name": "Notes", "output_file_name": "capsule-networks-summary.md", "files_used_count": 3, "files_skipped_count": 1, "summary_style": "detailed", "output_format": "markdown", "file_types_used": ["pdf", "docx", "md"], "summary_title": "Summarized Capsule Networks documents", "topic": "Capsule Networks", "naming_confidence": "high" }`.
   Response includes `status`, `task_type`, optional `memory_event_id`, and optional `warning`.
@@ -252,7 +270,7 @@ Active task POCs are file organization, document summary, and Gmail draft/send. 
 
 - `POST /dev/sample-events`
 - `DELETE /dev/clear-events`
-- `DELETE /dev/clear-tasks`
+- `DELETE /dev/clear-tasks`: clears local Task History through the same task-history clearing path as `DELETE /tasks/history`; Memory events and connector data remain.
 - `DELETE /dev/clear-chats`
 - `POST /dev/rebuild-relationships`
 - `DELETE /dev/clear-relationships`
