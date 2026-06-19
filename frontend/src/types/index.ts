@@ -1568,3 +1568,56 @@ export type EmbeddingReindexResponse = {
   total: number;
   errors: Array<Record<string, unknown>>;
 };
+
+// --- MCP Server types ---
+
+export type McpServerStatus = {
+  server_id: string;
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+  connected: boolean;
+  configured: boolean;
+  tool_count: number;
+  categories: string[];
+  config: Record<string, unknown>;
+};
+
+export type McpServerListResponse = {
+  servers: McpServerStatus[];
+};
+
+export type McpServerToggleResponse = {
+  server_id: string;
+  enabled: boolean;
+  message: string;
+};
+
+export type McpServerConfigResponse = {
+  server_id: string;
+  config: Record<string, unknown>;
+  configured: boolean;
+  message: string;
+};
+
+export type McpToolInfo = {
+  name: string;
+  description: string;
+  side_effect: boolean;
+  category: string;
+  parameters: Array<Record<string, unknown>>;
+};
+
+export type McpToolListResponse = {
+  tools: McpToolInfo[];
+  server_id: string;
+};
+
+export type McpToolCallResponse = {
+  success: boolean;
+  data: unknown;
+  error: string | null;
+  requires_confirmation: boolean;
+  preview: Record<string, unknown> | null;
+};

@@ -17,6 +17,7 @@ import { Badge } from "../components/shared/Badge";
 import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
+import { McpServerSection } from "../components/McpServerSection";
 import {
   addTrackedFolder,
   clearConnectorSourceEvents,
@@ -519,6 +520,8 @@ export function ConnectorsPage() {
           )}
         </aside>
       </div>
+
+      <McpServerSection />
     </div>
   );
 }

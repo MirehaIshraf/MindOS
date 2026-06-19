@@ -114,6 +114,12 @@ import type {
   TaskPlanningResponse,
   TaskResponse,
   TestLLMResponse,
+  McpServerConfigResponse,
+  McpServerListResponse,
+  McpServerStatus,
+  McpServerToggleResponse,
+  McpToolListResponse,
+  McpToolCallResponse,
 } from "../types";
 
 export const api = axios.create({
@@ -942,5 +948,47 @@ export async function searchEmailMessages(payload: EmailSearchRequest): Promise<
 
 export async function clearEmailEvents(): Promise<ClearEmailEventsResponse> {
   const response = await api.delete<ClearEmailEventsResponse>("/connectors/email/events");
+  return response.data;
+}
+
+// --- MCP Server API ---
+
+export async function getMcpServers(): Promise<McpServerListResponse> {
+  const response = await api.get<McpServerListResponse>("/mcp/servers");
+  return response.data;
+}
+
+export async function getMcpServer(serverId: string): Promise<McpServerStatus> {
+  const response = await api.get<McpServerStatus>(`/mcp/servers/${serverId}`);
+  return response.data;
+}
+
+export async function toggleMcpServer(serverId: string, enabled: boolean): Promise<McpServerToggleResponse> {
+  const response = await api.post<McpServerToggleResponse>(`/mcp/servers/${serverId}/toggle`, { enabled });
+  return response.data;
+}
+
+export async function getMcpServerConfig(serverId: string): Promise<McpServerConfigResponse> {
+  const response = await api.get<McpServerConfigResponse>(`/mcp/servers/${serverId}/config`);
+  return response.data;
+}
+
+export async function updateMcpServerConfig(serverId: string, config: Record<string, unknown>): Promise<McpServerConfigResponse> {
+  const response = await api.post<McpServerConfigResponse>(`/mcp/servers/${serverId}/config`, { config });
+  return response.data;
+}
+
+export async function getMcpServerTools(serverId: string): Promise<McpToolListResponse> {
+  const response = await api.get<McpToolListResponse>(`/mcp/servers/${serverId}/tools`);
+  return response.data;
+}
+
+export async function getMcpAvailableTools(): Promise<McpToolListResponse> {
+  const response = await api.get<McpToolListResponse>("/mcp/tools");
+  return response.data;
+}
+
+export async function callMcpTool(toolName: string, args: Record<string, unknown>, confirmed = false): Promise<McpToolCallResponse> {
+  const response = await api.post<McpToolCallResponse>("/mcp/tools/call", { tool_name: toolName, arguments: args, confirmed });
   return response.data;
 }

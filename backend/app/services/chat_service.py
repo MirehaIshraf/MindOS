@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import get_settings
@@ -24,6 +25,7 @@ from app.services.model_router_service import model_router_service
 from app.services.query_intent_service import query_intent_service
 from app.services.response_cleaner import clean_llm_response
 from app.services.relationship_service import relationship_service
+from app.services.mcp_tool_router_service import mcp_tool_router_service
 
 SYSTEM_PROMPT = """/no_think
 
@@ -329,24 +331,107 @@ class ChatService:
                 role="user",
             )
 
+        # --- Check for pending MCP confirmation first ---
+        # If user says "yes"/"proceed"/"confirm" and there are pending operations, execute them.
+        confirmation_id = mcp_tool_router_service._is_confirmation_message(request.message)
+        if confirmation_id:
+            self._set_run_progress(run_id, "executing_confirmation", "Executing confirmed operations...", 70)
+            try:
+                exec_result = mcp_tool_router_service.execute_pending_confirmations(confirmation_id)
+                if exec_result.get("success"):
+                    # Format execution results for the LLM to summarize
+                    results_text = json.dumps(exec_result.get("results", []), indent=2, default=str)
+                    model_config = self._resolve_requested_model(request.model_id)
+                    summary_messages = [
+                        {"role": "system", "content": "You are MindOS. The user just confirmed file operations. Summarize what was done clearly and concisely."},
+                        {"role": "user", "content": f"The following file operations were executed successfully:\n{results_text}\n\nPlease tell the user what was done."},
+                    ]
+                    summary_result = model_router_service.generate(
+                        messages=summary_messages,
+                        requested_model_id=request.model_id,
+                        options={"temperature": 0.1},
+                    )
+                    mcp_result = {
+                        "response": clean_llm_response(summary_result.reply),
+                        "model_used": summary_result.model_used,
+                        "provider": summary_result.provider,
+                        "model_display_name": summary_result.model_display_name,
+                        "tool_calls_made": exec_result.get("total_operations", 0),
+                        "pending_confirmations": [],
+                        "requires_confirmation": False,
+                    }
+                else:
+                    mcp_result = {
+                        "response": f"❌ Execution failed: {exec_result.get('error', 'Unknown error')}",
+                        "model_used": "system",
+                        "provider": "system",
+                        "model_display_name": "System",
+                        "tool_calls_made": 0,
+                        "pending_confirmations": [],
+                        "requires_confirmation": False,
+                    }
+            except Exception:
+                mcp_result = {
+                    "response": "❌ Failed to execute the confirmed operations. Please try again.",
+                    "model_used": "system",
+                    "provider": "system",
+                    "model_display_name": "System",
+                    "tool_calls_made": 0,
+                    "pending_confirmations": [],
+                    "requires_confirmation": False,
+                }
+        else:
+            mcp_result = None
+
+        # --- MCP tool-calling integration ---
+        # If MCP tools are available and the query looks like a file-system command,
+        # route it through the MCP tool router for LLM tool-calling.
+        # Also auto-route when memory is off — there's nothing else to answer from.
+        mcp_available = mcp_tool_router_service.has_mcp_tools_available()
+        memory_is_off = context_profile == "no_memory" or not (request.use_context or query_intent.needs_local_memory)
+        if mcp_result is None and mcp_available and (self._is_mcp_eligible(request.message) or memory_is_off):
+            self._set_run_progress(run_id, "mcp_routing", "Routing to MCP tools...", 65)
+            try:
+                formatted_ctx = self._context_builder.format_context_for_llm(context_package) if context_package else ""
+                mcp_result = mcp_tool_router_service.process_chat_with_mcp(
+                    user_message=request.message,
+                    context_text=formatted_ctx,
+                    model_id=request.model_id,
+                )
+            except Exception:
+                mcp_result = None  # Fall back to normal chat on MCP failure
+
+        # Compute task_hint and answer_style regardless of MCP path (needed later)
         history = [message.model_dump(mode="json") for message in request.history]
         task_hint = detect_task_hint(request.message)
         answer_style = query_intent.answer_style or detect_answer_style(request.message, task_hint)
-        model_display = model_config.display_name if model_config else "selected model"
-        self._set_run_progress(run_id, "generating", f"Preparing response with {model_display}...", 70)
-        reply, model_name, provider, model_display_name, llm_warning = self._generate_reply(
-            message=request.message,
-            history=history,
-            context_package=context_package,
-            task_hint=task_hint,
-            answer_style=answer_style,
-            model_id=request.model_id,
-            context_profile=context_profile,
-            conversation_context=conversation_context,
-            resolved_query=active_query,
-            run_id=run_id,
-            model_display_name=model_display,
-        )
+
+        if mcp_result is not None:
+            reply = mcp_result["response"]
+            model_name = mcp_result["model_used"]
+            provider = mcp_result["provider"]
+            model_display_name = mcp_result.get("model_display_name", model_name)
+            llm_warning = None
+            # If MCP returned pending confirmations, store them and append instructions to the reply
+            if mcp_result.get("pending_confirmations"):
+                confirmation_id = mcp_tool_router_service.store_pending_confirmations(mcp_result["pending_confirmations"])
+                reply += f"\n\n---\n**⚠️ Confirmation Required:** The above file operations need your confirmation before execution. Reply **yes** or **proceed** to confirm, or **cancel** to abort."
+        else:
+            model_display = model_config.display_name if model_config else "selected model"
+            self._set_run_progress(run_id, "generating", f"Preparing response with {model_display}...", 70)
+            reply, model_name, provider, model_display_name, llm_warning = self._generate_reply(
+                message=request.message,
+                history=history,
+                context_package=context_package,
+                task_hint=task_hint,
+                answer_style=answer_style,
+                model_id=request.model_id,
+                context_profile=context_profile,
+                conversation_context=conversation_context,
+                resolved_query=active_query,
+                run_id=run_id,
+                model_display_name=model_display,
+            )
         self._set_run_progress(run_id, "finalizing", "Finalizing answer...", 92)
         reply = clean_llm_response(reply)
         sources_used = context_sources(context_package)
@@ -560,6 +645,67 @@ class ChatService:
             options={"context_package": context_package},
         )
         return result.reply, result.model_used, result.provider, result.model_display_name, result.warning
+
+    @staticmethod
+    def _is_mcp_eligible(message: str) -> bool:
+        """Check if a user message looks like it should be routed to MCP tools.
+
+        Matches file-system related commands like:
+        - "organize my Downloads folder"
+        - "scan D:\\Projects"
+        - "what files are in my folder"
+        - "list of files in E:\\Demo"
+        - "move PDFs to a separate folder"
+        - "list file categories"
+        - "folder summary"
+        - "clean up my folder"
+        - "show me what's in my configured folder"
+        - "read the file xyz.txt"
+        """
+        import re as _re
+        lower = message.lower()
+
+        # Phrase-level matching (exact substrings)
+        fs_phrases = [
+            "organize folder", "organize my", "organize files",
+            "scan folder", "scan my", "scan directory",
+            "what files", "what's in", "whats in", "what is in",
+            "list files", "list of files", "show files", "show me files",
+            "folder summary", "folder structure",
+            "move files", "move pdfs", "move images",
+            "file categories", "file types", "list categories",
+            "clean up folder", "clean up my", "cleanup folder",
+            "sort files", "sort my files", "sort folder",
+            "group files", "group by type",
+            "file summary", "directory summary",
+            "read the file", "read file", "open file",
+            "file exists", "check file", "check if file",
+            "show me what", "tell me what",
+            "what's inside", "whats inside", "what is inside",
+            "contents of", "content of",
+            "in my folder", "in the folder",
+            "list directory", "show directory",
+        ]
+        if any(kw in lower for kw in fs_phrases):
+            return True
+
+        # Word-level matching: check for combinations of file-related words
+        file_words = ["file", "files", "folder", "directory", "directories"]
+        action_words = ["list", "show", "scan", "find", "search", "check", "read", "open", "get", "see", "view", "browse", "explore", "organize", "sort", "clean", "move", "count"]
+        has_file_word = any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in file_words)
+        has_action_word = any(f" {w} " in f" {lower} " or lower.startswith(w) for w in action_words)
+        if has_file_word and has_action_word:
+            return True
+
+        # Path pattern detection: messages containing Windows/Unix paths
+        if _re.search(r'[A-Za-z]:[\\\/]', message) or _re.search(r'\/home\/|\/tmp\/|\/var\/', message):
+            return True
+
+        # "my files" / "my folder" pattern
+        if "my files" in lower or "my folder" in lower or "my directory" in lower:
+            return True
+
+        return False
 
     def _resolve_requested_model(self, model_id: str | None):
         models = model_registry_service.list_chat_models()

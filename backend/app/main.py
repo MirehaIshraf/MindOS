@@ -10,6 +10,7 @@ from app.api.routes import (
     events,
     health,
     ingest,
+    mcp,
     models,
     playbooks,
     search,
@@ -51,6 +52,7 @@ app.include_router(playbooks.router)
 app.include_router(connectors.router)
 app.include_router(context.router)
 app.include_router(dev.router)
+app.include_router(mcp.router)
 
 
 @app.on_event("startup")
@@ -62,6 +64,14 @@ def startup() -> None:
     else:
         logger.info("MindOS storage initialized", extra={"storage": "memory"})
     file_index_scheduler_service.start()
+
+    # Register MCP servers
+    from app.integrations.mcp.client import mcp_client
+    from app.integrations.mcp.file_system_server import file_system_mcp_server
+    mcp_client.register_server(file_system_mcp_server.SERVER_ID, file_system_mcp_server)
+    # File System MCP starts enabled by default
+    mcp_client.enable_server(file_system_mcp_server.SERVER_ID)
+    logger.info("MCP File System server registered and enabled", extra={"mcp_server": "filesystem", "tools": len(file_system_mcp_server.list_tools())})
 
 
 @app.get("/")

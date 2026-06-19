@@ -53,6 +53,12 @@ CURATED_OLLAMA_MODELS: dict[str, dict[str, str]] = {
         "description": "Stronger local reasoning model, slower on CPU.",
         "default_context_profile": "fast_chat",
     },
+    "qwen3.5:9b": {
+        "id": "ollama-qwen3.5-9b",
+        "display_name": "Qwen 3.5 9B Local",
+        "description": "Better Balanced local model for chat and coding.",
+        "default_context_profile": "fast_chat",
+    },
     "mistral:latest": {
         "id": "ollama-mistral",
         "display_name": "Mistral Local",
