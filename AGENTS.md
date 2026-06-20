@@ -22,7 +22,7 @@ Tasks are experimental. Gmail task actions and file/document tasks are active PO
 
 - Do not add real external task execution unless explicitly requested and guarded by preview plus confirmation.
 - Do not send real email silently.
-- Do not call real Jira/GitHub write APIs.
+- Do not call real Jira/GitHub write APIs unless that exact write action was explicitly requested and is guarded by editable preview plus confirmation.
 - Do not run destructive Git commands.
 - Never run arbitrary shell commands from task flows.
 - Never force push, delete branches, reset, clean, rebase, or change Git remotes from task flows.
@@ -132,6 +132,7 @@ Before adding a new feature:
 - Git connector must be read-only.
 - GitHub connector is read-only until explicitly expanded. Do not add GitHub write actions such as creating issues, commenting, merging, pushing, or updating pull requests unless requested.
 - Do not confuse Atlassian Organization Admin API keys with Jira Cloud API tokens. The Jira connector POC uses Jira Cloud site URL + Atlassian email + Jira API token auth only; do not ask for Organization ID or use Atlassian Admin APIs for Jira project/task POCs.
+- Jira write actions require an editable preview and explicit confirmation. Jira issue creation may use Jira Cloud REST only for `create issue`; do not add update, delete, transition, assign, comment, or attachment actions unless explicitly requested.
 - Email connector is provider-agnostic MCP-style and read-only until explicitly expanded. Do not hardcode Gmail OAuth, Gmail app passwords, IMAP, Samsung Knox, Composio, Zapier, or any single provider unless explicitly requested. Do not add email send, reply, forward, delete, archive, mark-read/unread, or draft actions unless explicitly requested. Do not store full email bodies, attachment contents, API keys, or tokens. Do not log or expose email provider credentials.
 - Gmail connector is a separate explicit local OAuth connector. It must use user-uploaded Google OAuth desktop credentials, localhost callback, and only `gmail.compose` plus `gmail.readonly` scopes. Never request broad Gmail full-access scopes, never expose client secrets/tokens to the frontend, and never send Gmail messages without explicit user confirmation.
 - Do not route Gmail tasks through the generic Email MCP connector when the Gmail connector exists. `gmail.*` task actions must use Gmail connector status, Gmail capabilities, and Gmail-specific routes unless the user explicitly chooses a custom/corporate Email MCP task.

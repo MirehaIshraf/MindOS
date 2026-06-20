@@ -114,6 +114,16 @@ Preferred browser event types:
 - `POST /connectors/jira/disconnect`: disables the Jira connector but leaves saved credentials local.
 - `DELETE /connectors/jira/credentials`: removes saved Jira config and disables the connector.
 - `GET /connectors/jira/projects`: lists accessible Jira projects through `/rest/api/3/project/search`. Requires the Jira connector to be connected.
+- `POST /connectors/jira/search`: read-only issue search. Request:
+  `{ "query": "database connection failure", "project_key": "PROJ", "max_results": 10 }`.
+  Builds bounded safe JQL such as `project = PROJ AND text ~ "database connection failure" ORDER BY updated DESC`, caps results at 20, and returns normalized issues:
+  `{ "ok": true, "issues": [{ "key": "PROJ-123", "summary": "...", "status": "To Do", "issue_type": "Bug", "updated": "...", "url": "https://site.atlassian.net/browse/PROJ-123" }] }`.
+  Search does not create Memory events.
+- `POST /connectors/jira/issues`: creates a Jira issue only when Jira is connected and `confirmation: true` is present. Request:
+  `{ "project_key": "PROJ", "issue_type": "Task", "summary": "...", "description": "...", "labels": ["mindos"], "priority": null, "confirmation": true }`.
+  Description is converted to minimal Atlassian Document Format. Response:
+  `{ "ok": true, "issue_key": "PROJ-123", "url": "https://site.atlassian.net/browse/PROJ-123" }`.
+  Missing confirmation, project key, issue type, summary, or description returns a JSON error. No update/delete/transition/assign/comment/attachment actions are exposed.
 - `GET /connectors/gmail/status`: returns local Gmail connector status: `credentials_configured`, `connected`, `reconnect_required`, `email_address`, granted `scopes`, `last_error`, `connected_at`, `credential_file_name`, required scopes, and capabilities including `attachments: true` plus `max_attachment_total_mb: 20` when Gmail compose is connected. It never returns client secrets or tokens.
 - `POST /connectors/gmail/credentials/upload`: saves a user-provided Google OAuth desktop credentials JSON locally. Request:
   `{ "filename": "credentials.json", "content": "{...json...}" }`.
@@ -258,7 +268,10 @@ File System Task Adapter routes:
   `{ "instruction": "draft a mail about last 7 days work of me", "connected_email": "me@example.com", "recent_tasks": [{ "type": "document_summary", "title": "...", "summary": "...", "output_file_name": "..." }], "attachment_filenames": ["resume.pdf"], "model_id": null }`.
   Response includes `to`, `subject`, `body`, `tone`, `source_summary`, warnings, model/provider metadata, and an optional planner warning. The selected LLM returns structured JSON when available; otherwise MindOS returns a clean deterministic fallback. The endpoint does not create a Gmail draft, send email, or create Memory events.
   Attachment-aware Gmail task previews are frontend-driven: the LLM planner receives selected filenames/task history only, not attachment contents. Candidate search may use recent summary outputs, the current browser-selected folder, and `/tasks/files/search` over connected indexed folders only. Actual files are submitted later through manual multipart files or `indexed_attachments` references after user selection and confirmation.
-- `GET /tasks/actions/capabilities`: returns the action capability registry used by Tasks previews. Capabilities include `gmail.read`, `gmail.createDraft`, `gmail.searchEmails`, `gmail.summarizeEmails`, `gmail.sendEmail`, `gmail.send`, `gmail.replyDraft`, `github.read`, `github.createIssue`, `github.createPullRequest`, `git.status`, `git.diff`, `git.commit`, and `git.push`. Each record includes `available`, `provider`, `risk_level`, `requires_confirmation`, and optional `reason`.
+- `POST /tasks/jira/issue/prepare`: prepares an editable Jira issue preview from a user instruction, similar issue search results, optional context summary, and default project/type. Request:
+  `{ "instruction": "Create a Jira bug for database connection failure", "project_key": "PROJ", "issue_type": "Bug", "existing_issues": [], "context_summary": null, "selected_filenames": [], "model_id": null }`.
+  Response includes `project_key`, `issue_type`, `summary`, `description`, `labels`, `priority`, `search_query`, warnings, and model/provider metadata. The model returns JSON only when available; otherwise a deterministic issue draft is returned. This endpoint does not create a Jira issue or Memory event.
+- `GET /tasks/actions/capabilities`: returns the action capability registry used by Tasks previews. Capabilities include `gmail.read`, `gmail.createDraft`, `gmail.searchEmails`, `gmail.summarizeEmails`, `gmail.sendEmail`, `gmail.send`, `gmail.replyDraft`, `github.read`, `github.createIssue`, `github.createPullRequest`, `jira.read`, `jira.searchIssues`, `jira.createIssue`, `git.status`, `git.diff`, `git.commit`, and `git.push`. Each record includes `available`, `provider`, `risk_level`, `requires_confirmation`, and optional `reason`.
 - `POST /tasks/actions/execute`: execute one prepared action after explicit user confirmation. Request:
   `{ "action_id": "action_...", "action_type": "gmail.createDraft", "preview": { "to": "person@example.com", "subject": "...", "body": "..." }, "confirmation": true }`.
   Response:

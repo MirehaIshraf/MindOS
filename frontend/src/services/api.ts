@@ -71,6 +71,12 @@ import type {
   GitHubTestResponse,
   JiraConfigRequest,
   JiraConnectionResponse,
+  JiraIssueCreateRequest,
+  JiraIssueCreateResponse,
+  JiraIssueDraftRequest,
+  JiraIssueDraftResponse,
+  JiraIssueSearchRequest,
+  JiraIssueSearchResponse,
   JiraProjectsResponse,
   JiraStatusResponse,
   JiraTestResponse,
@@ -864,6 +870,21 @@ export async function removeJiraCredentials(): Promise<JiraStatusResponse> {
 
 export async function listJiraProjects(): Promise<JiraProjectsResponse> {
   const response = await api.get<JiraProjectsResponse>("/connectors/jira/projects", { timeout: 30000 });
+  return response.data;
+}
+
+export async function searchJiraIssues(payload: JiraIssueSearchRequest): Promise<JiraIssueSearchResponse> {
+  const response = await api.post<JiraIssueSearchResponse>("/connectors/jira/search", payload, { timeout: 30000 });
+  return response.data;
+}
+
+export async function createJiraIssue(payload: JiraIssueCreateRequest): Promise<JiraIssueCreateResponse> {
+  const response = await api.post<JiraIssueCreateResponse>("/connectors/jira/issues", payload, { timeout: 30000 });
+  return response.data;
+}
+
+export async function prepareJiraIssueDraft(payload: JiraIssueDraftRequest): Promise<JiraIssueDraftResponse> {
+  const response = await api.post<JiraIssueDraftResponse>("/tasks/jira/issue/prepare", payload, { timeout: 130000 });
   return response.data;
 }
 

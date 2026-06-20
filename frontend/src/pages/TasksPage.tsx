@@ -1,4 +1,4 @@
-import { ChevronRight, FileText, FolderOpen, Github, ListChecks, Mail, Paperclip, Play, Search, Sparkles, X } from "lucide-react";
+import { ChevronRight, ExternalLink, FileText, FolderOpen, Github, ListChecks, Mail, Paperclip, Play, Search, Sparkles, Ticket, X } from "lucide-react";
 import { KeyboardEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "../components/shared/Badge";
@@ -12,9 +12,11 @@ import {
   getErrorMessage,
   getGmailRecentEmails,
   getGmailStatus,
+  getJiraStatus,
   getModelSettings,
   getTaskActionCapabilities,
   getTrackedFolders,
+  prepareJiraIssueDraft,
   prepareTaskIntent,
   prepareFileTaskPlan,
   prepareGmailDraft,
@@ -24,6 +26,7 @@ import {
   saveGeneratedSummaryOutput,
   saveLogAnalysisReport,
   scanFileTask,
+  searchJiraIssues,
   searchIndexedFiles,
   sendGmailMessageWithAttachments,
 } from "../services/api";
@@ -73,6 +76,8 @@ import type {
   GmailStatusResponse,
   GeneratedSummarySaveResponse,
   IndexedFileSearchMatch,
+  JiraIssue,
+  JiraStatusResponse,
   LogAnalysisPrepareResponse,
   ModelConfig,
   NormalizedEmailMessage,
@@ -97,6 +102,8 @@ type TaskActionType =
   | "gmail.summarizeEmails"
   | "memory.report"
   | "github.lookup"
+  | "jira.searchIssues"
+  | "jira.createIssue"
   | "unsupported";
 
 type ClassifiedTaskAction = {
@@ -122,6 +129,8 @@ type PreparedAction = ClassifiedTaskAction & {
     cc?: string;
     bcc?: string;
     subject?: string;
+    summary?: string;
+    description?: string;
     body?: string;
     messageId?: string;
     note?: string;
@@ -130,6 +139,13 @@ type PreparedAction = ClassifiedTaskAction & {
     attachmentIntent?: boolean;
     attachmentQuery?: string;
     attachmentSearchStatus?: string;
+    project_key?: string;
+    issue_type?: string;
+    labels?: string[];
+    priority?: string | null;
+    similarIssues?: JiraIssue[];
+    issueKey?: string;
+    issueUrl?: string;
   };
 };
 
@@ -144,7 +160,7 @@ type ActionApprovalPhase = "idle" | "confirming" | "running" | "completed";
 
 type RecentTaskItem = {
   id: string;
-  type: "file_organize" | "document_summary" | "log_analysis_report" | "gmail_draft" | "gmail_sent";
+  type: "file_organize" | "document_summary" | "log_analysis_report" | "gmail_draft" | "gmail_sent" | "jira_issue";
   title: string;
   summary: string;
   status: "completed" | "partial" | "failed";
@@ -219,6 +235,9 @@ export function TasksPage() {
   const [actionApprovalPhase, setActionApprovalPhase] = useState<ActionApprovalPhase>("idle");
   const [actionExecutionResult, setActionExecutionResult] = useState<TaskActionExecuteResponse | null>(null);
   const [gmailStatus, setGmailStatus] = useState<GmailStatusResponse | null>(null);
+  const [jiraStatus, setJiraStatus] = useState<JiraStatusResponse | null>(null);
+  const [jiraIssueLoading, setJiraIssueLoading] = useState(false);
+  const [jiraIssueMessage, setJiraIssueMessage] = useState<string | null>(null);
   const [gmailDraft, setGmailDraft] = useState({ to: "", cc: "", bcc: "", subject: "", body: "", message_id: "" });
   const [gmailDraftResult, setGmailDraftResult] = useState<GmailDraftResponse | null>(null);
   const [gmailDraftLoading, setGmailDraftLoading] = useState(false);
@@ -312,6 +331,7 @@ export function TasksPage() {
     setActionExecutionResult(null);
     setGmailDraftResult(null);
     setGmailDraftMessage(null);
+    setJiraIssueMessage(null);
     setGmailAttachmentCandidates([]);
     setEmailSearchMessages([]);
     setCloudSummaryWarning(null);
@@ -632,6 +652,10 @@ export function TasksPage() {
           await prepareFileSearchFromTaskPlan(plan);
           return;
         }
+        if (isJiraTaskPlan(plan)) {
+          await prepareJiraFromTaskPlan(plan);
+          return;
+        }
         if (plan.primary_action === "file.organize") {
           action = { actionType: "file.organize", label: "Organize folder", supported: true };
         } else if (plan.primary_action === "unsupported") {
@@ -712,6 +736,10 @@ export function TasksPage() {
       } finally {
         setPrepareLoading(false);
       }
+      return;
+    }
+    if (action.actionType === "jira.searchIssues" || action.actionType === "jira.createIssue") {
+      await prepareJiraFromTaskPlan(frontendJiraFallbackPlan(command.trim(), action.actionType));
       return;
     }
     if (isEmailWriteAction(action.actionType)) {
@@ -1002,6 +1030,145 @@ export function TasksPage() {
     }
     setActionApprovalPhase("confirming");
     setGmailDraftMessage(null);
+  }
+
+  async function prepareJiraFromTaskPlan(plan: TaskIntentPrepareResponse) {
+    setPrepareLoading(true);
+    setPrepareStatus("Checking Jira connection...");
+    setJiraIssueMessage(null);
+    setActionExecutionResult(null);
+    try {
+      const status = await getJiraStatus();
+      setJiraStatus(status);
+      const query = jiraQueryFromPlan(plan, command.trim());
+      const isSearchOnly = plan.primary_action === "jira.searchIssues";
+      let issues: JiraIssue[] = [];
+      if (status.connected) {
+        setPrepareStatus("Searching existing Jira issues...");
+        const search = await searchJiraIssues({ query, project_key: status.default_project_key ?? undefined, max_results: 10 });
+        issues = search.issues;
+      }
+      if (isSearchOnly) {
+        setPreparedAction({
+          id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          actionType: "jira.searchIssues",
+          label: "Search Jira issues",
+          supported: status.connected,
+          title: "Jira issue search",
+          summary: status.connected ? `Found ${issues.length} similar Jira issue${issues.length === 1 ? "" : "s"}.` : "Connect Jira first.",
+          riskLevel: "low",
+          requiresConfirmation: false,
+          canExecute: false,
+          blockedReasons: status.connected ? [] : ["Connect Jira first."],
+          missingRequirements: status.connected ? [] : ["jira.read"],
+          sources: [{ type: "jira", status: status.connected ? "connected" : "disconnected" }],
+          preview: { note: query, project_key: status.default_project_key ?? "", issue_type: status.default_issue_type ?? "Task", similarIssues: issues },
+        });
+        setUiState("action_preview");
+        return;
+      }
+      setPrepareStatus("Preparing Jira issue preview...");
+      const selectedModel = await getSelectedChatModel();
+      const draft = await prepareJiraIssueDraft({
+        instruction: command.trim(),
+        project_key: status.default_project_key ?? null,
+        issue_type: status.default_issue_type ?? "Task",
+        existing_issues: issues,
+        model_id: selectedModel?.id ?? null,
+      });
+      const canExecute = Boolean(status.connected && draft.project_key && draft.issue_type && draft.summary && draft.description);
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: "jira.createIssue",
+        label: "Create Jira issue",
+        supported: canExecute,
+        title: "Jira issue preview",
+        summary: draft.summary,
+        riskLevel: "medium",
+        requiresConfirmation: true,
+        executionActionType: "jira.createIssue",
+        canExecute,
+        blockedReasons: canExecute ? [] : [status.connected ? "Add a project key, issue type, summary, and description." : "Connect Jira first."],
+        missingRequirements: canExecute ? [] : ["jira.createIssue"],
+        sources: [{ type: "jira", status: status.connected ? "connected" : "disconnected" }],
+        preview: {
+          project_key: draft.project_key ?? "",
+          issue_type: draft.issue_type,
+          summary: draft.summary,
+          description: draft.description,
+          labels: draft.labels,
+          priority: draft.priority ?? null,
+          similarIssues: issues,
+          note: draft.search_query,
+          warning: draft.warnings.join(" "),
+        },
+      });
+      setUiState("action_preview");
+    } catch (error) {
+      setPreparedAction({
+        id: `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        actionType: plan.primary_action === "jira.searchIssues" ? "jira.searchIssues" : "jira.createIssue",
+        label: plan.primary_action === "jira.searchIssues" ? "Search Jira issues" : "Create Jira issue",
+        supported: false,
+        title: "Jira is not ready",
+        summary: getErrorMessage(error),
+        riskLevel: "low",
+        requiresConfirmation: plan.primary_action !== "jira.searchIssues",
+        canExecute: false,
+        blockedReasons: [getErrorMessage(error)],
+        missingRequirements: ["jira"],
+        sources: [{ type: "jira", status: "disconnected" }],
+        preview: { note: getErrorMessage(error), similarIssues: [] },
+      });
+      setUiState("action_preview");
+    } finally {
+      setPrepareLoading(false);
+      setPrepareStatus(null);
+    }
+  }
+
+  async function handleCreateJiraIssue(nextPreview: NonNullable<PreparedAction["preview"]>) {
+    if (!preparedAction || preparedAction.actionType !== "jira.createIssue") return;
+    setJiraIssueLoading(true);
+    setJiraIssueMessage(null);
+    try {
+      const result = await executeTaskAction({
+        action_id: preparedAction.id,
+        action_type: "jira.createIssue",
+        preview: {
+          project_key: nextPreview.project_key,
+          issue_type: nextPreview.issue_type,
+          summary: nextPreview.summary,
+          description: nextPreview.description,
+          labels: nextPreview.labels ?? [],
+          priority: nextPreview.priority ?? null,
+        },
+        confirmation: true,
+      });
+      const issueKey = String(result.result.issue_key || "");
+      const issueUrl = String(result.result.url || "");
+      setActionExecutionResult(result);
+      setPreparedAction({ ...preparedAction, canExecute: false, preview: { ...nextPreview, issueKey, issueUrl } });
+      setJiraIssueMessage(result.message || `Created Jira issue ${issueKey}.`);
+      addRecentTask({
+        type: "jira_issue",
+        title: "Created Jira issue",
+        summary: `${issueKey} - ${String(nextPreview.summary || "")}`,
+        status: "completed",
+        contextName: String(nextPreview.project_key || ""),
+        details: {
+          issue_key: issueKey,
+          url: issueUrl,
+          project_key: String(nextPreview.project_key || ""),
+          issue_type: String(nextPreview.issue_type || ""),
+          labels: (nextPreview.labels ?? []).join(", "),
+        },
+      });
+    } catch (error) {
+      setJiraIssueMessage(getErrorMessage(error));
+    } finally {
+      setJiraIssueLoading(false);
+    }
   }
 
   async function prepareFileSearchFromTaskPlan(plan: TaskIntentPrepareResponse) {
@@ -2122,6 +2289,9 @@ export function TasksPage() {
               gmailDraftResult={gmailDraftResult}
               gmailDraftLoading={gmailDraftLoading}
               gmailDraftMessage={gmailDraftMessage}
+              jiraStatus={jiraStatus}
+              jiraIssueLoading={jiraIssueLoading}
+              jiraIssueMessage={jiraIssueMessage}
               gmailAttachmentCandidates={gmailAttachmentCandidates}
               emailSearchMessages={emailSearchMessages}
               fileSearchSelection={fileSearchSelection}
@@ -2142,6 +2312,7 @@ export function TasksPage() {
                 pathInputRef.current?.focus();
               }}
               onCreateGmailDraft={() => void handleCreateGmailDraft()}
+              onCreateJiraIssue={(preview) => void handleCreateJiraIssue(preview)}
               onEdit={() => setUiState("typing")}
               onCancel={() => {
                 setPreparedAction(null);
@@ -2346,6 +2517,9 @@ function ActionPreviewRenderer({
   gmailDraftResult,
   gmailDraftLoading,
   gmailDraftMessage,
+  jiraStatus,
+  jiraIssueLoading,
+  jiraIssueMessage,
   gmailAttachmentCandidates,
   emailSearchMessages,
   fileSearchSelection,
@@ -2357,6 +2531,7 @@ function ActionPreviewRenderer({
   onPrepareIndexedFileSummary,
   onChooseFilesManually,
   onCreateGmailDraft,
+  onCreateJiraIssue,
   onEdit,
   onCancel,
 }: {
@@ -2367,6 +2542,9 @@ function ActionPreviewRenderer({
   gmailDraftResult: GmailDraftResponse | null;
   gmailDraftLoading: boolean;
   gmailDraftMessage: string | null;
+  jiraStatus: JiraStatusResponse | null;
+  jiraIssueLoading: boolean;
+  jiraIssueMessage: string | null;
   gmailAttachmentCandidates: AttachmentCandidate[];
   emailSearchMessages: NormalizedEmailMessage[];
   fileSearchSelection: FileSearchSelection | null;
@@ -2378,6 +2556,7 @@ function ActionPreviewRenderer({
   onPrepareIndexedFileSummary: () => void;
   onChooseFilesManually: () => void;
   onCreateGmailDraft: () => void;
+  onCreateJiraIssue: (preview: NonNullable<PreparedAction["preview"]>) => void;
   onEdit: () => void;
   onCancel: () => void;
 }) {
@@ -2410,6 +2589,19 @@ function ActionPreviewRenderer({
   if (action.actionType === "github.lookup") {
     return <LookupPreview icon={<Github size={16} />} action={action} title="Look up GitHub context" onEdit={onEdit} onCancel={onCancel} />;
   }
+  if (action.actionType === "jira.searchIssues" || action.actionType === "jira.createIssue") {
+    return (
+      <JiraIssuePreview
+        action={action}
+        jiraStatus={jiraStatus}
+        loading={jiraIssueLoading}
+        message={jiraIssueMessage}
+        onCreate={onCreateJiraIssue}
+        onEdit={onEdit}
+        onCancel={onCancel}
+      />
+    );
+  }
   if (isIndexedFileSearchAction(action.actionType) || action.actionType === "multi_step" || action.actionType === "log.analyzeFromSearch") {
     return (
       <FileSearchResultsPreview
@@ -2424,6 +2616,170 @@ function ActionPreviewRenderer({
     );
   }
   return <UnsupportedPreview action={action} onEdit={onEdit} onCancel={onCancel} />;
+}
+
+function JiraIssuePreview({
+  action,
+  jiraStatus,
+  loading,
+  message,
+  onCreate,
+  onEdit,
+  onCancel,
+}: {
+  action: PreparedAction;
+  jiraStatus: JiraStatusResponse | null;
+  loading: boolean;
+  message: string | null;
+  onCreate: (preview: NonNullable<PreparedAction["preview"]>) => void;
+  onEdit: () => void;
+  onCancel: () => void;
+}) {
+  const initial = action.preview ?? {};
+  const [projectKey, setProjectKey] = useState(initial.project_key ?? "");
+  const [issueType, setIssueType] = useState(initial.issue_type ?? "Task");
+  const [summary, setSummary] = useState(initial.summary ?? "");
+  const [description, setDescription] = useState(initial.description ?? "");
+  const [labels, setLabels] = useState((initial.labels ?? ["mindos"]).join(", "));
+  const [confirming, setConfirming] = useState(false);
+  const similarIssues = initial.similarIssues ?? [];
+  const createdKey = initial.issueKey;
+  const createdUrl = initial.issueUrl;
+  const canCreate = action.actionType === "jira.createIssue" && action.canExecute && projectKey.trim() && issueType.trim() && summary.trim() && description.trim() && !createdKey;
+  const preview = {
+    ...initial,
+    project_key: projectKey.trim(),
+    issue_type: issueType.trim(),
+    summary: summary.trim(),
+    description: description.trim(),
+    labels: splitRecipients(labels),
+    priority: initial.priority ?? null,
+  };
+
+  useEffect(() => {
+    setProjectKey(action.preview?.project_key ?? "");
+    setIssueType(action.preview?.issue_type ?? "Task");
+    setSummary(action.preview?.summary ?? "");
+    setDescription(action.preview?.description ?? "");
+    setLabels((action.preview?.labels ?? ["mindos"]).join(", "));
+    setConfirming(false);
+  }, [action.id, action.preview]);
+
+  return (
+    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
+            <Ticket size={16} />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-app-text">{action.actionType === "jira.searchIssues" ? "Jira issue search" : "Jira issue preview"}</h2>
+            <p className="mt-1 text-xs text-app-muted">
+              {jiraStatus?.connected ? `Jira connected${projectKey ? ` - Project ${projectKey}` : ""}` : "Connect Jira first."}
+            </p>
+          </div>
+        </div>
+        <Badge variant={jiraStatus?.connected ? "success" : "warning"}>{jiraStatus?.connected ? "Connected" : "Disconnected"}</Badge>
+      </div>
+
+      {action.preview?.warning ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{action.preview.warning}</p> : null}
+      {action.blockedReasons.length ? <p className="mt-3 text-xs text-amber-100">{action.blockedReasons[0]}</p> : null}
+
+      <div className="mt-3 rounded-md border border-app-border bg-zinc-900/60 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-app-text">Similar existing issues</p>
+          <Badge variant={similarIssues.length ? "info" : "default"}>{similarIssues.length}</Badge>
+        </div>
+        <div className="mt-2 space-y-2">
+          {similarIssues.length ? (
+            similarIssues.map((issue) => (
+              <a key={issue.key} href={issue.url} target="_blank" rel="noreferrer" className="flex gap-2 rounded-md border border-app-border bg-zinc-950/80 px-3 py-2 text-xs hover:border-violet-500/40">
+                <span className="font-mono text-violet-200">{issue.key}</span>
+                <span className="min-w-0 flex-1 truncate text-app-text">{issue.summary}</span>
+                <span className="text-app-muted">{issue.status}</span>
+                <ExternalLink size={13} className="text-app-muted" />
+              </a>
+            ))
+          ) : (
+            <p className="text-xs text-app-muted">No similar Jira issues found for this search.</p>
+          )}
+        </div>
+      </div>
+
+      {action.actionType === "jira.createIssue" ? (
+        <div className="mt-3 space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-xs text-app-muted">
+              Project key
+              <input value={projectKey} onChange={(event) => setProjectKey(event.target.value.toUpperCase())} className="mt-1 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm text-app-text outline-none focus:border-violet-500/60" />
+            </label>
+            <label className="text-xs text-app-muted">
+              Issue type
+              <input value={issueType} onChange={(event) => setIssueType(event.target.value)} className="mt-1 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm text-app-text outline-none focus:border-violet-500/60" />
+            </label>
+          </div>
+          <label className="block text-xs text-app-muted">
+            Summary
+            <input value={summary} onChange={(event) => setSummary(event.target.value)} className="mt-1 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm text-app-text outline-none focus:border-violet-500/60" />
+          </label>
+          <label className="block text-xs text-app-muted">
+            Description
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={8} className="mt-1 w-full resize-none rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm text-app-text outline-none focus:border-violet-500/60" />
+          </label>
+          <label className="block text-xs text-app-muted">
+            Labels
+            <input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="mindos, bug" className="mt-1 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm text-app-text outline-none focus:border-violet-500/60" />
+          </label>
+        </div>
+      ) : null}
+
+      {createdKey ? (
+        <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+          Created Jira issue{" "}
+          {createdUrl ? (
+            <a className="underline" href={createdUrl} target="_blank" rel="noreferrer">
+              {createdKey}
+            </a>
+          ) : (
+            createdKey
+          )}
+          .
+        </p>
+      ) : message ? (
+        <p className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2 text-xs text-app-muted">{message}</p>
+      ) : null}
+
+      {confirming ? (
+        <div className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 p-3">
+          <p className="text-sm font-medium text-app-text">Create Jira issue?</p>
+          <p className="mt-1 text-xs text-app-muted">MindOS will create a new Jira issue in project {projectKey || "--"}. No update, delete, transition, assignment, comment, or attachment action will run.</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button type="button" variant="secondary" className="h-9 px-3" onClick={() => setConfirming(false)} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="button" variant="primary" className="h-9 px-3" onClick={() => onCreate(preview)} loading={loading}>
+              Confirm Create
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <SourceStatusList sources={action.sources} />
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="secondary" className="h-9 px-3" onClick={onEdit}>
+          Edit request
+        </Button>
+        {action.actionType === "jira.createIssue" && !createdKey ? (
+          <Button type="button" variant="primary" className="h-9 px-3" disabled={!canCreate || confirming} onClick={() => setConfirming(true)}>
+            Create Jira Issue
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function FileSearchResultsPreview({
@@ -3835,6 +4191,12 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
   if (isLogAnalysisInstruction(text)) {
     return { actionType: "log.analyzeFromSearch", label: "Analyze logs", supported: true };
   }
+  if (/\b(jira|ticket|issue)\b/.test(text) && /\b(check|search|find|already|exists|existing)\b/.test(text) && !/\b(create|make|open|draft|prepare)\b/.test(text)) {
+    return { actionType: "jira.searchIssues", label: "Search Jira issues", supported: true };
+  }
+  if (/\b(jira|ticket|issue)\b/.test(text) && /\b(create|make|open|draft|prepare)\b/.test(text)) {
+    return { actionType: "jira.createIssue", label: "Create Jira issue", supported: true };
+  }
   if (/\b(summary|summarize|summarise|summarization|summarisation|report|recap)\b/.test(text) && /\b(file|files|document|documents|docs?|pdf|pdfs|docx|markdown|md|txt|text)\b/.test(text)) {
     return { actionType: /\breport\b/.test(text) ? "document.reportFromSearch" : "document.summaryFromSearch", label: /\breport\b/.test(text) ? "Report from connected files" : "Summary from connected files", supported: true };
   }
@@ -3869,7 +4231,7 @@ function classifyTaskAction(instruction: string): ClassifiedTaskAction {
   if (/\b(gmail|email|mail|emails|mails)\b/.test(text) && /\b(search|find|look up|lookup|recent|unread)\b/.test(text)) {
     return { actionType: "gmail.searchEmails", label: "Search emails", supported: true };
   }
-  if (/\b(github|pull request|pr|issue|commit|repo|repository)\b/.test(text)) {
+  if (/\b(github|pull request|pr|commit|repo|repository)\b/.test(text)) {
     return { actionType: "github.lookup", label: "GitHub lookup", supported: true };
   }
   if (/\b(report|recap|summary of|summarize my|last 7 days|past week|weekly)\b/.test(text) && /\b(task|tasks|work|memory|activity)\b/.test(text)) {
@@ -3914,6 +4276,8 @@ function capabilityKeyForAction(actionType: TaskActionType) {
   if (actionType === "gmail.replyDraft") return "gmail.replyDraft";
   if (actionType === "gmail.searchEmails") return "gmail.searchEmails";
   if (actionType === "gmail.summarizeEmails") return "gmail.summarizeEmails";
+  if (actionType === "jira.searchIssues") return "jira.searchIssues";
+  if (actionType === "jira.createIssue") return "jira.createIssue";
   return "gmail.createDraft";
 }
 
@@ -3999,7 +4363,7 @@ function extractFileSearchQuery(value: string) {
 function shouldTryHybridPlanner(value: string) {
   const text = value.toLowerCase();
   if (!text.trim()) return false;
-  if (/\b(organize|organise|move|sort|clean|rename|copy|summarize|summarise|summary|summarization|report|analy[sz]e|find|search|gmail|email|mail|send|draft|compose|write)\b/.test(text)) return true;
+  if (/\b(organize|organise|move|sort|clean|rename|copy|summarize|summarise|summary|summarization|report|analy[sz]e|find|search|check|jira|ticket|issue|gmail|email|mail|send|draft|compose|write)\b/.test(text)) return true;
   const hasEmail = /\b(gmail|email|mail|send|draft|compose|write)\b/.test(text) || Boolean(extractEmailAddress(value));
   const hasFile = /\b(find|search|attach|attachment|resume|cv|curriculum vitae|file|files|document|documents|pdf|docx|txt|md|log|logs)\b/.test(text);
   const hasSummarySend = /\b(search|find)\b/.test(text) && /\b(summary|summarize|report)\b/.test(text) && hasEmail;
@@ -4034,9 +4398,31 @@ function isDocumentSearchSummaryPlan(plan: TaskIntentPrepareResponse) {
   );
 }
 
+function isJiraTaskPlan(plan: TaskIntentPrepareResponse) {
+  return (
+    plan.primary_action === "jira.searchIssues" ||
+    plan.primary_action === "jira.createIssue" ||
+    plan.steps.some((step) => step.type === "jira.search_existing_issues" || step.type === "jira.prepare_issue_preview" || step.type === "jira.create_issue_after_confirmation")
+  );
+}
+
 function fileSearchQueryFromPlan(plan: TaskIntentPrepareResponse) {
   const fileSearchStep = plan.steps.find((step) => step.type === "file.search_connected_folders");
   return fileSearchStep?.query || plan.entities.file_queries[0] || plan.entities.topic_queries[0] || "selected files";
+}
+
+function jiraQueryFromPlan(plan: TaskIntentPrepareResponse, instruction: string) {
+  const jiraStep = plan.steps.find((step) => step.type === "jira.search_existing_issues" || step.type === "jira.prepare_issue_preview");
+  return jiraStep?.query || plan.entities.topic_queries[0] || extractJiraQuery(instruction);
+}
+
+function extractJiraQuery(value: string) {
+  let text = value.toLowerCase();
+  text = text
+    .replace(/\b(create|make|open|draft|prepare|check|search|find|already|exists|existing|jira|ticket|issue|task|bug|for|about|this|the|a|an|from|report|log)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || value.trim() || "issue";
 }
 
 function logSearchQueryFromPlan(plan: TaskIntentPrepareResponse) {
@@ -4299,6 +4685,122 @@ function frontendLogAnalysisFallbackPlan(instruction: string): TaskIntentPrepare
   };
 }
 
+function frontendJiraFallbackPlan(instruction: string, actionType: "jira.searchIssues" | "jira.createIssue"): TaskIntentPrepareResponse {
+  const query = extractJiraQuery(instruction);
+  const create = actionType === "jira.createIssue";
+  return {
+    intent: create ? "multi_step" : "single_step",
+    primary_action: actionType,
+    risk_level: create ? "medium" : "safe",
+    requires_user_selection: false,
+    requires_confirmation: create,
+    confidence: 0.78,
+    source_type: "jira",
+    needs_file_search: false,
+    needs_user_file_selection: false,
+    needs_output_file: false,
+    entities: {
+      recipients: [],
+      file_queries: [],
+      topic_queries: [query],
+      explicit_file_names: [],
+      action_words: create ? ["create"] : ["search"],
+      connector_words: ["jira"],
+      attachment_words: [],
+      output_words: [],
+      risk_words: [],
+      date_range: null,
+      output_format: null,
+      extensions: [],
+      latest_preference: false,
+      exact_file_hint: null,
+      possible_intents: [actionType],
+    },
+    steps: create
+      ? [
+          {
+            id: "step_1",
+            type: "jira.search_existing_issues",
+            query,
+            purpose: "Search Jira for similar existing issues",
+            requires_user_selection: false,
+            requires_confirmation: false,
+            to: [],
+            subject_hint: null,
+            body_hint: null,
+            attachments_from_step: null,
+            files_from_step: null,
+            extensions: [],
+            latest_preference: false,
+            exact_file_hint: null,
+            output_format: null,
+            filename_hint: null,
+          },
+          {
+            id: "step_2",
+            type: "jira.prepare_issue_preview",
+            query,
+            purpose: "Prepare an editable Jira issue preview",
+            requires_user_selection: false,
+            requires_confirmation: true,
+            to: [],
+            subject_hint: null,
+            body_hint: null,
+            attachments_from_step: null,
+            files_from_step: null,
+            extensions: [],
+            latest_preference: false,
+            exact_file_hint: null,
+            output_format: null,
+            filename_hint: null,
+          },
+          {
+            id: "step_3",
+            type: "jira.create_issue_after_confirmation",
+            query,
+            purpose: "Create the Jira issue only after confirmation",
+            requires_user_selection: false,
+            requires_confirmation: true,
+            to: [],
+            subject_hint: null,
+            body_hint: null,
+            attachments_from_step: null,
+            files_from_step: null,
+            extensions: [],
+            latest_preference: false,
+            exact_file_hint: null,
+            output_format: null,
+            filename_hint: null,
+          },
+        ]
+      : [
+          {
+            id: "step_1",
+            type: "jira.search_existing_issues",
+            query,
+            purpose: "Search Jira for existing issues",
+            requires_user_selection: false,
+            requires_confirmation: false,
+            to: [],
+            subject_hint: null,
+            body_hint: null,
+            attachments_from_step: null,
+            files_from_step: null,
+            extensions: [],
+            latest_preference: false,
+            exact_file_hint: null,
+            output_format: null,
+            filename_hint: null,
+          },
+        ],
+    explanation: create ? `Search Jira for similar issues, then prepare a Jira issue preview for "${query}".` : `Search Jira for existing issues about "${query}".`,
+    user_facing_summary: create ? `Search Jira first, then preview a new issue for "${query}".` : `Search Jira for "${query}".`,
+    planner_method: "fallback",
+    warnings: ["Using deterministic Jira fallback."],
+    validation_repairs: [],
+  };
+}
+
 function summarizeEmailMessages(messages: NormalizedEmailMessage[]) {
   if (!messages.length) return "No matching emails found.";
   const senders = [...new Set(messages.map((message) => message.from).filter(Boolean))].slice(0, 4);
@@ -4383,6 +4885,9 @@ function actionSourcesFor(actionType: TaskActionType, recentTasks: RecentTaskIte
   if (actionType === "github.lookup") {
     return [{ type: "github", status: "available" }];
   }
+  if (actionType === "jira.searchIssues" || actionType === "jira.createIssue") {
+    return [{ type: "jira", status: "available" }];
+  }
   if (actionType === "memory.report") {
     return [
       { type: "memory", status: "available" },
@@ -4396,6 +4901,8 @@ function previewNoteFor(actionType: TaskActionType) {
   if (actionType === "gmail.searchEmails") return "Email search is read-only. No messages will be sent or modified.";
   if (actionType === "gmail.summarizeEmails") return "Email summarization is read-only. No messages will be sent or modified.";
   if (actionType === "github.lookup") return "GitHub lookup uses read-only synced repository context. No GitHub write actions are available here.";
+  if (actionType === "jira.searchIssues") return "Jira search is read-only. No issues will be created or modified.";
+  if (actionType === "jira.createIssue") return "MindOS will search Jira first, show an editable preview, and create only after confirmation.";
   if (actionType === "memory.report") return "MindOS can prepare a report from task history and Memory without asking for a folder.";
   return "MindOS will prepare a safe preview first.";
 }
@@ -4415,6 +4922,12 @@ function safetyBulletsForAction(action: PreparedAction) {
   }
   if (action.actionType === "github.lookup") {
     return ["This uses read-only GitHub context.", "No issues, pull requests, comments, or repository changes will be created."];
+  }
+  if (action.actionType === "jira.searchIssues") {
+    return ["This uses read-only Jira search.", "No Jira issue will be created or modified."];
+  }
+  if (action.actionType === "jira.createIssue") {
+    return ["MindOS searches similar issues first.", "You can edit the issue preview.", "Jira issue creation requires explicit confirmation."];
   }
   return ["MindOS validates the preview before execution.", "No unsupported tool call will run."];
 }

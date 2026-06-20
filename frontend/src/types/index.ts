@@ -598,6 +598,8 @@ export type PreparedTaskAction = {
     | "git.push"
     | "github.createIssue"
     | "github.createPullRequest"
+    | "jira.searchIssues"
+    | "jira.createIssue"
     | "file.organize"
     | "document.summary"
     | "document.summaryFromSearch"
@@ -629,6 +631,9 @@ export type TaskIntentPlanStep = {
     | "gmail.create_draft"
     | "gmail.send_email_after_confirmation"
     | "gmail.attach_selected_files"
+    | "jira.search_existing_issues"
+    | "jira.prepare_issue_preview"
+    | "jira.create_issue_after_confirmation"
     | "task.ask_user_to_choose_files"
     | "unsupported";
   query?: string | null;
@@ -1427,6 +1432,66 @@ export type JiraConnectionResponse = {
   connected: boolean;
   message: string;
   connector: JiraStatusResponse;
+};
+
+export type JiraIssue = {
+  key: string;
+  summary: string;
+  status: string;
+  issue_type: string;
+  updated?: string | null;
+  url: string;
+};
+
+export type JiraIssueSearchRequest = {
+  query: string;
+  project_key?: string | null;
+  max_results?: number;
+};
+
+export type JiraIssueSearchResponse = {
+  ok: boolean;
+  issues: JiraIssue[];
+};
+
+export type JiraIssueCreateRequest = {
+  project_key: string;
+  issue_type: string;
+  summary: string;
+  description: string;
+  labels: string[];
+  priority?: string | null;
+  confirmation: boolean;
+};
+
+export type JiraIssueCreateResponse = {
+  ok: boolean;
+  issue_key: string;
+  url: string;
+};
+
+export type JiraIssueDraftRequest = {
+  instruction: string;
+  project_key?: string | null;
+  issue_type?: string | null;
+  existing_issues?: JiraIssue[];
+  context_summary?: string | null;
+  selected_filenames?: string[];
+  model_id?: string | null;
+};
+
+export type JiraIssueDraftResponse = {
+  project_key?: string | null;
+  issue_type: string;
+  summary: string;
+  description: string;
+  labels: string[];
+  priority?: string | null;
+  search_query: string;
+  warnings: string[];
+  model?: string | null;
+  provider?: string | null;
+  model_display_name?: string | null;
 };
 
 export type GmailStatusResponse = {

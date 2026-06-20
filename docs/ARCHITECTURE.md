@@ -77,7 +77,9 @@ The GitHub connector is primarily a configuration and context source. It stores 
 
 ## Jira Connector Flow
 
-Jira is a connection/configuration POC: Jira Cloud site URL + Atlassian email + Jira API token -> Basic Auth -> `/rest/api/3/myself` connection test -> `/rest/api/3/project/search` project listing -> default project key/issue type stored for later task flows. Atlassian Organization Admin API keys and Organization IDs are not used. Jira issue creation and other write actions are not implemented.
+Jira uses Jira Cloud site URL + Atlassian email + Jira API token -> Basic Auth -> `/rest/api/3/myself` connection test -> `/rest/api/3/project/search` project listing -> default project key/issue type stored for Tasks. Atlassian Organization Admin API keys and Organization IDs are not used.
+
+Jira Issue Flow: chat/task request -> task planner emits `jira.searchIssues` or `jira.createIssue` -> Jira searches similar existing issues with safe JQL -> selected model drafts a structured issue preview with deterministic fallback -> user edits project/type/summary/description/labels -> explicit confirmation -> Jira create issue API -> lightweight Task History. Jira issue creation is not Memory, and Jira update/delete/transition/assign/comment/attachment actions are not implemented.
 
 ## Email MCP Connector Flow
 
