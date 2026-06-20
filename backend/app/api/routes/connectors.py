@@ -66,6 +66,10 @@ from app.schemas.github import (
 from app.schemas.jira import (
     JiraConfigRequest,
     JiraConnectionResponse,
+    JiraIssueCreateRequest,
+    JiraIssueCreateResponse,
+    JiraIssueSearchRequest,
+    JiraIssueSearchResponse,
     JiraProjectsResponse,
     JiraStatusResponse,
     JiraTestResponse,
@@ -235,6 +239,22 @@ def list_jira_projects() -> JiraProjectsResponse:
     try:
         return jira_service.list_projects()
     except JiraConnectorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/jira/search", response_model=JiraIssueSearchResponse)
+def search_jira_issues(request: JiraIssueSearchRequest) -> JiraIssueSearchResponse:
+    try:
+        return jira_service.search_issues(request)
+    except (JiraConnectorError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/jira/issues", response_model=JiraIssueCreateResponse)
+def create_jira_issue(request: JiraIssueCreateRequest) -> JiraIssueCreateResponse:
+    try:
+        return jira_service.create_issue(request)
+    except (JiraConnectorError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 

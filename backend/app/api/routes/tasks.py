@@ -37,6 +37,7 @@ from app.schemas.file_tasks import (
 )
 from app.schemas.file_index import IndexedFileSearchRequest, IndexedFileSearchResponse, ResolveIndexedAttachmentsRequest, ResolveIndexedAttachmentsResponse
 from app.schemas.gmail import GmailDraftPrepareRequest, GmailDraftPrepareResponse
+from app.schemas.jira import JiraIssueDraftRequest, JiraIssueDraftResponse
 from app.services.document_summary_task_service import document_summary_task_service
 from app.services.file_index_service import file_index_service
 from app.services.file_task_execution_service import file_task_execution_service
@@ -44,6 +45,7 @@ from app.services.file_task_llm_planner_service import file_task_llm_planner_ser
 from app.services.file_task_planner_service import file_task_planner_service
 from app.services.file_snapshot_service import file_snapshot_service
 from app.services.gmail_draft_planner import gmail_draft_planner
+from app.services.jira_issue_planner_service import jira_issue_planner_service
 from app.services.log_analysis_task_service import log_analysis_task_service
 from app.services.task_action_execution_service import TaskActionExecutionError, task_action_execution_service
 from app.services.task_intent_planner_service import task_intent_planner_service
@@ -270,6 +272,17 @@ def prepare_gmail_draft_task(request: GmailDraftPrepareRequest) -> GmailDraftPre
     except Exception as error:
         logger.exception("Failed to prepare Gmail draft")
         raise HTTPException(status_code=500, detail=f"Gmail draft preparation failed: {error}") from error
+
+
+@router.post("/jira/issue/prepare", response_model=JiraIssueDraftResponse)
+def prepare_jira_issue_task(request: JiraIssueDraftRequest) -> JiraIssueDraftResponse:
+    try:
+        return jira_issue_planner_service.prepare(request)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Failed to prepare Jira issue")
+        raise HTTPException(status_code=500, detail=f"Jira issue preparation failed: {error}") from error
 
 
 @router.post("/file/{task_id}/execute", response_model=FileTaskExecutionResult)

@@ -17,6 +17,8 @@ ActionType = Literal[
     "git.push",
     "github.createIssue",
     "github.createPullRequest",
+    "jira.searchIssues",
+    "jira.createIssue",
     "file.organize",
     "document.summary",
     "document.summaryFromSearch",
@@ -35,6 +37,9 @@ TaskPlanStepType = Literal[
     "gmail.create_draft",
     "gmail.send_email_after_confirmation",
     "gmail.attach_selected_files",
+    "jira.search_existing_issues",
+    "jira.prepare_issue_preview",
+    "jira.create_issue_after_confirmation",
     "task.ask_user_to_choose_files",
     "unsupported",
 ]

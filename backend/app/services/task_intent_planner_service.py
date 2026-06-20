@@ -22,6 +22,9 @@ ALLOWED_STEP_TYPES = {
     "gmail.create_draft",
     "gmail.send_email_after_confirmation",
     "gmail.attach_selected_files",
+    "jira.search_existing_issues",
+    "jira.prepare_issue_preview",
+    "jira.create_issue_after_confirmation",
     "task.ask_user_to_choose_files",
     "unsupported",
 }
@@ -34,6 +37,8 @@ ALLOWED_ACTIONS = {
     "gmail.createDraft",
     "gmail.sendEmail",
     "gmail.sendGeneratedReport",
+    "jira.searchIssues",
+    "jira.createIssue",
     "multi_step",
     "unsupported",
 }
@@ -81,9 +86,11 @@ class TaskIntentPlannerService:
             "file.search_connected_folders, file.select_candidates, document.summarize_selected_files, "
             "document.create_report_from_files, document.create_output_file, log.search_connected_logs, "
             "log.analyze_selected_files, gmail.create_draft, gmail.send_email_after_confirmation, "
-            "gmail.attach_selected_files, task.ask_user_to_choose_files, unsupported. "
+            "gmail.attach_selected_files, jira.search_existing_issues, jira.prepare_issue_preview, "
+            "jira.create_issue_after_confirmation, task.ask_user_to_choose_files, unsupported. "
             "Available high-level action types: file.search, file.organize, document.summaryFromSearch, "
-            "document.reportFromSearch, log.analyzeFromSearch, gmail.createDraft, gmail.sendEmail, gmail.sendGeneratedReport, multi_step, unsupported. "
+            "document.reportFromSearch, log.analyzeFromSearch, gmail.createDraft, gmail.sendEmail, "
+            "gmail.sendGeneratedReport, jira.searchIssues, jira.createIssue, multi_step, unsupported. "
             "Rules: 'summarize errors from the log files' means log.analyzeFromSearch. "
             "'create a summarization from the files of plan 2026' means document.summaryFromSearch. "
             "'find my resume and draft/send email' means file search first, then Gmail. "
@@ -96,8 +103,8 @@ class TaskIntentPlannerService:
         text = instruction.lower()
         emails = [match[0] or match[1] for match in re.findall(r"\[([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\]\(mailto:[^)]+\)|([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", instruction, flags=re.IGNORECASE)]
         explicit_file_names = self._explicit_file_names(instruction)
-        action_words = self._matched_words(text, ["summarize", "summary", "summarization", "report", "analyze", "analyse", "find", "search", "create", "draft", "send", "organize", "move", "sort", "clean", "rename", "copy"])
-        connector_words = self._matched_words(text, ["gmail", "email", "mail", "log", "logs", "log files", "github", "task history", "connected folders"])
+        action_words = self._matched_words(text, ["summarize", "summary", "summarization", "report", "analyze", "analyse", "find", "search", "check", "create", "draft", "send", "organize", "move", "sort", "clean", "rename", "copy"])
+        connector_words = self._matched_words(text, ["gmail", "email", "mail", "log", "logs", "log files", "github", "jira", "ticket", "issue", "task history", "connected folders"])
         attachment_words = self._matched_words(text, ["attach", "attachment", "resume", "cv", "file", "files", "document", "documents"])
         output_words = self._matched_words(text, ["summary", "summarization", "report", "output", "document", "file"])
         risk_words = self._matched_words(text, ["send", "delete", "remove", "overwrite", "move", "rename", "copy"])
@@ -139,6 +146,8 @@ class TaskIntentPlannerService:
         wants_send = bool(hints.get("wants_send")) and not wants_draft
         wants_file = bool(hints.get("has_file_search_words"))
 
+        if self._is_jira_request(instruction):
+            return self._jira_search_plan(instruction, hints, planner_method) if self._is_jira_search_only(instruction) else self._jira_create_plan(instruction, hints, planner_method)
         if hints.get("wants_log_analysis") and wants_mail:
             return self._log_then_gmail_plan(instruction, hints, recipients, wants_send, planner_method)
         if hints.get("wants_log_analysis"):
@@ -174,6 +183,9 @@ class TaskIntentPlannerService:
         if hints.get("wants_log_analysis") and planned.primary_action != "log.analyzeFromSearch":
             repairs.append("Log analysis request was repaired to log analysis.")
             planned = self._log_plan(instruction, hints, "fallback")
+        if self._is_jira_request(instruction) and planned.primary_action not in {"jira.searchIssues", "jira.createIssue"}:
+            repairs.append("Jira request was repaired to Jira search/create planning.")
+            planned = self._jira_search_plan(instruction, hints, "fallback") if self._is_jira_search_only(instruction) else self._jira_create_plan(instruction, hints, "fallback")
 
         planned.steps = [step for step in planned.steps if step.type in ALLOWED_STEP_TYPES]
         if not planned.steps:
@@ -189,6 +201,10 @@ class TaskIntentPlannerService:
             self._ensure_log_steps(planned, instruction, hints, repairs)
         elif planned.primary_action in {"gmail.createDraft", "gmail.sendEmail", "gmail.sendGeneratedReport", "multi_step"}:
             self._ensure_gmail_steps(planned, instruction, hints, repairs)
+        elif planned.primary_action == "jira.createIssue":
+            self._ensure_jira_create_steps(planned, instruction, hints, repairs)
+        elif planned.primary_action == "jira.searchIssues":
+            self._ensure_jira_search_steps(planned, instruction, hints, repairs)
         elif planned.primary_action == "file.organize" and not hints.get("wants_organize"):
             repaired = self._unsupported_plan("This does not look like a file organization request.", hints, "fallback")
             repaired.validation_repairs = repairs + ["Blocked file organization without explicit organize/move/sort/clean intent."]
@@ -198,6 +214,8 @@ class TaskIntentPlannerService:
             if step.type in {"file.search_connected_folders", "log.search_connected_logs"}:
                 step.requires_user_selection = True
             if step.type == "gmail.send_email_after_confirmation":
+                step.requires_confirmation = True
+            if step.type == "jira.create_issue_after_confirmation":
                 step.requires_confirmation = True
         planned.requires_confirmation = True
         planned.validation_repairs = repairs
@@ -270,6 +288,34 @@ class TaskIntentPlannerService:
         plan.source_type = "connected_files" if has_attachment else "gmail"
         plan.needs_file_search = has_attachment
         plan.needs_user_file_selection = has_attachment
+
+    def _ensure_jira_search_steps(self, plan: TaskIntentPrepareResponse, instruction: str, hints: dict[str, Any], repairs: list[str]) -> None:
+        query = self._jira_query(instruction, hints)
+        if not any(step.type == "jira.search_existing_issues" for step in plan.steps):
+            plan.steps.insert(0, TaskIntentPlanStep(id="step_jira_search", type="jira.search_existing_issues", query=query, purpose="Search Jira for similar issues"))
+            repairs.append("Added Jira issue search step.")
+        plan.intent = "single_step"
+        plan.primary_action = "jira.searchIssues"
+        plan.source_type = "jira"
+        plan.requires_confirmation = False
+        plan.entities.topic_queries = plan.entities.topic_queries or [query]
+
+    def _ensure_jira_create_steps(self, plan: TaskIntentPrepareResponse, instruction: str, hints: dict[str, Any], repairs: list[str]) -> None:
+        query = self._jira_query(instruction, hints)
+        if not any(step.type == "jira.search_existing_issues" for step in plan.steps):
+            plan.steps.insert(0, TaskIntentPlanStep(id="step_jira_search", type="jira.search_existing_issues", query=query, purpose="Search Jira for similar issues"))
+            repairs.append("Added Jira existing-issue search step.")
+        if not any(step.type == "jira.prepare_issue_preview" for step in plan.steps):
+            plan.steps.append(TaskIntentPlanStep(id="step_jira_preview", type="jira.prepare_issue_preview", query=query, purpose="Prepare editable Jira issue preview", requires_confirmation=True))
+            repairs.append("Added Jira issue preview step.")
+        if not any(step.type == "jira.create_issue_after_confirmation" for step in plan.steps):
+            plan.steps.append(TaskIntentPlanStep(id="step_jira_create", type="jira.create_issue_after_confirmation", query=query, purpose="Create Jira issue only after confirmation", requires_confirmation=True))
+            repairs.append("Added confirmed Jira issue creation step.")
+        plan.intent = "multi_step"
+        plan.primary_action = "jira.createIssue"
+        plan.source_type = "jira"
+        plan.requires_confirmation = True
+        plan.entities.topic_queries = plan.entities.topic_queries or [query]
 
     def _response_from_json(self, value: dict[str, Any]) -> TaskIntentPrepareResponse:
         entities = value.get("entities") if isinstance(value.get("entities"), dict) else {}
@@ -466,6 +512,46 @@ class TaskIntentPlannerService:
     def _organize_plan(self, instruction: str, hints: dict[str, Any], planner_method: str) -> TaskIntentPrepareResponse:
         return self._plan(intent="single_step", primary_action="file.organize", risk_level="medium", requires_user_selection=False, requires_confirmation=True, source_type="manual_files", needs_file_search=False, needs_user_file_selection=False, needs_output_file=False, entities=self._base_entities(hints), steps=[], explanation="Prepare a safe file organization preview after the user chooses a folder.", planner_method=planner_method)
 
+    def _jira_search_plan(self, instruction: str, hints: dict[str, Any], planner_method: str) -> TaskIntentPrepareResponse:
+        query = self._jira_query(instruction, hints)
+        return self._plan(
+            intent="single_step",
+            primary_action="jira.searchIssues",
+            risk_level="safe",
+            requires_user_selection=False,
+            requires_confirmation=False,
+            source_type="jira",
+            needs_file_search=False,
+            needs_user_file_selection=False,
+            needs_output_file=False,
+            entities=self._base_entities(hints, topic_queries=[query]),
+            steps=[TaskIntentPlanStep(id="step_1", type="jira.search_existing_issues", query=query, purpose="Search Jira for existing issues")],
+            explanation=f"Search Jira for existing issues about '{query}'.",
+            planner_method=planner_method,
+        )
+
+    def _jira_create_plan(self, instruction: str, hints: dict[str, Any], planner_method: str) -> TaskIntentPrepareResponse:
+        query = self._jira_query(instruction, hints)
+        return self._plan(
+            intent="multi_step",
+            primary_action="jira.createIssue",
+            risk_level="medium",
+            requires_user_selection=False,
+            requires_confirmation=True,
+            source_type="jira",
+            needs_file_search=False,
+            needs_user_file_selection=False,
+            needs_output_file=False,
+            entities=self._base_entities(hints, topic_queries=[query]),
+            steps=[
+                TaskIntentPlanStep(id="step_1", type="jira.search_existing_issues", query=query, purpose="Search Jira for similar existing issues"),
+                TaskIntentPlanStep(id="step_2", type="jira.prepare_issue_preview", query=query, purpose="Prepare an editable Jira issue preview", requires_confirmation=True),
+                TaskIntentPlanStep(id="step_3", type="jira.create_issue_after_confirmation", query=query, purpose="Create the Jira issue after user confirmation", requires_confirmation=True),
+            ],
+            explanation=f"Search Jira for similar issues, then prepare an editable issue preview for '{query}'.",
+            planner_method=planner_method,
+        )
+
     def _unsupported_plan(self, reason: str, hints: dict[str, Any], planner_method: str) -> TaskIntentPrepareResponse:
         return self._plan(intent="unsupported", primary_action="unsupported", risk_level="medium", requires_user_selection=False, requires_confirmation=True, source_type="none", needs_file_search=False, needs_user_file_selection=False, needs_output_file=False, entities=self._base_entities(hints), steps=[TaskIntentPlanStep(id="step_1", type="unsupported", purpose=reason)], explanation=reason, planner_method=planner_method, confidence=0.35)
 
@@ -477,6 +563,8 @@ class TaskIntentPlannerService:
             intents.append("document.summaryFromSearch")
         if emails or re.search(r"\b(gmail|email|mail)\b", text):
             intents.append("gmail.createDraft" if re.search(r"\b(draft|compose|write)\b", text) else "gmail.sendEmail")
+        if self._is_jira_request(text):
+            intents.append("jira.searchIssues" if self._is_jira_search_only(text) else "jira.createIssue")
         if self._is_organize_request(text):
             intents.append("file.organize")
         return intents or ["unsupported"]
@@ -491,6 +579,22 @@ class TaskIntentPlannerService:
         has_log = bool(re.search(r"\b(log|logs|log files?|app\.log|server\.log|backend\.log|error\.log|debug\.log|traceback)\b", text) or re.search(r"\.(log|out|err)\b", text))
         has_analysis = bool(re.search(r"\b(error|errors|exception|failed|failure|traceback|stacktrace|timeout|root cause|causing|analyze|analyse|analysis|report|summary|summarize|summarization|database connection)\b", text))
         return has_log and has_analysis
+
+    def _is_jira_request(self, text: str) -> bool:
+        lower = text.lower()
+        return bool(re.search(r"\b(jira|ticket|issue)\b", lower) and re.search(r"\b(create|make|open|draft|prepare|check|search|find|already|exists)\b", lower))
+
+    def _is_jira_search_only(self, text: str) -> bool:
+        lower = text.lower()
+        return bool(re.search(r"\b(check|search|find|already|exists|existing)\b", lower)) and not bool(re.search(r"\b(create|make|open|draft|prepare)\b", lower))
+
+    def _jira_query(self, instruction: str, hints: dict[str, Any]) -> str:
+        topics = [str(item).strip() for item in hints.get("topic_terms") or [] if str(item).strip()]
+        if topics:
+            return topics[0]
+        text = instruction.lower()
+        text = re.sub(r"\b(create|make|open|draft|prepare|check|search|find|already|exists|existing|jira|ticket|issue|task|bug|for|about|this|the|a|an|from|report|log)\b", " ", text)
+        return re.sub(r"\s+", " ", text).strip() or "issue"
 
     def _explicit_file_names(self, instruction: str) -> list[str]:
         return [match.strip() for match in re.findall(r"\b[\w .()_-]+\.[A-Za-z0-9]{2,5}\b", instruction) if match.strip()]

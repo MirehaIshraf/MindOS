@@ -1,12 +1,14 @@
 from app.schemas.task_actions import ActionCapability, ActionCapabilityRegistry
 from app.services.github_service import github_service
 from app.services.gmail_service import gmail_service
+from app.services.jira_service import jira_service
 
 
 class TaskActionCapabilityService:
     def registry(self) -> ActionCapabilityRegistry:
         gmail_status = gmail_service.status()
         github_status = github_service.status()
+        jira_status = jira_service.status()
 
         gmail_draft_available = bool(gmail_status.connected and gmail_status.capabilities and gmail_status.capabilities.get("create_draft"))
         gmail_search_available = bool(gmail_status.connected and gmail_status.capabilities and gmail_status.capabilities.get("search_email"))
@@ -95,6 +97,27 @@ class TaskActionCapabilityService:
                     risk_level="medium",
                     requires_confirmation=True,
                     reason="GitHub pull request creation is not connected yet.",
+                ),
+                "jira.read": ActionCapability(
+                    available=bool(jira_status.connected),
+                    provider="jira",
+                    risk_level="safe",
+                    requires_confirmation=False,
+                    reason=None if jira_status.connected else "Connect Jira first.",
+                ),
+                "jira.searchIssues": ActionCapability(
+                    available=bool(jira_status.connected),
+                    provider="jira",
+                    risk_level="safe",
+                    requires_confirmation=False,
+                    reason=None if jira_status.connected else "Connect Jira first.",
+                ),
+                "jira.createIssue": ActionCapability(
+                    available=bool(jira_status.connected),
+                    provider="jira",
+                    risk_level="medium",
+                    requires_confirmation=True,
+                    reason=None if jira_status.connected else "Connect Jira first.",
                 ),
                 "git.status": ActionCapability(
                     available=True,
