@@ -107,9 +107,29 @@ Captured browser pages can be summarized manually with deterministic local logic
 
 ## Future Task Vision
 
+## Chat-First Planning Direction
+
+MindOS should become chat-first for work execution. Chat is the primary user command surface; Connectors are where users configure access, credentials, scopes, and selected sources. TasksPage should gradually become Run History, pending confirmations, and debug visibility for plans/runs instead of the main place to type tasks.
+
+Planned command flow:
+
+User asks in Chat -> LLM proposes a structured `CommandPlan` -> backend validates risk and capabilities -> backend retrieves Memory or calls allowlisted internal tools -> read-only tools run after explicit request -> side-effect tools show preview and require explicit confirmation -> existing connector services execute -> final result appears in Chat.
+
+ToolRegistry is an internal MCP-style registry of typed wrappers around existing MindOS services/connectors. It is not an auth layer. Gmail OAuth stays in the Gmail connector, future Jira API tokens will stay in a Jira connector, GitHub fine-grained access tokens stay in the GitHub connector, and File System access stays in user-added folders/browser handles. File tools should address connected files by `source_id` plus `relative_path`, not arbitrary frontend absolute paths. MindOS should not depend on external MCP servers for Gmail, Jira, or GitHub; internal tools wrap the connector APIs.
+
+Risk model:
+
+- `read_only`: `memory.search`, `files.search_connected`, `gmail.search_unread`, `jira.search_issues`, `github.search_issues`.
+- `safe_generate`: summarization, classification, draft text, and preview-only content generation.
+- `external_write`: `gmail.create_draft`, `gmail.send_email`, `jira.create_issue`, `jira.comment_issue`, `github.create_issue`, `github.comment_issue`, `github.create_pull_request`.
+- `file_write`: creating summaries/reports or moving files after confirmation.
+- `high_risk`: destructive deletes, destructive workflow transitions, bulk operations, repo delete, issue delete, force push, branch delete, reset, clean, and rebase. These stay disabled for the demo.
+
+Backend validators decide risk and permissions; the LLM never decides what is safe to execute.
+
 Final task architecture:
 
-User asks task -> FastAPI retrieves context -> model drafts plan -> FastAPI validates -> user confirms -> FastAPI executes allowed tool
+User asks in Chat -> FastAPI retrieves context -> model drafts a `CommandPlan` -> FastAPI validates -> user confirms when required -> FastAPI executes allowed internal tools through existing services/connectors.
 
 Current active task POCs are file organization, document summary, Gmail draft/send with confirmation, and Gmail attachment preview/selection. These flows are not production-grade autonomous agents; they are gated preview-confirm-execute slices.
 

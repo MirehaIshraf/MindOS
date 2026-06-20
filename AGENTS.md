@@ -22,7 +22,7 @@ Tasks are experimental. Gmail task actions and file/document tasks are active PO
 
 - Do not add real external task execution unless explicitly requested and guarded by preview plus confirmation.
 - Do not send real email silently.
-- Do not call real Jira/GitHub write APIs.
+- Jira/GitHub write APIs must never be called from ad hoc code paths. Future Jira/GitHub writes may only run through allowlisted ToolRegistry tools, connector capability checks, validated previews, and explicit user confirmation.
 - Do not run destructive Git commands.
 - Never run arbitrary shell commands from task flows.
 - Never force push, delete branches, reset, clean, rebase, or change Git remotes from task flows.
@@ -39,6 +39,8 @@ Tasks are experimental. Gmail task actions and file/document tasks are active PO
 
 ## Architecture Rules
 
+Chat is the primary command surface. Users should ask for work in Chat; Chat may create a structured `CommandPlan`, validate it, show previews/confirmations, and then execute only allowlisted internal tools. Connectors are setup/access/auth layers, not the main task UI.
+
 Backend layers:
 
 - routes = request/response only
@@ -47,6 +49,7 @@ Backend layers:
 - repositories = persistence
 - integrations = external systems like Ollama, ChromaDB, providers, tools
 - domain = core models/enums
+- internal tools = typed ToolRegistry wrappers around existing services/connectors; tools are not a separate auth layer
 
 Frontend layers:
 
@@ -141,6 +144,10 @@ Before adding a new feature:
 - Attachment discovery must search connected folder file inventory as well as content-indexed memory. A safe file whose text extraction failed can still be found by filename and attached after user selection and confirmation.
 - Generic Email MCP remains provider-agnostic for custom/corporate/internal providers and should not be confused with Gmail.
 - Future GitHub/local Git write actions require preview, exact capability checks, and explicit confirmation. GitHub API actions belong to the GitHub connector; local repo status/diff/commit/push belongs to the local Git connector.
+- Gmail, Jira, GitHub, and File System auth/access remain inside their connector/services. Gmail OAuth stays in the Gmail connector, future Jira API tokens should stay in a Jira connector, GitHub fine-grained access tokens stay in the GitHub connector, and File System access stays in connected folder/browser-handle services. The ToolRegistry must call those services and must not store or bypass credentials.
+- Do not use external MCP servers for Gmail, Jira, or GitHub unless explicitly requested. MindOS should expose internal MCP-style tools that wrap its own connector APIs and backend services.
+- GitHub API tools and local Git tools are separate. GitHub issues/PRs/comments use the GitHub connector; local status/diff/commit/push use the local Git connector and allowlisted Git commands.
+- File tools must use connected File System sources with `source_id` plus `relative_path`, or browser-selected handles when explicitly in browser mode. Do not trust arbitrary frontend absolute paths for file operations or attachments.
 - Git commit/push tasks must use allowlisted Git commands only.
 - External collectors should use the external ingestion API.
 - VSCode connector is an implemented MVP connector and should stay user-controlled.
@@ -158,6 +165,14 @@ Before adding a new feature:
 - Do not index raw chat messages just because a chat run is tracked.
 
 ## Current Known Direction
+
+MindOS is moving toward a chat-first planning architecture:
+
+- Chat is the primary place where users ask MindOS to do work.
+- The LLM may propose a structured `CommandPlan`, but it must never execute raw tool calls directly.
+- The backend validates each plan through a `CommandPlanValidator`, assigns risk/permission requirements, and only then calls internal allowlisted tools.
+- Read-only tools can run after an explicit user request. Side-effect tools require preview plus explicit confirmation. Destructive/high-risk tools remain disabled for the demo.
+- TasksPage should evolve into Run History / pending confirmations / debug visibility rather than the primary task input surface.
 
 Tasks are experimental, but file organization, document summary, and Gmail draft/send actions are active POC features. Every task action must follow action classification, capability checks, editable preview, explicit confirmation for side effects, allowlisted execution, and lightweight Task History.
 

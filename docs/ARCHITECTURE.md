@@ -31,6 +31,43 @@ Actual structure:
 
 Chat is the primary user interface. Memory is for browsing and searching stored knowledge. Connectors control data sources. Settings manages models and configuration. Dev is for debugging only. Tasks are experimental, with active POC flows for file organization, document summary, and Gmail draft/send actions.
 
+## Chat-First Command Architecture
+
+Target flow:
+
+ChatPage -> ChatService -> ChatIntent/CommandPlanner -> `CommandPlan` -> `CommandPlanValidator` -> `ToolRegistry` -> `ToolExecutor` -> existing services/connectors -> preview/confirmation when needed -> final Chat result.
+
+The LLM may translate a messy user request into a structured `CommandPlan`, but it does not get direct execution authority. The backend owns validation, risk classification, connector capability checks, confirmation requirements, execution, and sanitized result recording.
+
+TasksPage should evolve into Run History / pending confirmations / debug visibility for command plans and tool runs. It should not become the permanent primary task command input.
+
+## Internal ToolRegistry
+
+`ToolRegistry` is an internal MCP-style registry of allowlisted typed tools. A tool is a wrapper around existing backend services/connectors, such as memory search, connected file search, Gmail read/draft/send, GitHub read, future Jira read/write, or file output creation.
+
+ToolRegistry is not an authentication layer. Connector auth stays with connector services:
+
+- Gmail OAuth and Gmail capabilities stay in the Gmail connector/service.
+- GitHub fine-grained access token and selected repositories stay in the GitHub connector/service.
+- Future Jira API token/config should stay in a Jira connector/service.
+- File System access stays in connected folders or browser-selected directory handles.
+
+MindOS should not require external MCP servers for Gmail, Jira, or GitHub. It may expose internal MCP-style tools, but those tools call MindOS services and connector APIs.
+
+File tools must use connected File System references such as `source_id` plus `relative_path`, or browser-selected directory handles in browser-mode POCs. Tool handlers must not trust arbitrary frontend absolute paths for file reads, writes, or attachments.
+
+## CommandPlan Safety Flow
+
+`CommandPlan` risk is assigned by backend validators, never by the model.
+
+- `read_only`: memory search, connected file search, Gmail unread/search, Jira issue search, GitHub issue/PR/commit search.
+- `safe_generate`: summarize, classify, draft text, or create preview-only content.
+- `external_write`: Gmail draft/send, future Jira issue/comment, future GitHub issue/comment/PR.
+- `file_write`: summary/report creation or file movement after confirmation.
+- `high_risk`: delete, destructive transitions, bulk operations, repo delete, issue delete, force push, branch delete, reset, clean, rebase. Disabled for demo.
+
+Read-only tools may run after an explicit user request. Side-effect tools require a preview plus explicit confirmation. High-risk tools must remain unavailable unless a future decision explicitly changes the policy.
+
 ## Data Flow
 
 Connector/client -> ingestion endpoint -> memory policy -> SQLite event -> optional embedding -> optional relationship detection -> search/context builder -> model response

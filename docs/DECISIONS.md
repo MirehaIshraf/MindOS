@@ -77,3 +77,51 @@ Reason: Prevent accidental sensitive file attachment.
 Decision: GitHub connector handles API actions such as issues/PRs. Local Git connector handles repo status/diff/commit/push.
 
 Reason: Pushing to GitHub is a local Git remote operation, not just GitHub API.
+
+## 014 Chat is the primary command surface
+
+Decision: Chat becomes the primary place where users ask MindOS to plan and run work.
+
+Reason: Users expect one conversational command surface. Connectors should stay focused on setup/access, not task complexity.
+
+## 015 TasksPage becomes Run History and Debug
+
+Decision: TasksPage should evolve into Run History, pending confirmations, and debug visibility for command plans/runs.
+
+Reason: This preserves useful task visibility without splitting the command UX away from Chat.
+
+## 016 Internal ToolRegistry for safe execution
+
+Decision: MindOS will use an internal MCP-style ToolRegistry of allowlisted typed tools wrapping existing services/connectors.
+
+Reason: This keeps execution auditable and typed while avoiding dependency on external MCP servers for core Gmail/Jira/GitHub flows.
+
+## 017 Connector auth remains inside connector services
+
+Decision: ToolRegistry does not own auth. Gmail, GitHub, future Jira, Email MCP, and File System access remain inside their connector/service boundaries.
+
+Reason: Credentials, scopes, selected repositories/folders, and provider capabilities must stay centralized and protected.
+
+## 018 Jira/GitHub writes are allowed only through validated tools
+
+Decision: Future Jira/GitHub write actions may be added only as allowlisted tools with connector state checks, preview, backend validation, and explicit confirmation. This supersedes the old absolute "no real Jira/GitHub writes" rule.
+
+Reason: The product direction includes useful developer actions, but only through controlled, confirmable execution.
+
+## 019 Destructive tools are disabled for the demo
+
+Decision: Deletes, destructive transitions, bulk destructive operations, repository deletes, issue deletes, force push, branch delete, reset, clean, and rebase remain disabled.
+
+Reason: The demo should support useful POC actions without exposing irreversible or high-risk operations.
+
+## 020 Direct MCP/tool execution cannot bypass CommandPlan validation
+
+Decision: Any internal tool execution triggered from Chat must pass through CommandPlan validation and capability/risk checks.
+
+Reason: The model should propose plans, not directly execute tools.
+
+## 021 GitHub API tools and local Git tools remain separate
+
+Decision: GitHub API tools handle GitHub repository APIs such as issues, comments, PRs, and repository metadata. Local Git tools handle local repository status, diff, commit, and push.
+
+Reason: API actions and local Git command actions have different credentials, risk models, and validation requirements.

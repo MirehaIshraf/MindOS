@@ -67,6 +67,62 @@ Preferred browser event types:
 - `DELETE /chat/sessions/{session_id}`: delete one chat session.
 - `DELETE /chat/sessions`: clear all chat sessions.
 
+### Planned Chat CommandPlan Routes
+
+These routes are planned for the chat-first command architecture and are not guaranteed to be mounted yet on every branch.
+
+- `GET /chat/command/{plan_id}`: fetch one persisted command plan, including status, risk, steps, preview payload, confirmation requirement, sanitized tool results, and errors.
+- `POST /chat/command/{plan_id}/confirm`: confirm a pending side-effect plan. The backend revalidates the plan, connector state, capabilities, and preview payload before execution.
+- `POST /chat/command/{plan_id}/cancel`: cancel a queued/pending command plan before execution.
+- `GET /chat/command/history`: list recent command plans/runs for Chat and the future Tasks/Run History view.
+
+Planned `CommandPlan` shape:
+
+```json
+{
+  "plan_id": "cmd_...",
+  "session_id": "chat_...",
+  "user_message_id": "msg_...",
+  "status": "draft|awaiting_confirmation|running|completed|failed|cancelled|blocked",
+  "risk_level": "read_only|safe_generate|external_write|file_write|high_risk",
+  "requires_confirmation": true,
+  "summary": "Create a Gmail draft with the selected report attached.",
+  "steps": [],
+  "preview": {},
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+Planned `CommandPlanStep` shape:
+
+```json
+{
+  "step_id": "step_001",
+  "tool": "gmail.create_draft",
+  "risk_level": "external_write",
+  "arguments": {},
+  "status": "planned|running|completed|failed|blocked",
+  "requires_confirmation": true,
+  "blocked_reason": null
+}
+```
+
+Planned `ToolExecutionResult` shape:
+
+```json
+{
+  "tool": "github.search_issues",
+  "status": "completed",
+  "summary": "Found 3 open issues.",
+  "data": {},
+  "warnings": [],
+  "error": null
+}
+```
+
+Tool results must be sanitized before persistence or display. Credentials, tokens, OAuth codes, raw provider secrets, full email bodies, attachment bytes, and raw file contents must not be returned through command history.
+
 ## Models
 
 - `GET /models/settings`: full model settings for Settings UI.
@@ -93,7 +149,7 @@ Preferred browser event types:
 - `GET /connectors/browser/rules`: browser smart-capture rule summary, including important patterns, noisy/private patterns, and current ignored/important domain config.
 - `POST /connectors/browser/heartbeat`: updates Browser connector last-seen status; does not create a memory event.
 - `GET /connectors/github/status`: returns read-only GitHub connector status, configured/connected flags, username, last sync/error, selected repos, repo count, and event count. It never returns the token.
-- `POST /connectors/github/config`: save or clear local GitHub token configuration. Request:
+- `POST /connectors/github/config`: save or clear local GitHub fine-grained token configuration. Request:
   `{ "token": "github_pat_...", "api_base_url": "https://api.github.com" }`.
   Passing an empty token clears the saved token. The token is not returned.
 - `POST /connectors/github/test`: tests the saved token with `GET /user`. Returns connected status and username. Invalid/expired tokens return a clean JSON error.
@@ -203,7 +259,7 @@ File System Task Adapter routes:
   `{ "files": [{ "source_id": "...", "relative_path": "CV/resume.pdf" }] }`.
   Response:
   `{ "attachments": [{ "id": "...:CV/resume.pdf", "file_name": "resume.pdf", "source_id": "...", "relative_path": "CV/resume.pdf", "size_bytes": 12345, "extension": ".pdf", "attachable": true, "reason": null }] }`.
-  Resolution never trusts frontend absolute paths. The backend validates that `source_id` is an enabled indexed File System connector source, `relative_path` has no traversal/absolute path segments, the resolved file stays inside the connected root, the file exists, the type is allowed, and attachment size limits are respected.
+  Resolution never trusts frontend absolute paths. The backend validates that `source_id` is an enabled indexed File System connector source, `relative_path` has no traversal/absolute path segments, the resolved file stays inside the connected root, the file exists, the type is allowed, and attachment size limits are respected. Future file tools should follow this same connected-source contract instead of accepting arbitrary frontend absolute paths.
 
 - `POST /tasks/file/scan`: read-only scan of a selected folder without reading file contents or modifying files. Request:
   `{ "root_path": "D:\\Downloads", "max_depth": 2, "max_files": 500, "include_hidden": false }`.

@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-Last updated: 2026-06-13
+Last updated: 2026-06-20
 
 ## Backend Status
 
@@ -50,6 +50,19 @@ Last updated: 2026-06-13
 | Tasks | Partial / active POC | Task UI supports command entry with action-specific rendering. File and document actions show inline folder context, manual path input, browser-native folder selection, real read-only scan summaries, deterministic or AI-assisted plan previews, browser-handle execution for creating category folders and moving files, and document-summary previews for selected safe text/PDF/DOCX files. Gmail draft/send actions show LLM-structured editable previews, optional user-selected attachments, clear capability reasons, and final confirmation for send. Browser-selected folders do not expose absolute Windows paths, so file organization and summary saving use the directory handle. Manual path mode remains preview-only. |
 | Playbooks | Placeholder | Route/page exists but not a current priority. |
 
+## Chat-First Migration Status
+
+MindOS is moving toward a chat-first planning model. Chat should become the primary command surface for work such as searching memory, reading connector context, drafting Gmail messages, preparing file outputs, and later creating Jira/GitHub artifacts. Connectors remain setup/access/auth surfaces. TasksPage exists today as an active POC surface, but the intended role is Run History, pending confirmations, and debug visibility for `CommandPlan` records and tool runs.
+
+Planned command flow: Chat message -> command planner -> persisted `CommandPlan` -> backend validation -> ToolRegistry execution through existing services/connectors -> preview/confirmation for side effects -> final answer in Chat.
+
+Current branch caveats:
+
+- GitHub is a read-only POC connector. It can sync selected repository commits/issues/PRs into Memory; real GitHub write actions are disabled/planned.
+- Jira is still placeholder/mock-only and has no real connector/API integration on this branch.
+- Gmail draft/send is an active POC through the dedicated Gmail OAuth connector, not Email MCP.
+- Generic Email MCP is provider-agnostic and separate from Gmail.
+
 ## Implemented Connectors
 
 - File System path import: working; clear file events exists. Connected folder indexing POC is added through tracked File System sources: users add a folder once, MindOS queues background indexing, periodically reindexes only that folder, and marks missing files stale/missing without deleting memory records.
@@ -57,7 +70,7 @@ Last updated: 2026-06-13
 - Local Git path import: working and read-only; clear Git events exists.
 - VSCode extension MVP: working; packaged local install flow, polls MindOS runtime, sends workspace/file-save events after the MindOS VSCode connector toggle is enabled.
 - Browser extension MVP: working; manual popup save flow for pages, selected text, and notes after the MindOS Browser connector toggle is enabled. Smart capture can record hidden search evidence and visible important work/research pages with readable context when enabled. Captured pages are upserted by normalized URL, repeat visits update visit metadata, and Hugging Face model/dataset/docs pages are classified as important.
-- GitHub connector POC: simplified read-only token configuration, connect/disconnect, connection testing, repository selection, and optional advanced manual sync of recent commits, open issues, and open pull requests into GitHub memory events. Repositories and sync are disabled while the connector is Off. Tokens are stored locally in connector settings, are not displayed after saving, and are not stored in Memory or sent to the LLM.
+- GitHub connector POC: simplified read-only fine-grained token configuration, connect/disconnect, connection testing, repository selection, and optional advanced manual sync of recent commits, open issues, and open pull requests into GitHub memory events. Repositories and sync are disabled while the connector is Off. Tokens are stored locally in connector settings, are not displayed after saving, and are not stored in Memory or sent to the LLM.
 - Gmail connector POC: user-provided Google OAuth desktop credentials are uploaded locally, OAuth runs through a localhost callback, and tokens are stored only under the user-local MindOS app directory. The connector can test Gmail profile access, list recent message metadata/snippets, create drafts with `gmail.compose`, attach selected files, and send Gmail messages only after explicit confirmation when the Gmail capability is available. Gmail task actions prefer Gmail connector state and never show Email MCP/mock provider state. Gmail credentials/tokens are not returned to the frontend, logged intentionally, stored in Memory, or sent to an LLM.
 - Email connector POC: provider-agnostic MCP-style connector. User configures provider name, MCP/API base URL, auth type, optional credential/header, account label, and optional tool names. The mock provider (`api_base_url=mock`) supports demo sync and mock send without external setup. Test connection discovers normalized `read_email`, `search_email`, `create_draft`, `send_email`, and `reply_email` capabilities. Sync is read-only and stores normalized lightweight `email_message` events with subject, sender, date, excerpt, labels/folder, attachment metadata, and URL when available. Draft/send task actions are capability-driven, show exact disabled reasons, and require preview plus confirmation for send. Provider credentials are never returned, logged, stored in Memory, or sent to the LLM.
 - Saved connector sources: working/partial for file system, logs, and Git.

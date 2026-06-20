@@ -9,7 +9,7 @@
 - No giant route files.
 - No hidden side effects.
 - No automatic expensive operations on page load.
-- All destructive actions require confirmation.
+- Destructive/high-risk actions stay disabled for the demo; do not make them merely confirmable.
 - External side-effect actions must show exact missing capability/input reasons.
 - Do not silently disable dangerous buttons.
 
@@ -22,6 +22,19 @@
 - Schemas define request/response contracts.
 - Optional systems must fail gracefully.
 - Return structured JSON errors.
+
+## Command Planning And Tools
+
+- Chat command planning belongs in dedicated planner/validator services, not route files.
+- LLM output must be parsed into typed `CommandPlan`/step schemas before use.
+- Never execute raw model-proposed tool calls.
+- `CommandPlanValidator` should assign risk, required confirmation, and blocked reasons.
+- Tool handlers should be small typed wrappers around existing services/connectors.
+- Tool handlers should call existing connector/service methods instead of duplicating connector logic.
+- Tool handlers must not own credentials or bypass connector auth/capability checks.
+- Tool outputs should be sanitized before persistence or display.
+- Side-effect tools must be idempotent where possible and must expose clear preview payloads.
+- Destructive/high-risk tools should remain disabled unless a future decision explicitly enables them.
 
 ## Frontend
 
