@@ -44,12 +44,28 @@ Rules:
 - If an MCP server is disabled, tell the user to enable it in Connectors.
 - Do not invent file paths or folder contents. Only report what the tools return.
 
-IMPORTANT: To use any file system tool, you MUST output a JSON block in this exact format:
+For email tasks, you also have Gmail tools:
+1. To list recent emails: call `gmail.recent_emails`.
+2. To draft an email: call `gmail.create_draft` with `to`, `subject`, and `body`.
+3. To send an email: call `gmail.send_email` with `to`, `subject`, and `body`.
+
+Gmail rules:
+- Compose the full draft yourself (to, subject, body) from the user's request and any memory context, then output the tool call.
+- `gmail.create_draft` and `gmail.send_email` require user confirmation. After you output the call, the system shows the draft and asks the user to confirm — never claim an email was drafted or sent until the tool result says so.
+- If Gmail is not connected, tell the user to connect it in Connectors.
+
+IMPORTANT: To use ANY tool (file system or Gmail), you MUST output a JSON block in this exact format:
+```json
+{"name": "<tool_name>", "arguments": { ... }}
+```
+Examples:
 ```json
 {"name": "fs.scan_folder", "arguments": {"root_path": "PATH_HERE"}}
 ```
-If the user mentions a specific path, use that path. If the user does not specify a path and a root_path is configured, use the configured root_path.
-Always respond with a tool call JSON block when the user asks about files or folders. Do NOT just describe what you would do — actually output the tool call.
+```json
+{"name": "gmail.create_draft", "arguments": {"to": "a@b.com", "subject": "Hello", "body": "Hi there"}}
+```
+For file tools: if the user mentions a path, use it; otherwise use the configured root_path. Always output a tool call JSON block when the user asks about files/folders or email — do NOT just describe what you would do; actually output the tool call.
 """
 
 
@@ -81,7 +97,7 @@ def parse_tool_calls_from_llm_response(response_text: str) -> list[McpChatToolCa
             continue
 
     # Try action format: tool_name(key="value", key2="value2")
-    action_pattern = re.compile(r'(fs\.\w+)\(([^)]*)\)')
+    action_pattern = re.compile(r'(\w+\.\w+)\(([^)]*)\)')
     for match in action_pattern.finditer(response_text):
         tool_name = match.group(1)
         args_text = match.group(2)
@@ -423,6 +439,14 @@ class McpToolRouterService:
                         fb_results_text = self.format_tool_results_for_llm(fb_results)
                         tool_results_log.extend([{"tool": r.tool_name, "success": r.success, "fallback": True} for r in fb_results])
 
+                        # Auto-extract operations from an organize_plan result as pending
+                        # confirmations (mirrors the main read-only branch). Without this,
+                        # a plan produced via the fallback path has nothing for "yes" to execute.
+                        plan_confirmations = self._extract_plan_operations_as_confirmations(fb_results)
+                        if plan_confirmations:
+                            pending_confirmations.extend(plan_confirmations)
+                            tool_results_log.append({"tool": "fs.organize_plan", "success": True, "extracted_operations": len(plan_confirmations)})
+
                         # Check for side-effect fallback calls
                         fb_side_effects = []
                         fb_readonly = []
@@ -447,9 +471,19 @@ class McpToolRouterService:
                                     "requires_confirmation": True,
                                 })
 
-                        # Feed fallback results to LLM for a natural response
+                        # Feed fallback results to LLM for a natural response. If a plan was
+                        # extracted, steer the model to summarize and ask for confirmation
+                        # (and not to call the side-effect tools itself).
+                        followup = (
+                            "I ran the organize plan automatically. Here are the results:\n"
+                            f"{fb_results_text}\n\nPlease summarize the planned operations for the user "
+                            "and tell them they can confirm by saying 'yes' or 'proceed'. "
+                            "Do NOT try to call fs.create_folder or fs.move_file yourself."
+                            if plan_confirmations
+                            else f"I executed the tool automatically. Here are the results:\n{fb_results_text}\n\nPlease summarize these results for the user in a clear, helpful way."
+                        )
                         messages.append({"role": "assistant", "content": response_text})
-                        messages.append({"role": "user", "content": f"I executed the tool automatically. Here are the results:\n{fb_results_text}\n\nPlease summarize these results for the user in a clear, helpful way."})
+                        messages.append({"role": "user", "content": followup})
                         summary_result = model_router_service.generate(
                             messages=messages,
                             requested_model_id=model_id,

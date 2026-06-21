@@ -689,6 +689,25 @@ class ChatService:
         if any(kw in lower for kw in fs_phrases):
             return True
 
+        # Email / Gmail intents (routed to the Gmail MCP tools)
+        email_phrases = [
+            "draft email", "draft mail", "draft an email", "draft a mail",
+            "compose email", "compose mail", "compose an email",
+            "send email", "send mail", "send an email", "send a mail",
+            "write an email", "write email", "write a mail",
+            "email to", "mail to", "create a draft", "create draft",
+            "recent emails", "recent mail", "check my email", "check my inbox",
+            "my inbox", "latest emails", "my emails", "my gmail",
+        ]
+        if any(kw in lower for kw in email_phrases):
+            return True
+        email_words = ["email", "emails", "mail", "inbox", "gmail"]
+        email_actions = ["draft", "send", "compose", "write", "create", "check", "show", "list", "read", "recent"]
+        has_email_word = any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in email_words)
+        has_email_action = any(f" {w} " in f" {lower} " or lower.startswith(w) for w in email_actions)
+        if has_email_word and has_email_action:
+            return True
+
         # Word-level matching: check for combinations of file-related words
         file_words = ["file", "files", "folder", "directory", "directories"]
         action_words = ["list", "show", "scan", "find", "search", "check", "read", "open", "get", "see", "view", "browse", "explore", "organize", "sort", "clean", "move", "count"]

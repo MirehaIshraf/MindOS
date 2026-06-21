@@ -73,6 +73,11 @@ def startup() -> None:
     mcp_client.enable_server(file_system_mcp_server.SERVER_ID)
     logger.info("MCP File System server registered and enabled", extra={"mcp_server": "filesystem", "tools": len(file_system_mcp_server.list_tools())})
 
+    from app.integrations.mcp.gmail_server import gmail_mcp_server
+    mcp_client.register_server(gmail_mcp_server.SERVER_ID, gmail_mcp_server)
+    mcp_client.enable_server(gmail_mcp_server.SERVER_ID)
+    logger.info("MCP Gmail server registered and enabled", extra={"mcp_server": "gmail", "tools": len(gmail_mcp_server.list_tools())})
+
 
 @app.get("/")
 def root() -> dict[str, str]:

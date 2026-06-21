@@ -25,6 +25,7 @@ from app.integrations.mcp.protocol import (
     McpToolDefinition,
     McpToolParameter,
 )
+from app.schemas.file_tasks import FileOperation
 from app.services.file_snapshot_service import file_snapshot_service
 from app.services.file_task_safety_service import file_task_safety_service
 
@@ -350,7 +351,9 @@ class FileSystemMcpServer:
             op["status"] = "planned"
             all_ops.append(op)
 
-        validation = file_task_safety_service.validate_plan(str(root), all_ops)
+        validation = file_task_safety_service.validate_plan(
+            str(root), [FileOperation(**op) for op in all_ops]
+        )
         if validation["blocked_reasons"]:
             return McpToolCallResult(
                 success=False,
