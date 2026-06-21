@@ -1602,6 +1602,21 @@ export type McpServerConfigResponse = {
   message: string;
 };
 
+export type McpFilesystemBrowseEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+};
+
+export type McpFilesystemBrowseResponse = {
+  current_path: string | null;
+  parent_path: string | null;
+  drives: Array<{ name: string; path: string }>;
+  entries: McpFilesystemBrowseEntry[];
+  selectable?: boolean;
+  selection_error?: string | null;
+};
+
 export type McpToolInfo = {
   name: string;
   description: string;

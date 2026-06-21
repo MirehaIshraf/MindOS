@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,7 @@ from app.repositories.base import EventRepository, RelationshipRepository
 from app.services.browser_importance_service import browser_importance_service
 from app.services.browser_content_quality_service import content_quality_from_capture
 from app.services.embedding_index_service import embedding_index_service
+from app.services.model_router_service import model_router_service
 from app.services.page_summary_service import create_deterministic_page_summary, format_summarized_browser_capture_content
 from app.services.relationship_service import relationship_service
 from app.services.url_normalization_service import classify_url_page_type, normalize_url, url_hash
@@ -217,8 +219,6 @@ class BrowserMemoryService:
         return {"updated": updated}
 
     def summarize_browser_page(self, event_id: str, method: str = "deterministic") -> Event:
-        if method != "deterministic":
-            raise ValueError("LLM summarization is not implemented yet.")
         event = self._event_repository.get_event_by_id(event_id)
         if event is None:
             raise LookupError("Event not found.")
@@ -227,14 +227,14 @@ class BrowserMemoryService:
         quality = content_quality_from_capture(event.content, event.metadata)
         if not quality.get("meaningful"):
             raise ValueError("This page has no captured readable context.")
-        summary_result = create_deterministic_page_summary(event)
+        summary_result = self._llm_page_summary(event) if method == "llm" else create_deterministic_page_summary(event)
         if summary_result.get("summary_status") != "ready":
             raise ValueError("This page has no captured readable context.")
         metadata = dict(event.metadata)
         metadata.update(
             {
                 "summary_status": "ready",
-                "summary_method": "deterministic",
+                "summary_method": summary_result.get("summary_method") or method,
                 "content_quality": "summary",
                 "summary": summary_result.get("summary"),
                 "summary_key_points": summary_result.get("key_points", []),
@@ -252,6 +252,73 @@ class BrowserMemoryService:
         if updated.is_indexable:
             embedding_index_service.index_event(updated)
         return updated
+
+    def auto_summarize_browser_page(self, event_id: str) -> None:
+        """Background entry point: LLM-summarize a capture; mark terminal if it has no
+        readable context so the sweep does not retry it forever."""
+        try:
+            self.summarize_browser_page(event_id, method="llm")
+        except ValueError:
+            event = self._event_repository.get_event_by_id(event_id)
+            if event is not None and (event.metadata or {}).get("summary_status") not in {"ready", "not_required"}:
+                metadata = dict(event.metadata)
+                metadata["summary_status"] = "not_required"
+                self._event_repository.update_event_content_and_metadata(event.id, event.content, metadata, title=event.title)
+        except LookupError:
+            pass
+
+    def _llm_page_summary(self, event: Event) -> dict:
+        """LLM summary of a captured page, with a deterministic fallback."""
+        base = create_deterministic_page_summary(event)
+        readable = str(base.get("readable_context") or "")
+        if base.get("summary_status") != "ready" or not readable:
+            return base
+        title = str((event.metadata or {}).get("page_title") or event.title)
+        try:
+            result = model_router_service.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You summarize a web page from its captured text. Be concise and factual and use ONLY the "
+                            "provided text. First write a 2-4 sentence summary, then 3-6 key points, each on its own "
+                            "line starting with '- '. Do not invent facts."
+                        ),
+                    },
+                    {"role": "user", "content": f"Title: {title}\n\nPage text:\n{readable[:6000]}"},
+                ],
+                requested_model_id=None,
+                options={"temperature": 0.2},
+            )
+            if result.provider != "fake" and result.reply.strip():
+                summary, key_points = self._parse_summary_reply(result.reply)
+                if summary:
+                    return {
+                        **base,
+                        "summary": summary,
+                        "key_points": key_points or base.get("key_points", []),
+                        "summary_status": "ready",
+                        "summary_method": "llm",
+                    }
+        except Exception:
+            pass
+        return base
+
+    @staticmethod
+    def _parse_summary_reply(reply: str) -> tuple[str, list[str]]:
+        summary_lines: list[str] = []
+        key_points: list[str] = []
+        for raw in reply.strip().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(("- ", "* ", "• ")):
+                key_points.append(line[2:].strip())
+            elif re.match(r"^\d+[.)]\s", line):
+                key_points.append(re.sub(r"^\d+[.)]\s", "", line).strip())
+            elif not key_points:
+                summary_lines.append(line)
+        return " ".join(summary_lines).strip(), [point for point in key_points if point][:6]
 
     def _browser_metadata(self, metadata: dict[str, Any], content: str, config: dict[str, Any]) -> dict[str, Any]:
         metadata = self._url_identity(metadata)

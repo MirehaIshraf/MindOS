@@ -492,10 +492,10 @@ function EventDetailPanel({
         {lastSeen ? <DetailRow label="last seen" value={formatTimestamp(lastSeen)} /> : null}
         {summaryStatus ? <DetailRow label="summary status" value={summaryStatus} /> : null}
         {summaryStatus === "ready" ? <Badge variant="success">summary ready</Badge> : null}
-        {summaryStatus === "pending" ? (
+        {summaryStatus === "pending" || summaryStatus === "ready" ? (
           <div className="space-y-2">
             <Button variant="secondary" onClick={() => void handleSummarize()} loading={summarizing}>
-              Summarize
+              {summaryStatus === "ready" ? "Re-summarize" : "Summarize"}
             </Button>
             {summarizeError ? <p className="text-sm text-red-200">{summarizeError}</p> : null}
           </div>

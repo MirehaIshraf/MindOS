@@ -118,6 +118,7 @@ import type {
   McpServerListResponse,
   McpServerStatus,
   McpServerToggleResponse,
+  McpFilesystemBrowseResponse,
   McpToolListResponse,
   McpToolCallResponse,
 } from "../types";
@@ -975,6 +976,14 @@ export async function getMcpServerConfig(serverId: string): Promise<McpServerCon
 
 export async function updateMcpServerConfig(serverId: string, config: Record<string, unknown>): Promise<McpServerConfigResponse> {
   const response = await api.post<McpServerConfigResponse>(`/mcp/servers/${serverId}/config`, { config });
+  return response.data;
+}
+
+export async function browseMcpFilesystem(path?: string): Promise<McpFilesystemBrowseResponse> {
+  const response = await api.get<McpFilesystemBrowseResponse>("/mcp/servers/filesystem/browse", {
+    params: path ? { path } : undefined,
+    timeout: 30000,
+  });
   return response.data;
 }
 

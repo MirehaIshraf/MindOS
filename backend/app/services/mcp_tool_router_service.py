@@ -22,6 +22,7 @@ from app.integrations.mcp.gmail_server import gmail_mcp_server
 from app.integrations.mcp.protocol import McpToolCallResult
 from app.schemas.gmail import GmailDraftPrepareRequest
 from app.schemas.mcp import McpChatToolCall, McpChatToolResult
+from app.services.context_builder_service import context_builder_service
 from app.services.file_index_service import file_index_service
 from app.services.gmail_draft_planner import gmail_draft_planner
 from app.services.gmail_service import gmail_service
@@ -336,6 +337,70 @@ class McpToolRouterService:
             pass
         return "Here are your recent emails:\n" + listing
 
+    @staticmethod
+    def _extract_summary_topic(message: str) -> str:
+        text = re.sub(r"[\w.+-]+@[\w-]+\.[\w-]+\.[\w.-]+|[\w.+-]+@[\w-]+\.[\w.-]+", "", message)
+        lower = text.lower()
+        match = re.search(r"summar(?:y|ize|ise)\s+(?:about|on|of|for|regarding)\s+(.+)", lower) or re.search(r"\babout\s+(.+)", lower)
+        topic = match.group(1) if match else lower
+        topic = re.sub(r"\b(and|then)\b.*$", " ", topic)
+        topic = re.sub(r"\b(send|sent|mail|email|draft|create|compose|prepare|summary|summarize|summarise|overview|give|it|this|to|a|an|the|please|me)\b", " ", topic)
+        topic = re.sub(r"\s+", " ", topic).strip(" .,-")
+        return topic[:120]
+
+    @staticmethod
+    def _parse_subject_body(reply: str) -> tuple[str, str]:
+        subject = ""
+        body = reply.strip()
+        sub = re.search(r"(?im)^\s*subject\s*:\s*(.+)$", reply)
+        if sub:
+            subject = sub.group(1).strip().strip('"')
+        bod = re.search(r"(?is)\bbody\s*:\s*(.+)$", reply)
+        if bod:
+            body = bod.group(1).strip()
+        return subject, body
+
+    def _build_summary_email(self, user_message: str, context_text: str, model_id: str | None) -> dict[str, str] | None:
+        """Compose a summary email (subject + body) fully from the LLM + embedded memory.
+        Re-retrieves memory for the topic so it does not depend on the request's wording."""
+        topic = self._extract_summary_topic(user_message)
+        retrieved = ""
+        if topic:
+            try:
+                package = context_builder_service.build_chat_context(query=topic, profile="summary")
+                retrieved = context_builder_service.format_context_for_llm(package)
+            except Exception:
+                retrieved = ""
+        source = retrieved if len(retrieved.strip()) >= 200 else (context_text or "")
+        if len(source.strip()) < 200:
+            return None
+        try:
+            result = model_router_service.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You write a complete email that summarizes the requested topic using ONLY the provided "
+                            "context. The body must contain the actual summary content directly — never say 'see "
+                            "attached' or refer to an attachment. Do not invent facts. Respond in EXACTLY this format:\n"
+                            "SUBJECT: <a short, specific subject line about the topic>\n"
+                            "BODY:\n<the email body: greeting, a clear summary in a few short paragraphs or bullets, sign-off>"
+                        ),
+                    },
+                    {"role": "user", "content": f"Topic: {topic or user_message}\n\nContext:\n{source[:8000]}"},
+                ],
+                requested_model_id=model_id,
+                options={"temperature": 0.2},
+            )
+            if result.provider != "fake" and result.reply.strip():
+                subject, body = self._parse_subject_body(result.reply)
+                if body.strip():
+                    fallback_subject = f"Summary: {topic}".strip(": ").strip() or "Summary"
+                    return {"subject": subject or fallback_subject, "body": body}
+        except Exception:
+            pass
+        return None
+
     def _build_folder_summary_body(self, model_id: str | None) -> str | None:
         """Summarize the connected folder's indexed documents for an email body.
         Brief overview for multiple files; a detailed summary for a single file."""
@@ -362,7 +427,7 @@ class McpToolRouterService:
             pass
         return None
 
-    def _handle_gmail_intent(self, user_message: str, model_id: str | None) -> dict[str, Any]:
+    def _handle_gmail_intent(self, user_message: str, context_text: str, model_id: str | None) -> dict[str, Any]:
         display = {"model_used": "gmail", "provider": "gmail", "model_display_name": "Gmail"}
         none: list[dict[str, Any]] = []
         status = gmail_service.status()
@@ -403,14 +468,19 @@ class McpToolRouterService:
             options = "\n".join(f"- {c['file_name']}" for c in resolved["candidates"])
             return {"response": f"I found multiple matching files. Which one should I attach?\n{options}", **display, "tool_calls_made": 0, "pending_confirmations": none, "requires_confirmation": False}
 
-        # If the user asked to summarize the folder/documents, build the body from the
-        # connected folder's already-indexed content (brief for many, detailed for one).
+        # If the user asked to email a summary, put the REAL summary in the body — built
+        # from the retrieved memory context (topic) first, then connected-folder content.
         subject = planned.subject
         body = planned.body
         if any(k in lower for k in ["summar", "overview", "about", "contents", "what's in", "whats in", "document", "folder"]):
-            summary_body = self._build_folder_summary_body(model_id)
-            if summary_body:
-                body = f"Hi,\n\n{summary_body}\n\nBest regards,"
+            email = self._build_summary_email(user_message, context_text, model_id)
+            if email:
+                subject = email["subject"] or subject
+                body = email["body"]
+            else:
+                folder_summary = self._build_folder_summary_body(model_id)
+                if folder_summary:
+                    body = f"Hi,\n\n{folder_summary}\n\nBest regards,"
 
         tool_name = "gmail.send_email" if intent_send else "gmail.create_draft"
         args = {"to": recipient, "subject": subject, "body": body, "attachment_paths": resolved["attachment_paths"]}
@@ -779,7 +849,7 @@ class McpToolRouterService:
         # preview → confirm), BEFORE asking the model. Local models otherwise emit
         # unreliable/garbled tool calls for email and the draft/send never runs.
         if self._is_gmail_intent(user_message):
-            return self._handle_gmail_intent(user_message, model_id)
+            return self._handle_gmail_intent(user_message, context_text, model_id)
 
         for round_num in range(max_rounds):
             result = model_router_service.generate(

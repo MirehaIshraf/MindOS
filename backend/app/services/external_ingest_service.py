@@ -12,6 +12,7 @@ from app.schemas.ingest import (
 )
 from app.services.connector_registry_service import connector_registry_service
 from app.services.browser_memory_service import browser_memory_service
+from app.services.page_summary_worker_service import page_summary_worker_service
 from app.services.relationship_service import relationship_service
 
 SUPPORTED_EXTERNAL_SOURCES = [
@@ -156,6 +157,9 @@ class ExternalIngestService:
                 config=connector_registry_service.get_config_dict("browser"),
             )
             self._record_connector_seen(source_value, event.metadata)
+            # Auto-summarize captured pages in the background (off the request path).
+            if event.type == "browser_page_captured" and (event.metadata or {}).get("summary_status") not in {"ready", "not_required"}:
+                page_summary_worker_service.enqueue(event.id)
             return event
         title = request.title.strip() or self._default_title(source_value, event_type, metadata)
         event = self._event_repository.create_event(

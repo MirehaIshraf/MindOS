@@ -1,5 +1,6 @@
 import { History, MessageSquare, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { parseBackendDate } from "../lib/datetime";
 import { ChatInput } from "../components/chat/ChatInput";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { Badge } from "../components/shared/Badge";
@@ -173,7 +174,7 @@ export function ChatPage() {
     if (!currentSessionHasActiveRun || !activeChatRunStartedAt) {
       return null;
     }
-    return Math.max(0, Math.floor((Date.now() - new Date(activeChatRunStartedAt).getTime()) / 1000));
+    return Math.max(0, Math.floor((Date.now() - parseBackendDate(activeChatRunStartedAt).getTime()) / 1000));
   }, [activeChatRunStartedAt, currentSessionHasActiveRun, statusIndex]);
 
   async function refreshSessions() {
@@ -560,7 +561,7 @@ function createMessage(
 }
 
 function formatTimestamp(value: string) {
-  return new Date(value).toLocaleString([], {
+  return parseBackendDate(value).toLocaleString([], {
     month: "short",
     day: "numeric",
     hour: "2-digit",

@@ -65,6 +65,9 @@ def startup() -> None:
         logger.info("MindOS storage initialized", extra={"storage": "memory"})
     file_index_scheduler_service.start()
 
+    from app.services.page_summary_worker_service import page_summary_worker_service
+    page_summary_worker_service.start()
+
     # Register MCP servers
     from app.integrations.mcp.client import mcp_client
     from app.integrations.mcp.file_system_server import file_system_mcp_server

@@ -1,6 +1,8 @@
 import { Bot, Check, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
+import { parseBackendDate } from "../../lib/datetime";
+
 import type { ChatMessage as ChatMessageRecord, ChatSource } from "../../types";
 import { Badge } from "../shared/Badge";
 import { Button } from "../shared/Button";
@@ -143,7 +145,7 @@ export function ChatMessage({ message, animate = false, isLast = false, onConten
         ) : null}
 
         <time className={`mt-2 block text-xs ${isUser ? "text-violet-100/80" : "text-app-muted"}`}>
-          {new Date(message.timestamp).toLocaleTimeString([], {
+          {parseBackendDate(message.timestamp).toLocaleTimeString([], {
             hour: "2-digit",
             minute: "2-digit",
           })}
