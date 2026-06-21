@@ -1,5 +1,5 @@
-import { Bot } from "lucide-react";
-import { useState } from "react";
+import { Bot, Check, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 
 import type { ChatMessage as ChatMessageRecord, ChatSource } from "../../types";
 import { Badge } from "../shared/Badge";
@@ -9,11 +9,13 @@ import { useTypingReveal } from "./useTypingReveal";
 type ChatMessageProps = {
   message: ChatMessageRecord;
   animate?: boolean;
+  isLast?: boolean;
   onContentGrow?: () => void;
-  onOpenTask?: (instruction: string) => void;
+  onConfirm?: () => void;
+  onCancel?: () => void;
 };
 
-export function ChatMessage({ message, animate = false, onContentGrow, onOpenTask }: ChatMessageProps) {
+export function ChatMessage({ message, animate = false, isLast = false, onContentGrow, onConfirm, onCancel }: ChatMessageProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const isUser = message.role === "user";
@@ -54,11 +56,15 @@ export function ChatMessage({ message, animate = false, onContentGrow, onOpenTas
           </div>
         ) : null}
 
-        {done && !isUser && message.taskHint ? (
-          <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
-            <p className="text-xs font-medium">This looks like a task: {message.taskHint}</p>
-            <Button className="mt-3 h-8 px-3" variant="secondary" onClick={() => onOpenTask?.(message.taskInstruction ?? message.content)}>
-              Prepare in Tasks
+        {done && !isUser && message.requiresConfirmation && isLast ? (
+          <div className="mt-4 flex items-center gap-2">
+            <Button className="h-9 px-4" variant="primary" onClick={() => onConfirm?.()}>
+              <Check size={16} />
+              Confirm
+            </Button>
+            <Button className="h-9 px-4" variant="secondary" onClick={() => onCancel?.()}>
+              <X size={16} />
+              Cancel
             </Button>
           </div>
         ) : null}
@@ -175,9 +181,6 @@ function SourceCard({ source }: { source: ChatSource }) {
 }
 
 function AnswerStyleBadge({ message }: { message: ChatMessageRecord }) {
-  if (message.taskHint) {
-    return <Badge variant="warning">Task detected</Badge>;
-  }
   if (message.isFollowUp || message.intent === "follow_up_summary" || message.intent === "follow_up") {
     return <Badge variant="info">Follow-up</Badge>;
   }
@@ -196,6 +199,41 @@ function AnswerStyleBadge({ message }: { message: ChatMessageRecord }) {
   return null;
 }
 
+function renderInline(text: string): ReactNode[] {
+  // Inline markdown: **bold**, `code`, *italic*
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      nodes.push(text.slice(last, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("**")) {
+      nodes.push(
+        <strong key={key++} className="font-semibold">
+          {token.slice(2, -2)}
+        </strong>,
+      );
+    } else if (token.startsWith("`")) {
+      nodes.push(
+        <code key={key++} className="rounded bg-app-inset px-1.5 py-0.5 text-[0.85em] text-app-text">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else {
+      nodes.push(<em key={key++}>{token.slice(1, -1)}</em>);
+    }
+    last = pattern.lastIndex;
+  }
+  if (last < text.length) {
+    nodes.push(text.slice(last));
+  }
+  return nodes;
+}
+
 function MarkdownText({ text }: { text: string }) {
   const lines = text.split("\n");
   return (
@@ -205,38 +243,44 @@ function MarkdownText({ text }: { text: string }) {
         if (!trimmed) {
           return <div key={index} className="h-1" />;
         }
-        if (trimmed.startsWith("## ")) {
-          return (
-            <h3 key={index} className="pt-2 text-base font-semibold text-app-text">
-              {trimmed.slice(3)}
-            </h3>
-          );
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+          return <hr key={index} className="my-2 border-app-border" />;
         }
-        if (trimmed.startsWith("# ")) {
+
+        const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+        if (heading) {
+          const level = heading[1].length;
+          const size = level <= 1 ? "text-lg" : level === 2 ? "text-base" : "text-sm";
           return (
-            <h2 key={index} className="pt-2 text-lg font-semibold text-app-text">
-              {trimmed.slice(2)}
-            </h2>
-          );
-        }
-        if (trimmed.startsWith("- ")) {
-          return (
-            <p key={index} className="pl-4 text-sm leading-6 text-app-text">
-              <span className="mr-2 text-app-muted">-</span>
-              {trimmed.slice(2)}
+            <p key={index} className={`pt-2 font-semibold text-app-text ${size}`}>
+              {renderInline(heading[2])}
             </p>
           );
         }
-        if (/^\d+\.\s/.test(trimmed)) {
+
+        const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
+        if (bullet) {
           return (
-            <p key={index} className="pl-4 text-sm leading-6 text-app-text">
-              {trimmed}
+            <p key={index} className="flex gap-2 pl-4 text-sm leading-6 text-app-text">
+              <span className="mt-px shrink-0 text-app-muted">•</span>
+              <span>{renderInline(bullet[1])}</span>
             </p>
           );
         }
+
+        const ordered = /^(\d+\.)\s+(.*)$/.exec(trimmed);
+        if (ordered) {
+          return (
+            <p key={index} className="flex gap-2 pl-4 text-sm leading-6 text-app-text">
+              <span className="shrink-0 text-app-muted">{ordered[1]}</span>
+              <span>{renderInline(ordered[2])}</span>
+            </p>
+          );
+        }
+
         return (
-          <p key={index} className="whitespace-pre-wrap text-sm leading-6 text-app-text">
-            {trimmed}
+          <p key={index} className="text-sm leading-6 text-app-text">
+            {renderInline(trimmed)}
           </p>
         );
       })}

@@ -171,7 +171,8 @@ export function McpServerSection() {
   async function refresh() {
     try {
       const response = await getMcpServers();
-      setServers(response.servers);
+      // Gmail MCP is internal/headless — configured via the Gmail connector, not here.
+      setServers(response.servers.filter((server) => server.server_id !== "gmail"));
     } catch {
       setError("Failed to load MCP servers.");
     }

@@ -298,6 +298,7 @@ export type ChatMessage = {
   searchMode?: string;
   taskHint?: string | null;
   taskInstruction?: string;
+  requiresConfirmation?: boolean;
   contextSummary?: string;
   contextStats?: ChatContextStats | null;
   warning?: string | null;

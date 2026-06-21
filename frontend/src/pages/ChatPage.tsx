@@ -1,7 +1,5 @@
 import { History, MessageSquare, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-
 import { ChatInput } from "../components/chat/ChatInput";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { Badge } from "../components/shared/Badge";
@@ -30,7 +28,6 @@ const examplePrompts = [
 ];
 
 export function ChatPage() {
-  const navigate = useNavigate();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessageRecord[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -170,6 +167,8 @@ export function ChatPage() {
 
   const loadingMessages = useMemo(() => loadingStatusMessages(pendingStyle), [pendingStyle]);
   const selectedModel = chatModels.find((model) => model.id === selectedModelId) ?? chatModels[0];
+  const lastMessage = messages[messages.length - 1];
+  const awaitingConfirmation = Boolean(lastMessage && lastMessage.role === "assistant" && lastMessage.requiresConfirmation);
   const elapsedSeconds = useMemo(() => {
     if (!currentSessionHasActiveRun || !activeChatRunStartedAt) {
       return null;
@@ -259,8 +258,8 @@ export function ChatPage() {
     }
   }
 
-  async function handleSend() {
-    const content = input.trim();
+  async function handleSend(textOverride?: string) {
+    const content = (textOverride ?? input).trim();
     if (!content || currentSessionHasActiveRun) {
       return;
     }
@@ -451,19 +450,15 @@ export function ChatPage() {
             </div>
           </div>
         ) : (
-          messages.map((message) => (
+          messages.map((message, index) => (
             <ChatMessage
               key={message.id}
               message={message}
               animate={message.id === animatedMessageId}
+              isLast={index === messages.length - 1}
               onContentGrow={scrollToBottom}
-              onOpenTask={(instruction) =>
-                navigate(
-                  `/tasks?instruction=${encodeURIComponent(instruction)}${
-                    selectedModelId ? `&model_id=${encodeURIComponent(selectedModelId)}` : ""
-                  }`,
-                )
-              }
+              onConfirm={() => void handleSend("yes")}
+              onCancel={() => void handleSend("cancel")}
             />
           ))
         )}
@@ -484,12 +479,14 @@ export function ChatPage() {
       </div>
 
       <div className="sticky bottom-0 bg-app-background pb-4 pt-3">
-        <p className="mb-2 text-xs text-app-muted">{useContext ? "Using local memory" : "Local memory off"}</p>
+        <p className="mb-2 text-xs text-app-muted">
+          {awaitingConfirmation ? "Confirm or cancel the pending action above to continue." : useContext ? "Using local memory" : "Local memory off"}
+        </p>
         <ChatInput
           value={input}
           onChange={setInput}
-          onSend={handleSend}
-          disabled={currentSessionHasActiveRun}
+          onSend={() => void handleSend()}
+          disabled={currentSessionHasActiveRun || awaitingConfirmation}
           useContext={useContext}
           onUseContextChange={setUseContext}
         />
@@ -536,6 +533,7 @@ function mapStoredMessages(storedMessages: StoredChatMessage[]): ChatMessageReco
       searchMode: message.search_mode ?? undefined,
       taskHint: message.task_hint ?? undefined,
       taskInstruction: message.role === "assistant" ? lastUserInstruction : undefined,
+      requiresConfirmation: Boolean(message.metadata?.requires_confirmation),
       contextSummary: message.context_summary ?? undefined,
       contextStats: message.context_stats ?? undefined,
       warning: message.warning ?? undefined,

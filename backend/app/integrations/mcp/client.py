@@ -187,6 +187,21 @@ class McpClient:
             return {"action": "create_folder", "root_path": arguments.get("root_path"), "folder_path": arguments.get("folder_path")}
         if tool_name == "fs.move_file":
             return {"action": "move_file", "root_path": arguments.get("root_path"), "from_path": arguments.get("from_path"), "to_path": arguments.get("to_path")}
+        if tool_name in ("gmail.create_draft", "gmail.send_email"):
+            attachments = arguments.get("indexed_attachments") or []
+            return {
+                "action_type": "send_email" if tool_name == "gmail.send_email" else "create_draft",
+                "to": arguments.get("to"),
+                "cc": arguments.get("cc") or [],
+                "bcc": arguments.get("bcc") or [],
+                "subject": arguments.get("subject"),
+                "body": arguments.get("body"),
+                "attachments": [
+                    str(a.get("relative_path", "")).replace("\\", "/").split("/")[-1]
+                    for a in attachments
+                    if isinstance(a, dict) and a.get("relative_path")
+                ],
+            }
         return None
 
 

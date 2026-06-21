@@ -18,8 +18,13 @@ import re
 from typing import Any
 
 from app.integrations.mcp.client import mcp_client
+from app.integrations.mcp.gmail_server import gmail_mcp_server
 from app.integrations.mcp.protocol import McpToolCallResult
+from app.schemas.gmail import GmailDraftPrepareRequest
 from app.schemas.mcp import McpChatToolCall, McpChatToolResult
+from app.services.file_index_service import file_index_service
+from app.services.gmail_draft_planner import gmail_draft_planner
+from app.services.gmail_service import gmail_service
 from app.services.model_router_service import model_router_service
 
 # ---------------------------------------------------------------------------
@@ -45,14 +50,19 @@ Rules:
 - Do not invent file paths or folder contents. Only report what the tools return.
 
 For email tasks, you also have Gmail tools:
-1. To list recent emails: call `gmail.recent_emails`.
-2. To draft an email: call `gmail.create_draft` with `to`, `subject`, and `body`.
-3. To send an email: call `gmail.send_email` with `to`, `subject`, and `body`.
+1. To list/summarize recent emails: call `gmail.recent_emails`.
+2. To preview a draft (and find a connected file to attach): call `gmail.prepare_draft` with `to`, `subject`, `body`, and optional `attachment_query` (e.g. "resume").
+3. To create the draft: call `gmail.create_draft` with `to`, `subject`, `body`, and `indexed_attachments` (from prepare_draft).
+4. To send the email: call `gmail.send_email` with the same arguments.
 
-Gmail rules:
-- Compose the full draft yourself (to, subject, body) from the user's request and any memory context, then output the tool call.
-- `gmail.create_draft` and `gmail.send_email` require user confirmation. After you output the call, the system shows the draft and asks the user to confirm — never claim an email was drafted or sent until the tool result says so.
+Multi-step + Gmail rules:
+- For multi-step requests, run read-only tools first (e.g. scan/summarize a folder, or `gmail.prepare_draft`), then the side-effect tool.
+- Compose the full draft yourself (to, subject, body) from the user's request and any memory context.
+- Always call `gmail.prepare_draft` first so the user can review; never claim an email was drafted or sent until a confirmed tool result says so.
+- Attachments must come from connected indexed files — use the `indexed_attachments` references returned by `gmail.prepare_draft`. Never invent file paths.
+- `gmail.create_draft` and `gmail.send_email` require user confirmation.
 - If Gmail is not connected, tell the user to connect it in Connectors.
+- Do NOT expose raw tool names (like `gmail.create_draft`) in your final answer to the user — speak naturally.
 
 IMPORTANT: To use ANY tool (file system or Gmail), you MUST output a JSON block in this exact format:
 ```json
@@ -150,6 +160,15 @@ class McpToolRouterService:
     def clear_pending_confirmations(self, confirmation_id: str) -> None:
         """Clear pending confirmations after execution."""
         self._pending_confirmations.pop(confirmation_id, None)
+
+    def _is_cancel_message(self, message: str) -> str | None:
+        """Return the latest pending confirmation_id if the user message is a cancel."""
+        lower = message.lower().strip()
+        cancel_patterns = ["cancel", "no", "nope", "stop", "abort", "don't", "do not", "never mind", "nevermind"]
+        if any(lower == p or lower.startswith(p) for p in cancel_patterns):
+            if self._pending_confirmations:
+                return list(self._pending_confirmations.keys())[-1]
+        return None
 
     def _is_confirmation_message(self, message: str) -> str | None:
         """Check if a user message is a confirmation of pending operations.
@@ -256,6 +275,138 @@ class McpToolRouterService:
             pass
         return None
 
+    # ------------------------------------------------------------------
+    # Gmail intent safety-net (primary path when a model won't emit tool calls)
+    # ------------------------------------------------------------------
+
+    def _is_gmail_intent(self, message: str) -> bool:
+        lower = message.lower()
+        has_email_word = any(w in lower for w in ["email", "emails", "mail", "inbox", "gmail"]) or bool(self._extract_email(message))
+        if not has_email_word:
+            return False
+        return any(a in lower for a in ["draft", "send", "sent", "compose", "write", "create", "check", "show", "list", "read", "recent", "summarize", "summary", "latest"])
+
+    @staticmethod
+    def _extract_email(message: str) -> str | None:
+        match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", message)
+        return match.group(0) if match else None
+
+    @staticmethod
+    def _extract_attachment_query(message: str) -> str:
+        lower = message.lower()
+        if "resume" in lower or "cv" in lower or "curriculum vitae" in lower:
+            return "resume"
+        match = re.search(r"attach(?:ing|ment|ed)?\s+(?:the\s+|my\s+|a\s+)?([\w.\- ]{3,40})", lower)
+        return match.group(1).strip() if match else ""
+
+    def _summarize_recent_emails(self, emails: list[dict[str, Any]], model_id: str | None) -> str:
+        if not emails:
+            return "Your recent Gmail inbox looks empty, or I couldn't read any messages."
+        listing = "\n".join(
+            f"- From {e.get('from_address', '')}: {e.get('subject', '(no subject)')} — {str(e.get('snippet', ''))[:160]}"
+            for e in emails[:8]
+        )
+        try:
+            result = model_router_service.generate(
+                messages=[
+                    {"role": "system", "content": "Summarize the user's recent emails briefly and helpfully. Use only the provided items; do not invent content."},
+                    {"role": "user", "content": f"Recent emails:\n{listing}\n\nGive a short, friendly summary."},
+                ],
+                requested_model_id=model_id,
+                options={"temperature": 0.2},
+            )
+            if result.provider != "fake" and result.reply.strip():
+                return result.reply
+        except Exception:
+            pass
+        return "Here are your recent emails:\n" + listing
+
+    def _build_folder_summary_body(self, model_id: str | None) -> str | None:
+        """Summarize the connected folder's indexed documents for an email body.
+        Brief overview for multiple files; a detailed summary for a single file."""
+        docs = file_index_service.list_indexed_file_texts(limit=12, max_chars_each=3000)
+        if not docs:
+            return None
+        if len(docs) == 1:
+            instruction = "Write a clear, well-structured summary of the following document."
+        else:
+            instruction = "Write a brief overview (2-4 short paragraphs) of what these documents are about, and mention the key files by name."
+        joined = "\n\n".join(f"### {doc['file_name']}\n{doc['content']}" for doc in docs)[:12000]
+        try:
+            result = model_router_service.generate(
+                messages=[
+                    {"role": "system", "content": "You summarize the user's local documents accurately. Use only the provided text. Output only the summary prose (no preamble, no 'Summary:' heading)."},
+                    {"role": "user", "content": f"{instruction}\n\nDocuments:\n{joined}"},
+                ],
+                requested_model_id=model_id,
+                options={"temperature": 0.2},
+            )
+            if result.provider != "fake" and result.reply.strip():
+                return result.reply.strip()
+        except Exception:
+            pass
+        return None
+
+    def _handle_gmail_intent(self, user_message: str, model_id: str | None) -> dict[str, Any]:
+        display = {"model_used": "gmail", "provider": "gmail", "model_display_name": "Gmail"}
+        none: list[dict[str, Any]] = []
+        status = gmail_service.status()
+        if not status.connected:
+            return {"response": "Gmail is not connected. Connect Gmail in Connectors first.", **display, "tool_calls_made": 0, "pending_confirmations": none, "requires_confirmation": False}
+
+        lower = user_message.lower()
+        wants_write = any(k in lower for k in ["draft", "send", "sent", "compose", "write", "reply"]) or bool(re.search(r"\b(mail|email)\s+it\b", lower))
+
+        # Read-only: recent emails / summarize inbox
+        if not wants_write and any(k in lower for k in ["recent", "check", "latest", "inbox", "summarize", "summary", "show", "list", "read"]):
+            result = mcp_client.call_tool("gmail.recent_emails", {"limit": 5}, confirmed=False)
+            if not result.success:
+                return {"response": result.error or "Could not read recent emails.", **display, "tool_calls_made": 1, "pending_confirmations": none, "requires_confirmation": False}
+            emails = (result.data or {}).get("emails", [])
+            return {"response": self._summarize_recent_emails(emails, model_id), **display, "tool_calls_made": 1, "pending_confirmations": none, "requires_confirmation": False}
+
+        # Draft / send: compose, resolve attachments, present preview + pending confirmation
+        intent_send = bool(re.search(r"\bsen[dt]\b", lower)) or bool(re.search(r"\b(mail|email)\s+it\b", lower))
+        planned = gmail_draft_planner.prepare(
+            GmailDraftPrepareRequest(instruction=user_message, connected_email=status.email_address, model_id=model_id)
+        )
+        display = {
+            "model_used": planned.model or "gmail",
+            "provider": planned.provider or "gmail",
+            "model_display_name": planned.model_display_name or "Gmail",
+        }
+        recipient = self._extract_email(user_message) or (planned.to or "").strip()
+        if not recipient:
+            return {"response": "Who should I send this to? Please give me a recipient email address.", **display, "tool_calls_made": 0, "pending_confirmations": none, "requires_confirmation": False}
+
+        resolved = gmail_mcp_server.resolve_attachment_candidates(self._extract_attachment_query(user_message), None)
+        if resolved["candidates"]:
+            options = "\n".join(f"- {c['file_name']}" for c in resolved["candidates"])
+            return {"response": f"I found multiple matching files. Which one should I attach?\n{options}", **display, "tool_calls_made": 0, "pending_confirmations": none, "requires_confirmation": False}
+
+        # If the user asked to summarize the folder/documents, build the body from the
+        # connected folder's already-indexed content (brief for many, detailed for one).
+        subject = planned.subject
+        body = planned.body
+        if any(k in lower for k in ["summar", "overview", "about", "contents", "what's in", "whats in", "document", "folder"]):
+            summary_body = self._build_folder_summary_body(model_id)
+            if summary_body:
+                body = f"Hi,\n\n{summary_body}\n\nBest regards,"
+
+        tool_name = "gmail.send_email" if intent_send else "gmail.create_draft"
+        args = {"to": recipient, "subject": subject, "body": body, "indexed_attachments": resolved["indexed_attachments"]}
+        preview_result = mcp_client.call_tool(tool_name, args, confirmed=False)
+        kind = "gmail_send" if intent_send else "gmail_draft"
+        pending = [{"tool_name": tool_name, "arguments": args, "preview": preview_result.preview, "requires_confirmation": True, "kind": kind}]
+
+        lines = ["Here's the draft I prepared:", "", f"To: {recipient}", f"Subject: {subject}"]
+        if resolved["attachments"]:
+            lines.append(f"Attachment: {', '.join(resolved['attachments'])}")
+        elif resolved["note"]:
+            lines.append(f"({resolved['note']})")
+        lines += ["", body]
+        return {"response": "\n".join(lines), **display, "tool_calls_made": 0, "pending_confirmations": pending, "requires_confirmation": True, "confirmation_kind": kind}
+
     def _deterministic_tool_fallback(self, user_message: str) -> list[McpChatToolCall]:
         """When the LLM fails to generate tool calls, deterministically decide
         which MCP tool to call based on the user message content."""
@@ -277,8 +428,8 @@ class McpToolRouterService:
             return [McpChatToolCall(tool_name="fs.organize_plan", arguments={"root_path": root_path, "instruction": user_message})]
         if hit_summary >= 1 and hit_scan == 0:
             return [McpChatToolCall(tool_name="fs.folder_summary", arguments={"root_path": root_path})]
-        if hit_scan >= 1 or hit_organize >= 0:
-            # Default to scan — safest read-only first step
+        if hit_scan >= 1:
+            # A genuine scan/listing intent — safest read-only first step
             return [McpChatToolCall(tool_name="fs.scan_folder", arguments={"root_path": root_path})]
 
         return []
@@ -432,6 +583,10 @@ class McpToolRouterService:
             if not tool_calls:
                 # LLM didn't generate tool calls — try deterministic fallback on first round
                 if round_num == 0 and not tool_results_log:
+                    # Gmail intents get a dedicated handler (compose + preview + pending confirm),
+                    # since weak/local models often won't emit the tool call themselves.
+                    if self._is_gmail_intent(user_message):
+                        return self._handle_gmail_intent(user_message, model_id)
                     fallback_calls = self._deterministic_tool_fallback(user_message)
                     if fallback_calls:
                         # Execute the fallback tool call directly
@@ -577,8 +732,8 @@ class McpToolRouterService:
                 messages.append({"role": "assistant", "content": response_text})
                 messages.append({
                     "role": "user",
-                    "content": "The requested file operations require user confirmation. "
-                    "Please inform the user about the planned operations and ask them to confirm.",
+                    "content": "The requested action requires user confirmation. "
+                    "Please review the planned action(s) below and ask the user to reply yes or proceed to run them.",
                 })
                 # One more LLM call to generate the confirmation message
                 confirm_result = model_router_service.generate(

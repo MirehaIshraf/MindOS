@@ -312,6 +312,32 @@ class FileIndexService:
         matches.sort(key=lambda item: (item.score, item.modified_at or ""), reverse=True)
         return IndexedFileSearchResponse(matches=matches[: request.limit])
 
+    def list_indexed_file_texts(
+        self,
+        source_ids: list[str] | None = None,
+        limit: int = 20,
+        max_chars_each: int = 4000,
+    ) -> list[dict[str, str]]:
+        """Return indexed text for connected file_system documents, for summarization."""
+        results: list[dict[str, str]] = []
+        for event in self._events.list_all_events(include_hidden=True):
+            if event.source.value != "file_system" or event.type != "file_indexed":
+                continue
+            metadata = event.metadata or {}
+            if metadata.get("missing") is True:
+                continue
+            source_id = str(metadata.get("source_id") or "")
+            if source_ids and source_id not in source_ids:
+                continue
+            content = (event.content or "").strip()
+            if not content:
+                continue
+            file_name = str(metadata.get("file_name") or metadata.get("relative_path") or event.title or "file")
+            results.append({"file_name": file_name, "content": content[:max_chars_each]})
+            if len(results) >= limit:
+                break
+        return results
+
     def resolve_attachments(self, request: ResolveIndexedAttachmentsRequest) -> ResolveIndexedAttachmentsResponse:
         for reference in request.files:
             if not self._safe_relative_segments(reference.relative_path):

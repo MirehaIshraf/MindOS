@@ -332,9 +332,21 @@ class ChatService:
             )
 
         # --- Check for pending MCP confirmation first ---
-        # If user says "yes"/"proceed"/"confirm" and there are pending operations, execute them.
-        confirmation_id = mcp_tool_router_service._is_confirmation_message(request.message)
-        if confirmation_id:
+        # Cancel ("cancel"/"no"/"stop") clears the pending action; yes/proceed executes it.
+        cancel_id = mcp_tool_router_service._is_cancel_message(request.message)
+        confirmation_id = None if cancel_id else mcp_tool_router_service._is_confirmation_message(request.message)
+        if cancel_id:
+            mcp_tool_router_service.clear_pending_confirmations(cancel_id)
+            mcp_result = {
+                "response": "Okay, cancelled. Nothing was changed.",
+                "model_used": "system",
+                "provider": "system",
+                "model_display_name": "System",
+                "tool_calls_made": 0,
+                "pending_confirmations": [],
+                "requires_confirmation": False,
+            }
+        elif confirmation_id:
             self._set_run_progress(run_id, "executing_confirmation", "Executing confirmed operations...", 70)
             try:
                 exec_result = mcp_tool_router_service.execute_pending_confirmations(confirmation_id)
@@ -343,8 +355,8 @@ class ChatService:
                     results_text = json.dumps(exec_result.get("results", []), indent=2, default=str)
                     model_config = self._resolve_requested_model(request.model_id)
                     summary_messages = [
-                        {"role": "system", "content": "You are MindOS. The user just confirmed file operations. Summarize what was done clearly and concisely."},
-                        {"role": "user", "content": f"The following file operations were executed successfully:\n{results_text}\n\nPlease tell the user what was done."},
+                        {"role": "system", "content": "You are MindOS. The user just confirmed the requested actions. Summarize what was done clearly and concisely, using only the tool results. For Gmail, use the result's own message (e.g. 'Draft created in Gmail. It was not sent.' or 'Email sent from Gmail.')."},
+                        {"role": "user", "content": f"The following actions were executed successfully:\n{results_text}\n\nPlease tell the user what was done."},
                     ]
                     summary_result = model_router_service.generate(
                         messages=summary_messages,
@@ -388,8 +400,7 @@ class ChatService:
         # route it through the MCP tool router for LLM tool-calling.
         # Also auto-route when memory is off — there's nothing else to answer from.
         mcp_available = mcp_tool_router_service.has_mcp_tools_available()
-        memory_is_off = context_profile == "no_memory" or not (request.use_context or query_intent.needs_local_memory)
-        if mcp_result is None and mcp_available and (self._is_mcp_eligible(request.message) or memory_is_off):
+        if mcp_result is None and mcp_available and self._is_mcp_eligible(request.message):
             self._set_run_progress(run_id, "mcp_routing", "Routing to MCP tools...", 65)
             try:
                 formatted_ctx = self._context_builder.format_context_for_llm(context_package) if context_package else ""
@@ -406,16 +417,20 @@ class ChatService:
         task_hint = detect_task_hint(request.message)
         answer_style = query_intent.answer_style or detect_answer_style(request.message, task_hint)
 
+        requires_confirmation = False
+        confirmation_kind: str | None = None
         if mcp_result is not None:
             reply = mcp_result["response"]
             model_name = mcp_result["model_used"]
             provider = mcp_result["provider"]
             model_display_name = mcp_result.get("model_display_name", model_name)
             llm_warning = None
-            # If MCP returned pending confirmations, store them and append instructions to the reply
+            # If MCP returned pending confirmations, store them and flag the message so the
+            # UI shows Confirm/Cancel buttons (no text footer needed).
             if mcp_result.get("pending_confirmations"):
-                confirmation_id = mcp_tool_router_service.store_pending_confirmations(mcp_result["pending_confirmations"])
-                reply += f"\n\n---\n**⚠️ Confirmation Required:** The above file operations need your confirmation before execution. Reply **yes** or **proceed** to confirm, or **cancel** to abort."
+                mcp_tool_router_service.store_pending_confirmations(mcp_result["pending_confirmations"])
+                requires_confirmation = True
+                confirmation_kind = mcp_result.get("confirmation_kind") or "action"
         else:
             model_display = model_config.display_name if model_config else "selected model"
             self._set_run_progress(run_id, "generating", f"Preparing response with {model_display}...", 70)
@@ -470,6 +485,8 @@ class ChatService:
                 "warning": warning,
                 "answer_style": answer_style,
                 "intent": query_intent.intent,
+                "requires_confirmation": requires_confirmation,
+                "confirmation_kind": confirmation_kind,
                 **response_context_metadata,
             },
         )
@@ -702,8 +719,9 @@ class ChatService:
         if any(kw in lower for kw in email_phrases):
             return True
         email_words = ["email", "emails", "mail", "inbox", "gmail"]
-        email_actions = ["draft", "send", "compose", "write", "create", "check", "show", "list", "read", "recent"]
-        has_email_word = any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in email_words)
+        email_actions = ["draft", "send", "sent", "compose", "write", "create", "check", "show", "list", "read", "recent"]
+        has_email_address = bool(_re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", message))
+        has_email_word = has_email_address or any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in email_words)
         has_email_action = any(f" {w} " in f" {lower} " or lower.startswith(w) for w in email_actions)
         if has_email_word and has_email_action:
             return True
