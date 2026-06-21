@@ -669,7 +669,7 @@ export function DevPage() {
             </div>
           ) : null}
           {status ? (
-            <details className="mt-4 rounded-md border border-app-border bg-zinc-950 p-3">
+            <details className="mt-4 rounded-md border border-app-border bg-app-inset p-3">
               <summary className="cursor-pointer text-xs text-app-muted">Raw Status JSON</summary>
               <pre className="mt-3 max-h-72 overflow-auto text-xs leading-5 text-app-text">{JSON.stringify(status, null, 2)}</pre>
             </details>
@@ -683,7 +683,7 @@ export function DevPage() {
               Test LLM
             </Button>
             {llmTestResult ? (
-              <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+              <div className="rounded-md border border-app-border bg-app-inset p-3 text-sm">
                 <div className="mb-2 flex flex-wrap gap-2">
                   <Badge variant="info">{llmTestResult.model}</Badge>
                   {llmTestResult.warning ? <Badge variant="warning">fallback</Badge> : null}
@@ -741,7 +741,7 @@ export function DevPage() {
           {ingestStatus?.collector_clients.length ? (
             <div className="mt-4 space-y-2">
               {ingestStatus.collector_clients.slice(0, 4).map((collector) => (
-                <div key={`${collector.type}-${collector.id}`} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+                <div key={`${collector.type}-${collector.id}`} className="rounded-md border border-app-border bg-app-inset px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Badge>{collector.type}</Badge>
                     <span className="text-sm text-app-text">{collector.name}</span>
@@ -926,7 +926,7 @@ export function DevPage() {
               Build Context
             </Button>
             {contextResult ? (
-              <div className="space-y-3 rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+              <div className="space-y-3 rounded-md border border-app-border bg-app-inset p-3 text-sm">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="info">direct: {contextResult.direct_events.length}</Badge>
                   <Badge variant="info">related: {contextResult.related_events.length}</Badge>
@@ -960,7 +960,7 @@ export function DevPage() {
               Plan Task
             </Button>
             {plannerResult ? (
-              <div className="space-y-3 rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+              <div className="space-y-3 rounded-md border border-app-border bg-app-inset p-3 text-sm">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="info">{plannerResult.plan.task_type}</Badge>
                   <Badge>confidence {plannerResult.plan.confidence.toFixed(2)}</Badge>
@@ -1003,7 +1003,7 @@ export function DevPage() {
               <select
                 value={form.source}
                 onChange={(event) => setForm((current) => ({ ...current, source: event.target.value as EventSource }))}
-                className="mt-2 h-10 w-full rounded-md border border-app-border bg-zinc-950 px-3 text-sm text-app-text outline-none focus:border-app-primary"
+                className="mt-2 h-10 w-full rounded-md border border-app-border bg-app-inset px-3 text-sm text-app-text outline-none focus:border-app-primary"
               >
                 {eventSources.map((source) => (
                   <option key={source} value={source}>
@@ -1019,7 +1019,7 @@ export function DevPage() {
               <textarea
                 value={form.content}
                 onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))}
-                className="mt-2 min-h-24 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
+                className="mt-2 min-h-24 w-full resize-none rounded-md border border-app-border bg-app-inset px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
               />
             </label>
             <label className="block text-xs font-medium uppercase text-app-muted">
@@ -1028,7 +1028,7 @@ export function DevPage() {
                 value={form.metadata}
                 onChange={(event) => setForm((current) => ({ ...current, metadata: event.target.value }))}
                 placeholder='{"project":"mindos"}'
-                className="mt-2 min-h-20 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none placeholder:text-zinc-600 focus:border-app-primary"
+                className="mt-2 min-h-20 w-full resize-none rounded-md border border-app-border bg-app-inset px-3 py-2 text-sm leading-6 text-app-text outline-none placeholder:text-app-muted focus:border-app-primary"
               />
             </label>
             <Button variant="primary" onClick={handleManualIngest} loading={loadingAction === "ingest"}>
@@ -1045,7 +1045,7 @@ export function DevPage() {
               <select
                 value={externalForm.source}
                 onChange={(event) => setExternalForm((current) => ({ ...current, source: event.target.value }))}
-                className="mt-2 h-10 w-full rounded-md border border-app-border bg-zinc-950 px-3 text-sm text-app-text outline-none focus:border-app-primary"
+                className="mt-2 h-10 w-full rounded-md border border-app-border bg-app-inset px-3 text-sm text-app-text outline-none focus:border-app-primary"
               >
                 {["vscode_extension", "browser_extension", "activity_tracker", "local_agent"].map((source) => (
                   <option key={source} value={source}>
@@ -1061,7 +1061,7 @@ export function DevPage() {
               <textarea
                 value={externalForm.content}
                 onChange={(event) => setExternalForm((current) => ({ ...current, content: event.target.value }))}
-                className="mt-2 min-h-20 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
+                className="mt-2 min-h-20 w-full resize-none rounded-md border border-app-border bg-app-inset px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
               />
             </label>
             <label className="block text-xs font-medium uppercase text-app-muted">
@@ -1069,14 +1069,14 @@ export function DevPage() {
               <textarea
                 value={externalForm.metadata}
                 onChange={(event) => setExternalForm((current) => ({ ...current, metadata: event.target.value }))}
-                className="mt-2 min-h-24 w-full resize-none rounded-md border border-app-border bg-zinc-950 px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
+                className="mt-2 min-h-24 w-full resize-none rounded-md border border-app-border bg-app-inset px-3 py-2 text-sm leading-6 text-app-text outline-none focus:border-app-primary"
               />
             </label>
             <Button variant="primary" onClick={handleExternalIngest} loading={loadingAction === "externalIngest"}>
               Send External Event
             </Button>
             {externalResult ? (
-              <div className="rounded-md border border-app-border bg-zinc-950 p-3 text-sm">
+              <div className="rounded-md border border-app-border bg-app-inset p-3 text-sm">
                 <Badge variant="success">{externalResult.status}</Badge>
                 <p className="mt-2 text-app-muted">{externalResult.message}</p>
                 <p className="mt-1 text-xs text-app-muted">{externalResult.event_id}</p>
@@ -1131,7 +1131,7 @@ function IntentDebug({ metadata }: { metadata?: Record<string, unknown> }) {
   const preferredSources = Array.isArray(details.preferred_sources) ? details.preferred_sources.map(String) : [];
   const excludedTypes = Array.isArray(details.excluded_types) ? details.excluded_types.map(String) : [];
   return (
-    <div className="space-y-2 rounded-md border border-app-border bg-black/20 p-3">
+    <div className="space-y-2 rounded-md border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap gap-2">
         <Badge variant="info">intent: {String(details.intent ?? "-")}</Badge>
         <Badge>profile: {String(details.retrieval_profile ?? "-")}</Badge>
@@ -1146,7 +1146,7 @@ function IntentDebug({ metadata }: { metadata?: Record<string, unknown> }) {
 
 function RawEventRow({ event }: { event: MemoryEvent }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+    <div className="rounded-md border border-app-border bg-app-inset px-4 py-3">
       <div className="flex items-center gap-2">
         <Badge variant="info">{event.source}</Badge>
         <Badge>{event.type}</Badge>
@@ -1182,7 +1182,7 @@ function StatusMessage({ variant, message }: { variant: "success" | "danger"; me
 
 function JsonPreview({ value }: { value: unknown }) {
   return (
-    <pre className="max-h-72 overflow-auto rounded-md border border-app-border bg-black/20 p-3 text-xs leading-5 text-app-text">
+    <pre className="max-h-72 overflow-auto rounded-md border border-app-border bg-app-inset p-3 text-xs leading-5 text-app-text">
       {JSON.stringify(value, null, 2)}
     </pre>
   );

@@ -35,13 +35,13 @@ export function ChatInput({ value, onChange, onSend, disabled = false, useContex
           onKeyDown={handleKeyDown}
           placeholder="Ask MindOS anything about your work..."
           rows={1}
-          className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-6 text-app-text outline-none placeholder:text-zinc-600"
+          className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-6 text-app-text outline-none placeholder:text-app-muted"
         />
         <button
           type="button"
           onClick={onSend}
           disabled={!canSend}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-app-primary text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-app-primary text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-app-elevated disabled:text-app-muted"
           aria-label="Send message"
         >
           <ArrowUp size={18} />

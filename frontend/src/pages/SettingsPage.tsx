@@ -178,7 +178,7 @@ export function SettingsPage() {
               value={settings?.selected_chat_model ?? ""}
               onChange={(event) => void handleSelectModel(event.target.value)}
               disabled={enabledChatModels.length === 0 || loadingAction === "select"}
-              className="mt-2 h-10 w-full rounded-md border border-app-border bg-zinc-950 px-3 text-sm text-app-text outline-none focus:border-app-primary"
+              className="mt-2 h-10 w-full rounded-md border border-app-border bg-app-inset px-3 text-sm text-app-text outline-none focus:border-app-primary"
             >
               {enabledChatModels.length === 0 ? (
                 <option value="">FakeLLM fallback</option>
@@ -236,7 +236,7 @@ export function SettingsPage() {
                   </div>
                   <Badge variant="default">optional</Badge>
                 </div>
-                <p className="mt-4 rounded-md border border-app-border bg-zinc-950 px-3 py-2 font-mono text-xs text-app-muted">
+                <p className="mt-4 rounded-md border border-app-border bg-app-inset px-3 py-2 font-mono text-xs text-app-muted">
                   {model.command}
                 </p>
               </Card>
@@ -284,7 +284,7 @@ export function SettingsPage() {
         ) : null}
         <div className="mt-5 grid gap-3 lg:grid-cols-3">
           {embeddingSettings?.models.map((model) => (
-            <div key={model.id} className="rounded-md border border-app-border bg-zinc-950 px-3 py-3">
+            <div key={model.id} className="rounded-md border border-app-border bg-app-inset px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-app-text">{model.display_name}</p>
@@ -294,7 +294,7 @@ export function SettingsPage() {
               </div>
               <p className="mt-3 text-xs leading-5 text-app-muted">{model.description}</p>
               {model.install_command && !model.available ? (
-                <p className="mt-3 rounded-md border border-app-border bg-black/20 px-2 py-2 font-mono text-xs text-app-muted">
+                <p className="mt-3 rounded-md border border-app-border bg-app-inset px-2 py-2 font-mono text-xs text-app-muted">
                   {model.install_command}
                 </p>
               ) : null}
@@ -383,7 +383,7 @@ function ProviderPanel({
 
       <div className="mt-5 space-y-3">
         {models.map((model) => (
-          <div key={model.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+          <div key={model.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-app-border bg-app-inset px-3 py-2">
             <div>
               <p className="text-sm font-medium text-app-text">{model.display_name}</p>
               <p className="text-xs text-app-muted">{model.model_id}</p>

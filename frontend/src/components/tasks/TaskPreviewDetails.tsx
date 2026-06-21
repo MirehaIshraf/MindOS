@@ -119,7 +119,7 @@ function PreviewSection({ title, rows }: { title: string; rows: Array<[string, s
   }
 
   return (
-    <section className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <section className="rounded-md border border-app-border bg-app-inset p-3">
       <p className="text-xs font-medium uppercase text-app-muted">{title}</p>
       <div className="mt-3 space-y-3">
         {visibleRows.map(([label, value]) => (
@@ -138,7 +138,7 @@ function PlainSection({ title, value }: { title: string; value: string }) {
     return null;
   }
   return (
-    <section className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <section className="rounded-md border border-app-border bg-app-inset p-3">
       <p className="text-xs font-medium uppercase text-app-muted">{title}</p>
       <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-app-text">{value}</div>
     </section>
@@ -147,11 +147,11 @@ function PlainSection({ title, value }: { title: string; value: string }) {
 
 function EvidenceSection({ items }: { items: EvidenceItem[] }) {
   return (
-    <section className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <section className="rounded-md border border-app-border bg-app-inset p-3">
       <p className="text-xs font-medium uppercase text-app-muted">Evidence from Memory</p>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
-          <div key={`${item.title}-${index}`} className="rounded-md border border-app-border/70 bg-zinc-900/70 p-3">
+          <div key={`${item.title}-${index}`} className="rounded-md border border-app-border/70 bg-app-elevated/70 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="info">{item.source || "memory"}</Badge>
               <p className="text-sm font-medium text-app-text">{item.title || "Memory item"}</p>
@@ -199,7 +199,7 @@ function KeyValueSection({ title, value }: { title: string; value: Record<string
     return null;
   }
   return (
-    <section className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <section className="rounded-md border border-app-border bg-app-inset p-3">
       <p className="text-xs font-medium uppercase text-app-muted">{title}</p>
       <div className="mt-3 grid gap-3">
         {entries.map(([key, item]) => (

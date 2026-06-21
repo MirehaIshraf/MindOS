@@ -12,8 +12,8 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const variants: Record<ButtonVariant, string> = {
   primary: "bg-app-primary text-white hover:bg-violet-500",
-  secondary: "border border-app-border bg-app-panel text-app-text hover:border-zinc-500",
-  ghost: "text-app-muted hover:bg-zinc-800 hover:text-app-text",
+  secondary: "border border-app-border bg-app-panel text-app-text hover:border-app-muted",
+  ghost: "text-app-muted hover:bg-app-elevated hover:text-app-text",
   danger: "bg-red-600 text-white hover:bg-red-500",
 };
 

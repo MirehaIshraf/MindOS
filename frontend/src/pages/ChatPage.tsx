@@ -45,7 +45,9 @@ export function ChatPage() {
   const [chatModels, setChatModels] = useState<ModelConfig[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [modelError, setModelError] = useState<string | null>(null);
+  const [animatedMessageId, setAnimatedMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const {
     activeChatRunId,
     activeChatSessionId,
@@ -75,6 +77,12 @@ export function ChatPage() {
     void restoreActiveRun(activeChatSessionId);
   }, [activeChatSessionId]);
 
+  // Keep a ref of the open session so the polling loop reads the *current*
+  // value instead of a stale closure (this is what dropped completed replies).
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
   useEffect(() => {
     if (!activeChatRunId) {
       setIsReplying(false);
@@ -95,10 +103,12 @@ export function ChatPage() {
           message: run.progress_message,
           percent: run.progress_percent,
         });
-        const runBelongsToOpenSession = run.session_id === currentSessionId;
+        const runBelongsToOpenSession = run.session_id === currentSessionIdRef.current;
         if (run.status === "completed") {
           if (runBelongsToOpenSession) {
-            await loadSessionMessages(run.session_id);
+            const mapped = await loadSessionMessages(run.session_id);
+            const lastAssistant = [...mapped].reverse().find((message) => message.role === "assistant");
+            setAnimatedMessageId(lastAssistant ? lastAssistant.id : null);
           }
           await refreshSessions();
           clearActiveChatRun();
@@ -141,7 +151,7 @@ export function ChatPage() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [activeChatRunId, clearActiveChatRun, currentSessionId, updateActiveChatRunStatus]);
+  }, [activeChatRunId, clearActiveChatRun, updateActiveChatRunStatus]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -210,8 +220,14 @@ export function ChatPage() {
 
   async function loadSessionMessages(sessionId: string) {
     const response = await getChatMessages(sessionId);
+    const mapped = mapStoredMessages(response.messages);
     setCurrentSessionId(sessionId);
-    setMessages(mapStoredMessages(response.messages));
+    setMessages(mapped);
+    return mapped;
+  }
+
+  function scrollToBottom() {
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }
 
   async function refreshChatModels() {
@@ -269,6 +285,7 @@ export function ChatPage() {
         runId: response.run_id,
         sessionId: response.session_id,
         status: response.status,
+        startedAt: new Date().toISOString(),
         message: "Starting your request...",
         step: "queued",
         percent: 5,
@@ -290,6 +307,7 @@ export function ChatPage() {
     setInput("");
     setCurrentSessionId(null);
     setIsReplying(false);
+    setAnimatedMessageId(null);
   }
 
   async function handleLoadSession(sessionId: string) {
@@ -297,6 +315,7 @@ export function ChatPage() {
     setSessionError(null);
     setIsReplying(false);
     setPendingStyle("normal");
+    setAnimatedMessageId(null);
     try {
       await loadSessionMessages(sessionId);
       await restoreActiveRun(sessionId);
@@ -385,7 +404,7 @@ export function ChatPage() {
             ) : (
               <div className="space-y-2">
                 {sessions.map((session) => (
-                  <div key={session.id} className="flex items-center gap-3 rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+                  <div key={session.id} className="flex items-center gap-3 rounded-md border border-app-border bg-app-inset px-3 py-2">
                     <button
                       type="button"
                       className="min-w-0 flex-1 text-left"
@@ -436,6 +455,8 @@ export function ChatPage() {
             <ChatMessage
               key={message.id}
               message={message}
+              animate={message.id === animatedMessageId}
+              onContentGrow={scrollToBottom}
               onOpenTask={(instruction) =>
                 navigate(
                   `/tasks?instruction=${encodeURIComponent(instruction)}${

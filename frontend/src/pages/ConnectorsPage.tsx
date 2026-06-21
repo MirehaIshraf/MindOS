@@ -552,7 +552,7 @@ function ConnectorCard({
     <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app-border bg-zinc-950 text-app-text">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app-border bg-app-inset text-app-text">
             <Icon size={20} />
           </div>
           <div className="min-w-0">
@@ -717,7 +717,7 @@ function VSCodePanel({ connector, onToggle }: { connector: Connector; onToggle: 
       {connector.enabled && connector.status === "disconnected" ? (
         <StatusMessage message="Extension installed? Open VSCode or check backend URL." variant="warning" />
       ) : null}
-      <div className="flex items-center justify-between rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+      <div className="flex items-center justify-between rounded-md border border-app-border bg-app-inset px-4 py-3">
         <div>
           <p className="text-sm font-medium text-app-text">Collect VSCode events</p>
           <p className="mt-1 text-xs text-app-muted">Install once. After that, this toggle controls collection.</p>
@@ -729,7 +729,7 @@ function VSCodePanel({ connector, onToggle }: { connector: Connector; onToggle: 
         {showInstall ? "Hide install steps" : "Install extension manually"}
       </button>
       {showInstall ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+        <div className="rounded-md border border-app-border bg-app-inset p-4 text-sm text-app-muted">
           <ol className="list-decimal space-y-2 pl-5">
             <li>Open <code>extensions/vscode</code>.</li>
             <li><code>npm install</code></li>
@@ -793,7 +793,7 @@ function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle:
       {connector.enabled && connector.status === "disconnected" ? (
         <StatusMessage message="Extension installed? Open the browser popup or check the backend URL." variant="warning" />
       ) : null}
-      <div className="flex items-center justify-between rounded-md border border-app-border bg-zinc-950 px-4 py-3">
+      <div className="flex items-center justify-between rounded-md border border-app-border bg-app-inset px-4 py-3">
         <div>
           <p className="text-sm font-medium text-app-text">Browser collection</p>
           <p className="mt-1 text-xs text-app-muted">Manual by default. Smart capture stores only work/research-like pages.</p>
@@ -804,12 +804,12 @@ function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle:
         <KeyValue label="Backend URL" value="http://localhost:8000" />
         <KeyValue label="Capture mode" value={config.capture_mode === "smart" ? "Smart" : config.capture_mode === "off" ? "Off" : "Manual"} />
       </div>
-      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <div className="rounded-md border border-app-border bg-app-inset p-4">
         <div className="space-y-4">
           <label className="block text-xs font-medium uppercase text-app-muted">
             Capture mode
             <select
-              className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+              className="mt-2 w-full rounded-md border border-app-border bg-app-elevated px-3 py-2 text-sm normal-case text-app-text"
               value={config.capture_mode}
               disabled={loadingConfig}
               onChange={(event) => {
@@ -881,7 +881,7 @@ function BrowserPanel({ connector, onToggle }: { connector: Connector; onToggle:
         {showInstall ? "Hide install steps" : "Install extension manually"}
       </button>
       {showInstall ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+        <div className="rounded-md border border-app-border bg-app-inset p-4 text-sm text-app-muted">
           <ol className="list-decimal space-y-2 pl-5">
             <li>Open <code>extensions/browser</code>.</li>
             <li><code>npm install</code></li>
@@ -1176,7 +1176,7 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
       {connected && status?.username ? <p className="text-sm text-app-muted">Connected as {status.username}</p> : null}
       {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
 
-      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <div className="rounded-md border border-app-border bg-app-inset p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-app-text">Connection</p>
@@ -1213,7 +1213,7 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
       </div>
 
       {connected ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="rounded-md border border-app-border bg-app-inset p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-app-text">Repositories</p>
@@ -1233,7 +1233,7 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
               <p className="text-sm text-app-muted">Load repositories to choose what MindOS can use.</p>
             ) : (
               repos.map((repo) => (
-                <label key={repo.full_name} className="flex cursor-pointer items-start gap-3 rounded-md border border-app-border bg-zinc-900/60 px-3 py-2 text-sm">
+                <label key={repo.full_name} className="flex cursor-pointer items-start gap-3 rounded-md border border-app-border bg-app-elevated/60 px-3 py-2 text-sm">
                   <input
                     type="checkbox"
                     checked={selectedRepos.includes(repo.full_name)}
@@ -1252,12 +1252,12 @@ function GitHubPanel({ connector, onToggle, onRefresh }: { connector: Connector;
           </div>
         </div>
       ) : (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4 text-sm text-app-muted">
+        <div className="rounded-md border border-app-border bg-app-inset p-4 text-sm text-app-muted">
           Connect GitHub to load and choose repositories.
         </div>
       )}
 
-      <details className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <details className="rounded-md border border-app-border bg-app-inset p-4">
         <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced sync settings</summary>
         <div className="mt-4 space-y-3">
           <LabeledInput label="API base URL" value={apiBaseUrl} onChange={setApiBaseUrl} placeholder="https://api.github.com" />
@@ -1464,7 +1464,7 @@ function GmailPanel({ onRefresh }: { onRefresh: () => void }) {
       </div>
       {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
 
-      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <div className="rounded-md border border-app-border bg-app-inset p-4">
         <p className="text-sm font-medium text-app-text">Connection</p>
         <p className="mt-1 text-xs text-app-muted">
           Upload a Google OAuth desktop client credentials file. MindOS stores it locally and never shows the secret after upload.
@@ -1503,7 +1503,7 @@ function GmailPanel({ onRefresh }: { onRefresh: () => void }) {
             ))}
           </CompactBlock>
 
-          <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+          <div className="rounded-md border border-app-border bg-app-inset p-4">
             <p className="text-sm font-medium text-app-text">Draft tools</p>
             <p className="mt-1 text-xs text-app-muted">MindOS can create drafts. Sending always requires confirmation.</p>
             <div className="mt-4 grid gap-3">
@@ -1542,7 +1542,7 @@ function GmailPanel({ onRefresh }: { onRefresh: () => void }) {
           <div className="mt-3 space-y-2 text-sm text-app-muted">
             <p><span className="text-app-text">To:</span> {lastDraft.to}</p>
             <p><span className="text-app-text">Subject:</span> {lastDraft.subject}</p>
-            <p className="whitespace-pre-wrap rounded-md border border-app-border bg-zinc-950 p-3">{lastDraft.body}</p>
+            <p className="whitespace-pre-wrap rounded-md border border-app-border bg-app-inset p-3">{lastDraft.body}</p>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setConfirmSend(false)} disabled={busy}>
@@ -1743,7 +1743,7 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
       {connected ? <p className="text-sm text-app-muted">Connected to {currentProviderName || "Email MCP"}{currentAccountLabel ? ` (${currentAccountLabel})` : ""}</p> : null}
       {status?.last_error ? <StatusMessage message={status.last_error} variant="warning" /> : null}
 
-      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <div className="rounded-md border border-app-border bg-app-inset p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-app-text">Connection</p>
@@ -1757,7 +1757,7 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
           <label className="block text-xs font-medium uppercase text-app-muted">
             Authentication type
             <select
-              className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+              className="mt-2 w-full rounded-md border border-app-border bg-app-elevated px-3 py-2 text-sm normal-case text-app-text"
               value={authType}
               onChange={(event) => setAuthType(event.target.value as typeof authType)}
             >
@@ -1806,7 +1806,7 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
       </div>
 
       {capabilities ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="rounded-md border border-app-border bg-app-inset p-4">
           <p className="text-sm font-medium text-app-text">Capabilities</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             <CapabilityRow label="Search emails" enabled={capabilities.search_email || capabilities.search_emails} />
@@ -1819,14 +1819,14 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
       ) : null}
 
       {connected ? (
-        <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+        <div className="rounded-md border border-app-border bg-app-inset p-4">
           <p className="text-sm font-medium text-app-text">Sync</p>
           <p className="mt-1 text-xs text-app-muted">Fetch read-only email context into MindOS memory. Attachments are listed but not downloaded.</p>
           <div className="mt-3 space-y-3">
             <label className="block text-xs font-medium uppercase text-app-muted">
               Scope
               <select
-                className="mt-2 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text"
+                className="mt-2 w-full rounded-md border border-app-border bg-app-elevated px-3 py-2 text-sm normal-case text-app-text"
                 value={scope}
                 onChange={(event) => setScope(event.target.value as typeof scope)}
               >
@@ -1849,7 +1849,7 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
         </div>
       ) : null}
 
-      <details className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <details className="rounded-md border border-app-border bg-app-inset p-4">
         <summary className="cursor-pointer text-sm font-medium text-app-text">Advanced tool mapping</summary>
         <div className="mt-4 space-y-3">
           <p className="text-xs leading-5 text-app-muted">
@@ -1914,7 +1914,7 @@ function EmailPanel({ connector, onToggle, onRefresh }: { connector: Connector; 
 
 function CapabilityRow({ label, enabled, note }: { label: string; enabled: boolean; note?: string }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-900/60 px-3 py-2">
+    <div className="rounded-md border border-app-border bg-app-elevated/60 px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm text-app-text">{label}</span>
         <Badge variant={enabled ? "success" : "default"}>{enabled ? "available" : "disabled"}</Badge>
@@ -1928,7 +1928,7 @@ function FileSystemPanel(props: Parameters<typeof ConfigurePanel>[0]) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   return (
     <div className="mt-5 space-y-5">
-      <div className="rounded-md border border-app-border bg-zinc-950 p-4">
+      <div className="rounded-md border border-app-border bg-app-inset p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-app-text">Connected folders</h3>
@@ -2193,7 +2193,7 @@ function ManualConnectorPanel({
 
 function PlaceholderConfig({ connector }: { connector: Connector }) {
   return (
-    <div className="mt-5 rounded-md border border-app-border bg-zinc-950 p-4">
+    <div className="mt-5 rounded-md border border-app-border bg-app-inset p-4">
       <p className="text-sm leading-6 text-app-muted">Configuration will be added when this connector is implemented.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Badge>{connector.configured ? "configured" : "needs setup"}</Badge>
@@ -2270,7 +2270,7 @@ function PanelHeader({ title, onClose }: { title: string; onClose: () => void })
   return (
     <div className="flex items-start justify-between gap-3">
       <h2 className="text-base font-semibold text-app-text">{title}</h2>
-      <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
+      <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-app-elevated hover:text-app-text">
         <X size={18} />
       </button>
     </div>
@@ -2287,7 +2287,7 @@ function SavedSourceRow({ source, loading, runLabel = "Re-import", onRun, onEdit
   onClear: () => void;
 }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-3 py-3">
+    <div className="rounded-md border border-app-border bg-app-inset px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-app-text">{source.name}</p>
@@ -2371,7 +2371,7 @@ function contentFailedFiles(source: ConnectorSource) {
 
 function ImportRunRow({ run }: { run: ImportRun }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+    <div className="rounded-md border border-app-border bg-app-inset px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={run.status === "success" ? "success" : run.status === "partial" ? "warning" : "danger"}>{run.status}</Badge>
         <span className="text-xs text-app-muted">{formatDate(run.completed_at)}</span>
@@ -2426,7 +2426,7 @@ function ImportResult({ result }: { result: { imported_count: number; skipped_co
 
 function CompactBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-md border border-app-border bg-app-inset p-3">
       <h3 className="mb-2 text-xs font-medium uppercase text-app-muted">{title}</h3>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
@@ -2458,7 +2458,7 @@ function LabeledTextarea({ label, value, onChange, placeholder }: {
     <label className="block text-xs font-medium uppercase text-app-muted">
       {label}
       <textarea
-        className="mt-2 min-h-20 w-full rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-sm normal-case text-app-text placeholder:text-app-muted"
+        className="mt-2 min-h-20 w-full rounded-md border border-app-border bg-app-elevated px-3 py-2 text-sm normal-case text-app-text placeholder:text-app-muted"
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -2483,7 +2483,7 @@ function Toggle({ checked, disabled, onChange }: { checked: boolean; disabled: b
       disabled={disabled}
       aria-pressed={checked}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${checked ? "bg-violet-600" : "bg-zinc-700"}`}
+      className={`relative h-6 w-11 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${checked ? "bg-violet-600" : "bg-app-elevated"}`}
     >
       <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${checked ? "left-6" : "left-1"}`} />
     </button>

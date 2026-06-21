@@ -1391,7 +1391,7 @@ function TaskCommandBar({
   onPrepare: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-app-border bg-zinc-950 px-3 py-2 shadow-sm shadow-black/10 focus-within:border-violet-500/60 focus-within:ring-2 focus-within:ring-violet-900/40">
+    <div className="flex items-center gap-3 rounded-xl border border-app-border bg-app-inset px-3 py-2 shadow-sm shadow-black/10 focus-within:border-violet-500/60 focus-within:ring-2 focus-within:ring-violet-900/40">
       <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
         <Sparkles size={16} />
       </span>
@@ -1401,7 +1401,7 @@ function TaskCommandBar({
         onFocus={onFocus}
         onKeyDown={onKeyDown}
         placeholder="Ask MindOS to do something..."
-        className="min-w-0 flex-1 bg-transparent text-sm text-app-text outline-none placeholder:text-zinc-600"
+        className="min-w-0 flex-1 bg-transparent text-sm text-app-text outline-none placeholder:text-app-muted"
       />
       <button
         type="button"
@@ -1422,7 +1422,7 @@ function TaskSuggestionChips({ suggestions, onSelect }: { suggestions: string[];
           key={suggestion}
           type="button"
           onClick={() => onSelect(suggestion)}
-          className="rounded-full border border-app-border bg-zinc-950 px-3 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:bg-violet-500/10 hover:text-violet-200"
+          className="rounded-full border border-app-border bg-app-inset px-3 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:bg-violet-500/10 hover:text-violet-200"
         >
           {suggestion}
         </button>
@@ -1433,7 +1433,7 @@ function TaskSuggestionChips({ suggestions, onSelect }: { suggestions: string[];
 
 function TaskActionHint({ onSelect }: { onSelect: () => void }) {
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950/80 p-2">
+    <div className="rounded-lg border border-app-border bg-app-inset/80 p-2">
       <button
         type="button"
         onClick={onSelect}
@@ -1471,7 +1471,7 @@ function DetectedIntentChip({ intent }: { intent: FileTaskIntent }) {
             ? "By type"
             : "Safe preview";
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-zinc-950/80 px-3 py-2 text-xs">
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-app-inset/80 px-3 py-2 text-xs">
       <span className={intent.supported ? "text-violet-200" : "text-amber-200"}>{intent.label}</span>
       <span className="text-app-muted">·</span>
       <span className="text-app-muted">{detail}</span>
@@ -1503,7 +1503,7 @@ function DetectedActionChip({ action, fileIntent }: { action: ClassifiedTaskActi
                 ? "GitHub context"
                 : "Safe preview";
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-zinc-950/80 px-3 py-2 text-xs">
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-app-border bg-app-inset/80 px-3 py-2 text-xs">
       <span className={action.supported ? "text-violet-200" : "text-amber-200"}>{action.label}</span>
       <span className="text-app-muted">-</span>
       <span className="text-app-muted">{detail}</span>
@@ -1639,7 +1639,7 @@ function GmailDraftPreview({
           : "Gmail draft preview";
   const buttonLabel = effectiveActionType === "gmail.sendEmail" ? "Send Email" : effectiveActionType === "gmail.replyDraft" ? "Create Reply Draft" : "Create Gmail Draft";
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">
@@ -1678,7 +1678,7 @@ function GmailDraftPreview({
               value={draft.message_id}
               onChange={(event) => onDraftChange({ ...draft, message_id: event.target.value })}
               placeholder="message id from search result"
-              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+              className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
             />
           </label>
         ) : null}
@@ -1688,7 +1688,7 @@ function GmailDraftPreview({
             value={draft.to}
             onChange={(event) => onDraftChange({ ...draft, to: event.target.value })}
             placeholder={gmailStatus?.email_address || "recipient@example.com"}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
           />
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -1698,7 +1698,7 @@ function GmailDraftPreview({
               value={draft.cc}
               onChange={(event) => onDraftChange({ ...draft, cc: event.target.value })}
               placeholder="optional"
-              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+              className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
             />
           </label>
           <label className="space-y-1 text-xs text-app-muted">
@@ -1707,7 +1707,7 @@ function GmailDraftPreview({
               value={draft.bcc}
               onChange={(event) => onDraftChange({ ...draft, bcc: event.target.value })}
               placeholder="optional"
-              className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+              className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
             />
           </label>
         </div>
@@ -1716,7 +1716,7 @@ function GmailDraftPreview({
           <input
             value={draft.subject}
             onChange={(event) => onDraftChange({ ...draft, subject: event.target.value })}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
           />
         </label>
         <label className="space-y-1 text-xs text-app-muted">
@@ -1725,12 +1725,12 @@ function GmailDraftPreview({
             value={draft.body}
             onChange={(event) => onDraftChange({ ...draft, body: event.target.value })}
             rows={8}
-            className="w-full resize-none rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-xs leading-5 text-app-text outline-none focus:border-violet-500/60"
+            className="w-full resize-none rounded-md border border-app-border bg-app-elevated px-3 py-2 text-xs leading-5 text-app-text outline-none focus:border-violet-500/60"
           />
         </label>
       </div>
 
-      <div className="mt-3 rounded-md border border-app-border bg-zinc-900/60 p-3">
+      <div className="mt-3 rounded-md border border-app-border bg-app-elevated/60 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Paperclip size={14} className="text-violet-200" />
@@ -1772,7 +1772,7 @@ function GmailDraftPreview({
           <div className="mt-3 space-y-2">
             {action.preview?.attachmentIntent ? <p className="text-[11px] font-medium uppercase tracking-wide text-app-muted">Possible files found</p> : null}
             {attachments.map((candidate) => (
-              <div key={candidate.id} className="flex items-center gap-2 rounded-md border border-app-border bg-zinc-950/70 px-2 py-2 text-xs">
+              <div key={candidate.id} className="flex items-center gap-2 rounded-md border border-app-border bg-app-inset/70 px-2 py-2 text-xs">
                 <input
                   type="checkbox"
                   checked={candidate.selected}
@@ -1798,7 +1798,7 @@ function GmailDraftPreview({
                   <button
                     type="button"
                     onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== candidate.id))}
-                    className="rounded p-1 text-app-muted transition hover:bg-zinc-800 hover:text-app-text"
+                    className="rounded p-1 text-app-muted transition hover:bg-app-elevated hover:text-app-text"
                     aria-label={`Remove ${candidate.name}`}
                   >
                     <X size={14} />
@@ -1866,7 +1866,7 @@ function ActionConfirmationCard({
           </div>
           <Badge variant="danger">high risk</Badge>
         </div>
-        <div className="mt-3 rounded-md border border-app-border bg-zinc-950/70 px-3 py-2 text-xs">
+        <div className="mt-3 rounded-md border border-app-border bg-app-inset/70 px-3 py-2 text-xs">
           <p className="text-app-muted">
             To: <span className="text-app-text">{draft.to}</span>
           </p>
@@ -1904,7 +1904,7 @@ function ActionConfirmationCard({
         </div>
         <Badge variant={isHighRisk ? "danger" : "warning"}>{action.riskLevel} risk</Badge>
       </div>
-      <div className="mt-3 rounded-md border border-app-border bg-zinc-950/70 px-3 py-2">
+      <div className="mt-3 rounded-md border border-app-border bg-app-inset/70 px-3 py-2">
         <p className="text-xs font-medium text-app-text">Safety</p>
         <ul className="mt-2 space-y-1 text-xs text-app-muted">
           {bullets.map((bullet) => (
@@ -1942,7 +1942,7 @@ function EmailSearchPreview({
       <div className="mt-3 space-y-2">
         {messages.length ? (
           messages.slice(0, 8).map((message) => (
-            <div key={message.id} className="rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+            <div key={message.id} className="rounded-md border border-app-border bg-app-elevated/70 px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-app-text">{message.subject || "(no subject)"}</p>
                 <span className="text-[11px] text-app-muted">{message.date ? formatTimestamp(message.date) : ""}</span>
@@ -1952,7 +1952,7 @@ function EmailSearchPreview({
             </div>
           ))
         ) : (
-          <p className="rounded-md border border-app-border bg-zinc-900/70 px-3 py-2 text-xs text-app-muted">No email messages to show.</p>
+          <p className="rounded-md border border-app-border bg-app-elevated/70 px-3 py-2 text-xs text-app-muted">No email messages to show.</p>
         )}
       </div>
     </DetectedActionCard>
@@ -1973,7 +1973,7 @@ function ReportPreview({ action, recentTasks, onEdit, onCancel }: { action: Prep
   return (
     <DetectedActionCard icon={<FileText size={16} />} action={action} title="Prepare memory report" onEdit={onEdit} onCancel={onCancel}>
       <p className="text-xs text-app-muted">{action.preview?.note}</p>
-      <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+      <div className="mt-3 rounded-md border border-app-border bg-app-elevated/70 px-3 py-2">
         <p className="text-xs font-medium text-app-text">Sources</p>
         <p className="mt-1 text-xs text-app-muted">
           {lastWeek.length ? `${lastWeek.length} recent task items found from the last 7 days.` : "No task history found from the last 7 days. MindOS can still use Memory when the report flow is connected."}
@@ -2007,7 +2007,7 @@ function DetectedActionCard({
   onCancel: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-violet-500/10 text-violet-200">{icon}</span>
@@ -2070,7 +2070,7 @@ function TaskContextPicker({
 }) {
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 rounded-lg border border-app-border bg-zinc-950 px-3 py-2">
+      <div className="flex items-center gap-2 rounded-lg border border-app-border bg-app-inset px-3 py-2">
         <span className="shrink-0 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-xs text-violet-200">
           Organize folder
         </span>
@@ -2097,7 +2097,7 @@ function TaskContextPicker({
             key={folder.path}
             type="button"
             onClick={() => onFolderSelect(folder.path)}
-            className="rounded-md border border-app-border bg-zinc-950 px-2.5 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:text-violet-200"
+            className="rounded-md border border-app-border bg-app-inset px-2.5 py-1 text-xs text-app-muted transition hover:border-violet-500/50 hover:text-violet-200"
           >
             {folder.label}
           </button>
@@ -2110,7 +2110,7 @@ function TaskContextPicker({
 function ScanSummary({ result, categories, stale, source }: { result: FileSnapshotResponse; categories: CategorySummary[]; stale: boolean; source: ScanSource }) {
   const displayName = result.display_name || result.root_name || result.root_path || "Selected folder";
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-mono text-sm text-app-text">{displayName}</p>
@@ -2125,7 +2125,7 @@ function ScanSummary({ result, categories, stale, source }: { result: FileSnapsh
       {categories.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {categories.map((category) => (
-            <span key={category.label} className="rounded-full border border-app-border bg-zinc-900 px-2.5 py-1 text-xs text-app-muted">
+            <span key={category.label} className="rounded-full border border-app-border bg-app-elevated px-2.5 py-1 text-xs text-app-muted">
               {category.label}: {category.count}
             </span>
           ))}
@@ -2152,7 +2152,7 @@ function TaskPlanCard({
   const canRun = source === "browser_handle" && plan.status === "awaiting_confirmation" && plan.total_operations > 0 && plan.blocked_reasons.length === 0 && executionPhase !== "running";
   const statusLabel = plan.status === "unsupported" ? "unsupported" : plan.status === "empty" ? "no operations" : `${plan.total_operations} operations`;
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-app-text">Plan for {plan.root_path}</h2>
         <div className="flex flex-wrap gap-2">
@@ -2189,7 +2189,7 @@ function TaskPlanCard({
 
 function EmptyPlanState({ plan }: { plan: FileTaskPlan }) {
   return (
-    <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+    <div className="mt-3 rounded-md border border-app-border bg-app-elevated/70 px-3 py-2">
       <p className="text-xs font-medium text-app-text">No matching files found</p>
       <p className="mt-1 text-xs text-app-muted">{plan.summary}</p>
       {Object.keys(plan.category_counts).length ? (
@@ -2265,7 +2265,7 @@ function DocumentSelectionCard({
   }
 
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-app-text">Documents to summarize</h2>
@@ -2295,7 +2295,7 @@ function DocumentSelectionCard({
             </Button>
           </div>
 
-          <div className="mt-3 max-h-56 space-y-1 overflow-y-auto rounded-md border border-app-border bg-zinc-900/50 p-2">
+          <div className="mt-3 max-h-56 space-y-1 overflow-y-auto rounded-md border border-app-border bg-app-elevated/50 p-2">
             {selection.candidates.map((file) => (
               <label key={file.relative_path} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-xs transition hover:bg-violet-500/10">
                 <input
@@ -2315,7 +2315,7 @@ function DocumentSelectionCard({
           </div>
         </>
       ) : (
-        <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+        <div className="mt-3 rounded-md border border-app-border bg-app-elevated/70 px-3 py-2">
           <p className="text-xs font-medium text-app-text">I couldn't find readable documents in this folder.</p>
           <p className="mt-1 text-xs text-app-muted">MindOS can currently summarize txt, md, log, json, csv, PDF, and DOCX files.</p>
         </div>
@@ -2342,7 +2342,7 @@ function DocumentSelectionCard({
           <input
             value={outputFilename}
             onChange={(event) => onOutputFilenameChange(event.target.value)}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
           />
           <span className="block text-[11px] text-app-muted">MindOS will suggest a filename after reading the documents.</span>
         </label>
@@ -2351,7 +2351,7 @@ function DocumentSelectionCard({
           <select
             value={outputFormat}
             onChange={(event) => onOutputFormatChange(event.target.value as "markdown" | "text")}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
           >
             <option value="markdown">Markdown (.md)</option>
             <option value="text">Text (.txt)</option>
@@ -2362,7 +2362,7 @@ function DocumentSelectionCard({
           <select
             value={summaryStyle}
             onChange={(event) => onSummaryStyleChange(event.target.value as DocumentSummaryStyle)}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 text-xs text-app-text outline-none focus:border-violet-500/60"
           >
             <option value="brief">Brief</option>
             <option value="detailed">Detailed</option>
@@ -2419,7 +2419,7 @@ function DocumentSummaryPreviewCard({
 }) {
   const canSave = summary.status === "preview" && summary.summary_markdown.trim().length > 0;
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-app-text">Summary preview</h2>
         <Badge variant={summary.status === "preview" ? "success" : summary.status === "empty" ? "default" : "danger"}>
@@ -2439,7 +2439,7 @@ function DocumentSummaryPreviewCard({
       <div className="mt-3 grid gap-3 md:grid-cols-[1fr_220px]">
         <label className="space-y-1 text-xs text-app-muted">
           <span>Summary title</span>
-          <div className="rounded-md border border-app-border bg-zinc-900 px-3 py-2 text-xs text-app-text">
+          <div className="rounded-md border border-app-border bg-app-elevated px-3 py-2 text-xs text-app-text">
             {summary.summary_title || "Created document summary"}
           </div>
         </label>
@@ -2448,7 +2448,7 @@ function DocumentSummaryPreviewCard({
           <input
             value={outputFilename}
             onChange={(event) => onOutputFilenameChange(event.target.value)}
-            className="h-9 w-full rounded-md border border-app-border bg-zinc-900 px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
+            className="h-9 w-full rounded-md border border-app-border bg-app-elevated px-3 font-mono text-xs text-app-text outline-none focus:border-violet-500/60"
           />
         </label>
       </div>
@@ -2474,7 +2474,7 @@ function DocumentSummaryPreviewCard({
           Read {readResult.files_read.length} files · {readResult.total_chars.toLocaleString()} characters extracted
         </p>
       ) : null}
-      <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-app-border bg-zinc-900/70 p-3">
+      <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-app-border bg-app-elevated/70 p-3">
         <pre className="whitespace-pre-wrap break-words text-xs leading-5 text-app-text">{summary.summary_markdown}</pre>
       </div>
       {saveMessage ? <p className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">{saveMessage}</p> : null}
@@ -2511,7 +2511,7 @@ function RunConfirmationCard({ plan, onCancel, onConfirm }: { plan: FileTaskPlan
 
 function ExecutionProgressCard({ progress }: { progress: BrowserExecutionProgress }) {
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-app-text">Running plan</p>
@@ -2519,7 +2519,7 @@ function ExecutionProgressCard({ progress }: { progress: BrowserExecutionProgres
         </div>
         <Badge variant="info">{progress.percent}%</Badge>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-900">
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-app-elevated">
         <div className="h-full rounded-full bg-violet-400 transition-all" style={{ width: `${progress.percent}%` }} />
       </div>
       <div className="mt-3 grid gap-2 text-xs text-app-muted sm:grid-cols-2">
@@ -2544,7 +2544,7 @@ function ExecutionResultCard({
 }) {
   const statusVariant = result.status === "completed" ? "success" : result.status === "partial" ? "warning" : "danger";
   return (
-    <div className="rounded-lg border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-lg border border-app-border bg-app-inset p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-medium text-app-text">{result.status === "completed" ? "Completed" : result.status === "partial" ? "Partially completed" : "Failed"}</p>
         <Badge variant={statusVariant}>{result.status}</Badge>
@@ -2557,12 +2557,12 @@ function ExecutionResultCard({
       </div>
       {result.errors.length ? <CompactList title="Errors" items={result.errors.map((error) => ({ label: error }))} tone="danger" /> : null}
       {undoResult ? (
-        <div className="mt-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2 text-xs text-app-muted">
+        <div className="mt-3 rounded-md border border-app-border bg-app-elevated/70 px-3 py-2 text-xs text-app-muted">
           Undo status: <span className="text-app-text">{undoResult.status}</span> - operations undone: {undoResult.undoneOperations}
           {undoResult.errors.length ? <CompactList title="Undo errors" items={undoResult.errors.map((error) => ({ label: error }))} tone="danger" /> : null}
         </div>
       ) : result.undoAvailable ? (
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-app-border bg-zinc-900/70 px-3 py-2">
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-app-border bg-app-elevated/70 px-3 py-2">
           <span className="text-xs text-app-muted">Undo available for completed moves and created folders.</span>
           <Button type="button" variant="secondary" className="h-8 px-3" loading={undoing} onClick={onUndo}>
             Undo all
@@ -2593,7 +2593,7 @@ function RecentTasksCard({ tasks }: { tasks: RecentTaskItem[] }) {
       </div>
       <div className="space-y-2">
         {tasks.slice(0, 6).map((task) => (
-          <div key={task.id} className="rounded-md border border-app-border bg-zinc-950 px-3 py-2">
+          <div key={task.id} className="rounded-md border border-app-border bg-app-inset px-3 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-medium text-app-text">{task.title}</p>
@@ -2693,7 +2693,7 @@ function CompactList({
       ? "border-red-500/30 bg-red-500/10"
       : tone === "warning"
         ? "border-amber-500/30 bg-amber-500/10"
-        : "border-app-border bg-zinc-900/70";
+        : "border-app-border bg-app-elevated/70";
   return (
     <div className={`mt-3 rounded-md border px-3 py-2 ${toneClass}`}>
       <p className="text-xs font-medium text-app-text">{title}</p>

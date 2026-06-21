@@ -14,7 +14,7 @@ function McpToggle({ checked, disabled, onChange }: { checked: boolean; disabled
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${checked ? "bg-emerald-500" : "bg-zinc-600"} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${checked ? "bg-emerald-500" : "bg-app-border"} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${checked ? "translate-x-4" : "translate-x-0"}`} />
     </button>
@@ -108,13 +108,13 @@ function FileSystemConfigPanel({
           value={pathInput}
           onChange={(e) => { setPathInput(e.target.value); setSuccess(false); setError(null); }}
           placeholder="D:\Projects\MyFolder"
-          className="flex-1 rounded-md border border-app-border bg-zinc-900 px-3 py-1.5 text-xs text-app-text placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+          className="flex-1 rounded-md border border-app-border bg-app-elevated px-3 py-1.5 text-xs text-app-text placeholder:text-app-muted focus:border-emerald-500 focus:outline-none"
           onKeyDown={(e) => { if (e.key === "Enter") void handleSave(); }}
         />
         <button
           type="button"
           onClick={handleBrowse}
-          className="rounded-md border border-app-border bg-zinc-800 px-3 py-1.5 text-xs text-app-muted hover:bg-zinc-700 hover:text-app-text transition-colors"
+          className="rounded-md border border-app-border bg-app-elevated px-3 py-1.5 text-xs text-app-muted hover:bg-app-inset hover:text-app-text transition-colors"
           title="Browse for directory (limited by browser security)"
         >
           Browse
@@ -134,7 +134,7 @@ function FileSystemConfigPanel({
           <button
             type="button"
             onClick={handleClear}
-            className="rounded-md border border-app-border bg-zinc-800 px-2 py-1.5 text-xs text-app-muted hover:bg-zinc-700 hover:text-app-text transition-colors"
+            className="rounded-md border border-app-border bg-app-elevated px-2 py-1.5 text-xs text-app-muted hover:bg-app-inset hover:text-app-text transition-colors"
           >
             <X size={12} />
           </button>
@@ -238,7 +238,7 @@ export function McpServerSection() {
             <Card key={server.server_id} className="cursor-pointer" onClick={() => void handleExpand(server.server_id)}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-zinc-800">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-app-elevated">
                     <Icon size={16} className="text-app-muted" />
                   </div>
                   <div className="min-w-0">
@@ -280,7 +280,7 @@ export function McpServerSection() {
                 <div className="mt-4 space-y-2 border-t border-app-border pt-3" onClick={(e) => e.stopPropagation()}>
                   <p className="text-xs font-medium text-app-muted uppercase">Available Tools</p>
                   {tools.map((tool) => (
-                    <div key={tool.name} className="rounded-md bg-zinc-900 p-2">
+                    <div key={tool.name} className="rounded-md bg-app-elevated p-2">
                       <div className="flex items-center gap-2">
                         <Wrench size={12} className="text-app-muted" />
                         <span className="text-xs font-mono font-medium text-app-text">{tool.name}</span>

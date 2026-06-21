@@ -50,8 +50,8 @@ export function Sidebar() {
                     : isActive
                       ? "bg-violet-600/15 text-violet-200 ring-1 ring-violet-500/30"
                       : item.primary
-                        ? "bg-zinc-900 text-app-text ring-1 ring-app-border hover:bg-zinc-800"
-                        : "text-app-muted hover:bg-zinc-800 hover:text-app-text",
+                        ? "bg-app-elevated text-app-text ring-1 ring-app-border hover:bg-app-inset"
+                        : "text-app-muted hover:bg-app-elevated hover:text-app-text",
                 ].join(" ")
               }
             >

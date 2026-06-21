@@ -5,13 +5,15 @@ export default {
     extend: {
       colors: {
         app: {
-          background: "#0f0f0f",
-          sidebar: "#161616",
-          panel: "#1c1c1c",
-          border: "#2a2a2a",
-          primary: "#7c3aed",
-          text: "#f0f0f0",
-          muted: "#a1a1aa",
+          background: "rgb(var(--app-background) / <alpha-value>)",
+          sidebar: "rgb(var(--app-sidebar) / <alpha-value>)",
+          panel: "rgb(var(--app-panel) / <alpha-value>)",
+          inset: "rgb(var(--app-inset) / <alpha-value>)",
+          elevated: "rgb(var(--app-elevated) / <alpha-value>)",
+          border: "rgb(var(--app-border) / <alpha-value>)",
+          primary: "rgb(var(--app-primary) / <alpha-value>)",
+          text: "rgb(var(--app-text) / <alpha-value>)",
+          muted: "rgb(var(--app-muted) / <alpha-value>)",
         },
       },
       fontFamily: {

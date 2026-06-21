@@ -1,3 +1,4 @@
+import { Moon, Sun } from "lucide-react";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -23,9 +24,11 @@ export function TopBar() {
     activePageTitle,
     backendOnline,
     storageMode,
+    theme,
     setActivePageTitle,
     setBackendOnline,
     setStorageMode,
+    toggleTheme,
   } = useAppStore();
   const { activeChatRunId, activeChatRunStatus, updateActiveChatRunStatus, clearActiveChatRun } = useRunStore();
   const chatRunning = Boolean(activeChatRunId && ["queued", "running"].includes(activeChatRunStatus ?? ""));
@@ -82,7 +85,12 @@ export function TopBar() {
           percent: run.progress_percent,
         });
         if (!["queued", "running"].includes(run.status)) {
-          clearActiveChatRun();
+          // On the chat page, let the ChatPage poller load the reply messages and
+          // then clear — clearing here first would tear down its poll and drop the
+          // reply. Off the chat page there's no message view to update, so clear.
+          if (window.location.pathname !== "/chat") {
+            clearActiveChatRun();
+          }
         }
       } catch {
         if (active) {
@@ -117,6 +125,15 @@ export function TopBar() {
           </button>
         ) : null}
         {storageMode ? <Badge variant="info">{storageMode}</Badge> : null}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="flex h-9 w-9 items-center justify-center rounded-md border border-app-border bg-app-panel text-app-muted transition hover:text-app-text"
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
         <div className="flex items-center gap-2 rounded-md border border-app-border bg-app-panel px-3 py-2 text-sm text-app-muted">
           <span
             className={`h-2.5 w-2.5 rounded-full ${backendOnline ? "bg-emerald-400" : "bg-red-400"}`}

@@ -368,7 +368,7 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
     <button
       type="button"
       onClick={onClick}
-      className="block w-full rounded-md border border-app-border bg-zinc-950 px-4 py-3 text-left transition hover:border-violet-500/50"
+      className="block w-full rounded-md border border-app-border bg-app-inset px-4 py-3 text-left transition hover:border-violet-500/50"
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={source === "mindos" ? "info" : "default"}>{formatSourceLabel(source)}</Badge>
@@ -467,7 +467,7 @@ function EventDetailPanel({
             <Badge>{event.embedding_status}</Badge>
           </div>
         </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-zinc-800 hover:text-app-text">
+        <button type="button" onClick={onClose} className="rounded-md p-1 text-app-muted hover:bg-app-elevated hover:text-app-text">
           <X size={18} />
         </button>
       </div>
@@ -507,13 +507,13 @@ function EventDetailPanel({
         ) : null}
         <div>
           <p className="text-xs uppercase text-app-muted">content</p>
-          <p className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-sm leading-6 text-app-text">
+          <p className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-app-inset p-3 text-sm leading-6 text-app-text">
             {event.content || "No content"}
           </p>
         </div>
         <div>
           <p className="text-xs uppercase text-app-muted">metadata</p>
-          <pre className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-zinc-950 p-3 text-xs leading-5 text-app-text">
+          <pre className="mt-2 overflow-x-hidden whitespace-pre-wrap break-words rounded-md border border-app-border bg-app-inset p-3 text-xs leading-5 text-app-text">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
         </div>
@@ -526,7 +526,7 @@ function EventDetailPanel({
               <p className="text-sm text-app-muted">No related memory found.</p>
             ) : (
               related.map((item) => (
-                <div key={item.relationship.id} className="rounded-md border border-app-border bg-zinc-950 p-3">
+                <div key={item.relationship.id} className="rounded-md border border-app-border bg-app-inset p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="info">{item.relationship.relationship_type}</Badge>
                     <Badge>{item.relationship.strength.toFixed(2)}</Badge>

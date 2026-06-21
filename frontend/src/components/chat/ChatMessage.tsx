@@ -1,23 +1,33 @@
+import { Bot } from "lucide-react";
 import { useState } from "react";
 
 import type { ChatMessage as ChatMessageRecord, ChatSource } from "../../types";
 import { Badge } from "../shared/Badge";
 import { Button } from "../shared/Button";
+import { useTypingReveal } from "./useTypingReveal";
 
 type ChatMessageProps = {
   message: ChatMessageRecord;
+  animate?: boolean;
+  onContentGrow?: () => void;
   onOpenTask?: (instruction: string) => void;
 };
 
-export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
+export function ChatMessage({ message, animate = false, onContentGrow, onOpenTask }: ChatMessageProps) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const isUser = message.role === "user";
   const sources = message.sourcesUsed ?? [];
   const contextStats = message.contextStats;
+  const { displayText, done } = useTypingReveal(message.content, !isUser && animate, onContentGrow);
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`flex items-start gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+      {!isUser ? (
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-app-primary/15 text-app-primary">
+          <Bot size={16} />
+        </div>
+      ) : null}
       <article
         className={[
           "max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
@@ -26,11 +36,11 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
             : "rounded-bl-md border border-app-border bg-app-panel text-app-text",
         ].join(" ")}
       >
-        {!isUser && message.answerStyle ? <AnswerStyleBadge message={message} /> : null}
+        {!isUser && message.answerStyle && done ? <AnswerStyleBadge message={message} /> : null}
 
-        {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText text={message.content} />}
+        {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText text={displayText} />}
 
-        {!isUser && (message.model || message.searchMode) ? (
+        {done && !isUser && (message.model || message.searchMode) ? (
           <p className="mt-3 text-xs text-app-muted">
             {message.modelDisplayName ?? message.model}
             {message.model && message.searchMode ? " - " : null}
@@ -38,13 +48,13 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
           </p>
         ) : null}
 
-        {!isUser && message.warning ? (
+        {done && !isUser && message.warning ? (
           <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
             {message.warning}
           </div>
         ) : null}
 
-        {!isUser && message.taskHint ? (
+        {done && !isUser && message.taskHint ? (
           <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
             <p className="text-xs font-medium">This looks like a task: {message.taskHint}</p>
             <Button className="mt-3 h-8 px-3" variant="secondary" onClick={() => onOpenTask?.(message.taskInstruction ?? message.content)}>
@@ -53,7 +63,7 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
           </div>
         ) : null}
 
-        {!isUser && sources.length > 0 ? (
+        {done && !isUser && sources.length > 0 ? (
           <div className="mt-3">
             <button
               type="button"
@@ -72,7 +82,7 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
           </div>
         ) : null}
 
-        {!isUser && contextStats ? (
+        {done && !isUser && contextStats ? (
           <div className="mt-3 border-t border-app-border pt-3">
             <button
               type="button"
@@ -82,7 +92,7 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
               Context used
             </button>
             {contextOpen ? (
-              <div className="mt-3 space-y-2 rounded-md border border-app-border bg-zinc-950 p-3">
+              <div className="mt-3 space-y-2 rounded-md border border-app-border bg-app-inset p-3">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="info">direct {contextStats.direct_count}</Badge>
                   <Badge variant="info">related {contextStats.related_count}</Badge>
@@ -139,7 +149,7 @@ export function ChatMessage({ message, onOpenTask }: ChatMessageProps) {
 
 function SourceCard({ source }: { source: ChatSource }) {
   return (
-    <div className="rounded-md border border-app-border bg-zinc-950 p-3">
+    <div className="rounded-md border border-app-border bg-app-inset p-3">
       <div className="flex items-center gap-2">
         <Badge variant={source.source_kind === "related" ? "default" : "info"}>{source.source_kind ?? "direct"}</Badge>
         <Badge variant="info">{source.source}</Badge>
