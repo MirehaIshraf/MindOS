@@ -97,6 +97,11 @@ textarea {
   font: inherit;
 }
 
+.app-wordmark {
+  font-family: Georgia, "Times New Roman", ui-serif, serif;
+  letter-spacing: 0;
+}
+
 /* Typing "thinking" dots */
 @keyframes mindos-dot {
   0%,

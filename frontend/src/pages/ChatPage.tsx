@@ -440,7 +440,7 @@ export function ChatPage() {
             <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-lg bg-app-primary text-white shadow-sm shadow-violet-950/40">
               <MessageSquare size={28} />
             </div>
-            <h1 className="text-3xl font-semibold text-app-text">MindOS</h1>
+            <h1 className="app-wordmark text-3xl font-semibold text-app-text">Samsung MindOS</h1>
             <p className="mt-3 text-base text-app-text">Ask about your local work memory.</p>
             <div className="mt-8 flex max-w-3xl flex-wrap justify-center gap-3">
               {examplePrompts.map((prompt) => (

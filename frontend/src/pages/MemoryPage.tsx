@@ -7,6 +7,7 @@ import { Card } from "../components/shared/Card";
 import { EmptyState } from "../components/shared/EmptyState";
 import { Input } from "../components/shared/Input";
 import { getEventDetail, getRecentEvents, getRelatedEvents, getSearchStats, searchEvents, summarizeEvent } from "../services/api";
+import { useAppStore } from "../store/appStore";
 import type { MemoryEvent, RelatedEvent, SearchResult, SearchStatsResponse } from "../types";
 
 const categories = [
@@ -57,6 +58,7 @@ type DisplayItem =
     };
 
 export function MemoryPage() {
+  const devMode = useAppStore((state) => state.devMode);
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>(categories[0]);
   const [selectedSource, setSelectedSource] = useState<SourceFilter>(sources[0]);
@@ -225,20 +227,24 @@ export function MemoryPage() {
         </div>
 
         <FilterRow items={categories} selectedLabel={selectedCategory.label} onSelect={(item) => void handleCategoryClick(item)} />
-        <FilterRow items={sources} selectedLabel={selectedSource.label} onSelect={(item) => void handleSourceClick(item)} />
-        <FilterRow
-          items={searchModes}
-          selectedLabel={selectedSearchMode.label}
-          onSelect={(item) => {
-            setSelectedSearchMode(item);
-            if (query.trim()) {
-              void runSearch(selectedCategory, selectedSource, item);
-            }
-          }}
-        />
+        {devMode ? (
+          <>
+            <FilterRow items={sources} selectedLabel={selectedSource.label} onSelect={(item) => void handleSourceClick(item)} />
+            <FilterRow
+              items={searchModes}
+              selectedLabel={selectedSearchMode.label}
+              onSelect={(item) => {
+                setSelectedSearchMode(item);
+                if (query.trim()) {
+                  void runSearch(selectedCategory, selectedSource, item);
+                }
+              }}
+            />
+          </>
+        ) : null}
       </Card>
 
-      <StatsRow stats={stats} />
+      {devMode ? <StatsRow stats={stats} /> : null}
 
       {includesHiddenChat ? (
         <p className="rounded-md border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100">
@@ -262,7 +268,7 @@ export function MemoryPage() {
             </h2>
             <div className="flex items-center gap-2">
               {!isSearchMode ? <span className="text-xs text-app-muted">Showing {recentEvents.length} of {recentTotal}</span> : null}
-              <Badge variant="info">Search mode: {isSearchMode ? searchModeUsed : "timeline"}</Badge>
+              {devMode ? <Badge variant="info">Search mode: {isSearchMode ? searchModeUsed : "timeline"}</Badge> : null}
             </div>
           </div>
           <div className="mt-4 space-y-3">
@@ -275,6 +281,7 @@ export function MemoryPage() {
                 <MemoryResultCard
                   key={item.mode === "search" ? item.result.event_id : item.event.id}
                   item={item}
+                  devMode={devMode}
                   onClick={() => void handleOpenDetail(item)}
                 />
               ))
@@ -340,7 +347,7 @@ function StatsRow({ stats }: { stats: SearchStatsResponse | null }) {
   );
 }
 
-function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () => void }) {
+function MemoryResultCard({ item, devMode, onClick }: { item: DisplayItem; devMode: boolean; onClick: () => void }) {
   const isSearch = item.mode === "search";
   const source = isSearch ? item.result.source : item.event.source;
   const type = isSearch ? item.result.type : item.event.type;
@@ -375,16 +382,16 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
         <Badge variant={category === "chat" || category === "task" || category === "report" ? "info" : "default"}>
           {formatCategoryLabel(category)}
         </Badge>
-        <Badge>{formatTypeLabel(type)}</Badge>
-        {taskType ? <Badge variant="info">{taskType}</Badge> : null}
-        {hiddenFromDefault ? <Badge variant="default">hidden by default</Badge> : null}
-        {relatedCount ? <Badge variant="info">{relatedCount} related</Badge> : null}
+        {devMode ? <Badge>{formatTypeLabel(type)}</Badge> : null}
+        {devMode && taskType ? <Badge variant="info">{taskType}</Badge> : null}
+        {devMode && hiddenFromDefault ? <Badge variant="default">hidden by default</Badge> : null}
+        {devMode && relatedCount ? <Badge variant="info">{relatedCount} related</Badge> : null}
         {summaryStatus === "pending" ? <Badge variant="warning">summary pending</Badge> : null}
-        {pageContextMissing ? <Badge variant="warning">context missing</Badge> : null}
-        {metadata.text_excerpt_included === true ? <Badge variant="success">context captured</Badge> : null}
-        {visitCount && visitCount > 1 ? <Badge variant="info">visited {visitCount} times</Badge> : null}
-        {githubState ? <Badge variant="info">{githubState}</Badge> : null}
-        <Badge>{embeddingStatus}</Badge>
+        {devMode && pageContextMissing ? <Badge variant="warning">context missing</Badge> : null}
+        {devMode && metadata.text_excerpt_included === true ? <Badge variant="success">context captured</Badge> : null}
+        {devMode && visitCount && visitCount > 1 ? <Badge variant="info">visited {visitCount} times</Badge> : null}
+        {devMode && githubState ? <Badge variant="info">{githubState}</Badge> : null}
+        {devMode ? <Badge>{embeddingStatus}</Badge> : null}
         <span className="ml-auto text-xs text-app-muted">{formatTimestamp(timestamp)}</span>
       </div>
       <h3 className="mt-3 text-sm font-semibold text-app-text">{title}</h3>
@@ -401,7 +408,7 @@ function MemoryResultCard({ item, onClick }: { item: DisplayItem; onClick: () =>
       {preview ? <p className="mt-2 text-sm leading-6 text-app-muted">{truncate(preview, 180)}</p> : null}
       {isSearch ? (
         <div className="mt-3 flex items-center gap-2 text-xs text-app-muted">
-          <Badge variant="success">score {item.result.score.toFixed(2)}</Badge>
+          {devMode ? <Badge variant="success">score {item.result.score.toFixed(2)}</Badge> : null}
           <span>{item.result.match_reason}</span>
         </div>
       ) : null}

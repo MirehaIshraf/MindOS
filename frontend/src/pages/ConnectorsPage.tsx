@@ -18,6 +18,7 @@ import { Button } from "../components/shared/Button";
 import { Card } from "../components/shared/Card";
 import { Input } from "../components/shared/Input";
 import { McpServerSection } from "../components/McpServerSection";
+import { useAppStore } from "../store/appStore";
 import {
   addTrackedFolder,
   clearConnectorSourceEvents,
@@ -90,6 +91,8 @@ import type {
 } from "../types";
 
 const connectorOrder = ["vscode", "browser", "github", "gmail", "jira", "email", "file_system", "logs", "git"];
+// Connectors shown in the clean "user mode". Developer mode reveals all of them.
+const USER_MODE_CONNECTORS = ["vscode", "browser", "github", "gmail", "jira"];
 
 const defaultIndexedExtensions = ".txt,.md,.log,.json,.csv,.xml,.yaml,.yml,.pdf,.docx,.py,.java,.js,.ts,.tsx,.jsx,.html,.css,.sql";
 const emptyFileForm = { folderPath: "", recursive: true, maxFiles: 2000, maxDepth: 5, maxFileSizeMb: 5, maxFileSizeKb: 2048, allowedExtensions: defaultIndexedExtensions, indexingEnabled: true };
@@ -147,6 +150,7 @@ const defaultBrowserConfigForm: BrowserConfigForm = {
 };
 
 export function ConnectorsPage() {
+  const devMode = useAppStore((state) => state.devMode);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [selectedPanel, setSelectedPanel] = useState<PanelId>(null);
   const [savedSources, setSavedSources] = useState<ConnectorSource[]>([]);
@@ -177,8 +181,11 @@ export function ConnectorsPage() {
   }, []);
 
   const orderedConnectors = useMemo(
-    () => [...connectors].sort((a, b) => connectorOrder.indexOf(a.id) - connectorOrder.indexOf(b.id)),
-    [connectors],
+    () =>
+      [...connectors]
+        .filter((connector) => devMode || USER_MODE_CONNECTORS.includes(connector.id))
+        .sort((a, b) => connectorOrder.indexOf(a.id) - connectorOrder.indexOf(b.id)),
+    [connectors, devMode],
   );
   const selectedConnector = selectedPanel && selectedPanel !== "save" ? connectors.find((connector) => connector.id === selectedPanel) : null;
 
@@ -436,7 +443,11 @@ export function ConnectorsPage() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-app-text">Connectors</h1>
-          <p className="mt-1 text-sm text-app-muted">Choose what MindOS can learn from.</p>
+          <p className="mt-1 text-sm text-app-muted">
+            {devMode
+              ? "All connectors and import sources."
+              : "Your connected tools — turn on Developer mode for advanced connectors."}
+          </p>
         </div>
         <Button variant="ghost" onClick={() => void refresh()} loading={loading === "connectors"}>
           <RefreshCw size={16} />
@@ -448,7 +459,7 @@ export function ConnectorsPage() {
       {notice ? <StatusMessage message={notice} variant="success" /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
           {orderedConnectors.map((connector) => (
             <ConnectorCard
               key={connector.id}
@@ -549,15 +560,15 @@ function ConnectorCard({
   const emailAccount = typeof connector.config_summary?.account_label === "string" ? connector.config_summary.account_label : null;
   const emailLastSync = typeof connector.config_summary?.last_sync_at === "string" ? connector.config_summary.last_sync_at : connector.last_event_at;
   return (
-    <Card className={`min-h-56 ${selected ? "border-violet-500/60" : ""}`}>
+    <Card className={`flex min-h-56 flex-col transition hover:border-app-primary/40 ${selected ? "border-violet-500/60" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app-border bg-app-inset text-app-text">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-app-primary/20 bg-app-primary/10 text-app-primary">
             <Icon size={20} />
           </div>
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-app-text">{connector.name}</h2>
-            <p className="mt-1 truncate text-sm text-app-muted">{connector.description}</p>
+            <p className="mt-1 line-clamp-2 text-sm text-app-muted">{connector.description}</p>
           </div>
         </div>
         <Toggle checked={connector.enabled} disabled={toggleDisabled || loading === `toggle:${connector.id}`} onChange={onToggle} />
@@ -615,7 +626,7 @@ function ConnectorCard({
         </div>
       )}
 
-      <Button className="mt-5 w-full" variant="secondary" onClick={onConfigure}>
+      <Button className="mt-auto w-full" variant="secondary" onClick={onConfigure}>
         Configure
       </Button>
     </Card>

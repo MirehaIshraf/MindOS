@@ -15,11 +15,14 @@ const navItems = [
   { label: "Memory", path: "/memory", icon: Database },
   { label: "Connectors", path: "/connectors", icon: Cable },
   { label: "Settings", path: "/settings", icon: Settings },
-  { label: "Dev", path: "/dev", icon: Code2 },
+  { label: "Dev", path: "/dev", icon: Code2, devOnly: true },
 ];
 
 export function Sidebar() {
   const storageMode = useAppStore((state) => state.storageMode);
+  const devMode = useAppStore((state) => state.devMode);
+  const toggleDevMode = useAppStore((state) => state.toggleDevMode);
+  const visibleNavItems = navItems.filter((item) => !item.devOnly || devMode);
 
   return (
     <aside className="fixed left-0 top-0 flex h-screen w-[260px] flex-col border-r border-app-border bg-app-sidebar">
@@ -29,14 +32,14 @@ export function Sidebar() {
             <Bot size={20} />
           </div>
           <div>
-            <h1 className="text-lg font-semibold leading-6 text-app-text">MindOS</h1>
+            <h1 className="app-wordmark text-lg font-semibold leading-6 text-app-text">MindOS</h1>
             <p className="text-xs text-app-muted">Local AI Workspace</p>
           </div>
         </div>
       </div>
 
       <nav className="flex-1 space-y-1 px-3 py-4">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
@@ -71,10 +74,25 @@ export function Sidebar() {
           <span>storage</span>
           <span className="text-app-text">{storageMode ?? "sqlite"}</span>
         </div>
-        <div className="mt-2 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={toggleDevMode}
+          className="mt-3 flex w-full items-center justify-between rounded-md border border-app-border bg-app-panel px-3 py-2 text-xs transition hover:border-app-primary/60"
+          title="Toggle Developer mode"
+        >
           <span>mode</span>
-          <span className="text-app-text">development</span>
-        </div>
+          <span className="flex items-center gap-2 font-medium text-app-text">
+            {devMode ? "Developer" : "User"}
+            <span
+              className={`relative h-4 w-7 rounded-full transition ${devMode ? "bg-app-primary" : "bg-app-border"}`}
+              aria-hidden="true"
+            >
+              <span
+                className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${devMode ? "left-3.5" : "left-0.5"}`}
+              />
+            </span>
+          </span>
+        </button>
       </div>
     </aside>
   );

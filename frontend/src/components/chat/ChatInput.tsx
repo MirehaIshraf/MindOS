@@ -57,7 +57,7 @@ export function ChatInput({ value, onChange, onSend, disabled = false, useContex
           />
           Use local memory
         </label>
-        <span>Keyword retrieval is connected. Semantic memory coming soon.</span>
+        <span>Semantic memory is connected.</span>
       </div>
     </div>
   );
