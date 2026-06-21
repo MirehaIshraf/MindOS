@@ -40,6 +40,8 @@ When the user asks you to organize, manage, scan, or query files and folders, yo
 3. For generating an organize plan: call `fs.organize_plan` with the root_path and instruction.
 4. For checking if a file exists: call `fs.file_exists`.
 5. For getting a folder summary: call `fs.folder_summary`.
+6. For document questions/summaries: call `fs.search_files` first, then `fs.read_file` or `fs.summarize_file`.
+7. If there is no indexed document match yet, call `fs.index_folder` for the configured root, then search again.
 
 Rules:
 - Always scan or summarize first before proposing any file operations.
@@ -48,6 +50,7 @@ Rules:
 - If a tool returns an error, explain the error to the user clearly.
 - If an MCP server is disabled, tell the user to enable it in Connectors.
 - Do not invent file paths or folder contents. Only report what the tools return.
+- When answering from a document, mention which file you selected if the user did not name an exact file.
 
 For email tasks, you also have Gmail tools:
 1. To list/summarize recent emails: call `gmail.recent_emails`.
@@ -294,6 +297,18 @@ class McpToolRouterService:
     @staticmethod
     def _extract_attachment_query(message: str) -> str:
         lower = message.lower()
+        # "resume of <name>" / "<name>'s resume" → include the name so the right
+        # person's resume is chosen instead of matching every resume file.
+        named = re.search(r"resume of ([a-z'\-]+(?:\s+[a-z'\-]+){0,2})", lower) or re.search(
+            r"([a-z'\-]+(?:\s+[a-z'\-]+){0,2})'s resume", lower
+        )
+        if named:
+            stop = {
+                "and", "to", "for", "the", "a", "an", "my", "please", "send", "sent",
+                "mail", "email", "create", "draft", "compose", "with", "attach", "attaching",
+            }
+            name = " ".join(w for w in named.group(1).split() if w not in stop)[:60].strip()
+            return f"{name} resume".strip() if name else "resume"
         if "resume" in lower or "cv" in lower or "curriculum vitae" in lower:
             return "resume"
         match = re.search(r"attach(?:ing|ment|ed)?\s+(?:the\s+|my\s+|a\s+)?([\w.\- ]{3,40})", lower)
@@ -365,8 +380,12 @@ class McpToolRouterService:
             emails = (result.data or {}).get("emails", [])
             return {"response": self._summarize_recent_emails(emails, model_id), **display, "tool_calls_made": 1, "pending_confirmations": none, "requires_confirmation": False}
 
-        # Draft / send: compose, resolve attachments, present preview + pending confirmation
-        intent_send = bool(re.search(r"\bsen[dt]\b", lower)) or bool(re.search(r"\b(mail|email)\s+it\b", lower))
+        # Draft / send: compose, resolve attachments, present preview + pending confirmation.
+        # A "draft"/"compose" request is never a send, even if the text says "to sent to X".
+        wants_draft = "draft" in lower or "compose" in lower
+        intent_send = (not wants_draft) and (
+            bool(re.search(r"\bsen[dt]\b", lower)) or bool(re.search(r"\b(mail|email)\s+it\b", lower))
+        )
         planned = gmail_draft_planner.prepare(
             GmailDraftPrepareRequest(instruction=user_message, connected_email=status.email_address, model_id=model_id)
         )
@@ -394,7 +413,7 @@ class McpToolRouterService:
                 body = f"Hi,\n\n{summary_body}\n\nBest regards,"
 
         tool_name = "gmail.send_email" if intent_send else "gmail.create_draft"
-        args = {"to": recipient, "subject": subject, "body": body, "indexed_attachments": resolved["indexed_attachments"]}
+        args = {"to": recipient, "subject": subject, "body": body, "attachment_paths": resolved["attachment_paths"]}
         preview_result = mcp_client.call_tool(tool_name, args, confirmed=False)
         kind = "gmail_send" if intent_send else "gmail_draft"
         pending = [{"tool_name": tool_name, "arguments": args, "preview": preview_result.preview, "requires_confirmation": True, "kind": kind}]
@@ -406,6 +425,194 @@ class McpToolRouterService:
             lines.append(f"({resolved['note']})")
         lines += ["", body]
         return {"response": "\n".join(lines), **display, "tool_calls_made": 0, "pending_confirmations": pending, "requires_confirmation": True, "confirmation_kind": kind}
+
+    # ------------------------------------------------------------------
+    # File System MCP document Q&A safety-net
+    # ------------------------------------------------------------------
+
+    def _is_filesystem_document_intent(self, message: str) -> bool:
+        lower = message.lower()
+        if self._is_gmail_intent(message):
+            return False
+        action_hit = any(
+            word in lower
+            for word in [
+                "summarize",
+                "summary",
+                "overview",
+                "read",
+                "explain",
+                "what does",
+                "what is in",
+                "answer from",
+                "question about",
+                "tell me about",
+            ]
+        )
+        doc_hit = any(
+            word in lower
+            for word in [
+                "resume",
+                "cv",
+                "document",
+                "docx",
+                "pdf",
+                "ppt",
+                "pptx",
+                "presentation",
+                ".txt",
+                ".md",
+                ".json",
+                ".csv",
+                ".py",
+                ".js",
+                ".ts",
+                ".html",
+                ".css",
+            ]
+        )
+        named_file_hit = bool(re.search(r"[\w .\-]+\.(pdf|docx|pptx|txt|md|log|json|csv|xml|ya?ml|py|js|ts|tsx|jsx|html|css|java|sql)\b", lower))
+        return action_hit and (doc_hit or named_file_hit)
+
+    def _extract_document_query(self, message: str) -> str:
+        lower = message.lower()
+        file_match = re.search(r"([\w .\-]+\.(?:pdf|docx|pptx|txt|md|log|json|csv|xml|ya?ml|py|js|ts|tsx|jsx|html|css|java|sql))\b", message, re.IGNORECASE)
+        if file_match:
+            return file_match.group(1).strip()
+        if "resume" in lower or "cv" in lower:
+            return "resume cv"
+        if "pptx" in lower or "ppt" in lower or "presentation" in lower:
+            return "pptx presentation slides"
+        quoted = re.search(r"['\"]([^'\"]{2,80})['\"]", message)
+        if quoted:
+            return quoted.group(1).strip()
+        cleaned = re.sub(
+            r"\b(summarize|summary|overview|read|explain|what|does|this|my|the|file|document|answer|from|about|give|me|an|a|of|please)\b",
+            " ",
+            lower,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or message
+
+    def _handle_filesystem_document_intent(self, user_message: str, model_id: str | None) -> dict[str, Any]:
+        none: list[dict[str, Any]] = []
+        root_path = self._get_configured_root_path()
+        display = {"model_used": "filesystem", "provider": "mcp", "model_display_name": "File System MCP"}
+        if not root_path:
+            return {
+                "response": "File System MCP does not have a root folder configured yet. Set the MCP root folder first, then I can read and answer from your documents.",
+                **display,
+                "tool_calls_made": 0,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
+
+        query = self._extract_document_query(user_message)
+        tool_calls_made = 0
+        search_result = mcp_client.call_tool("fs.search_files", {"query": query, "limit": 5}, confirmed=False)
+        tool_calls_made += 1
+        matches = ((search_result.data or {}).get("matches", []) if search_result.success and isinstance(search_result.data, dict) else [])
+
+        if not matches:
+            index_result = mcp_client.call_tool("fs.index_folder", {"root_path": root_path}, confirmed=False)
+            tool_calls_made += 1
+            if not index_result.success:
+                return {
+                    "response": index_result.error or "I could not index the configured File System MCP folder.",
+                    **display,
+                    "tool_calls_made": tool_calls_made,
+                    "pending_confirmations": none,
+                    "requires_confirmation": False,
+                }
+            search_result = mcp_client.call_tool("fs.search_files", {"query": query, "limit": 5}, confirmed=False)
+            tool_calls_made += 1
+            matches = ((search_result.data or {}).get("matches", []) if search_result.success and isinstance(search_result.data, dict) else [])
+
+        if not matches:
+            return {
+                "response": f"I indexed the configured folder, but I could not find a readable document matching '{query}'.",
+                **display,
+                "tool_calls_made": tool_calls_made,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
+
+        selected = matches[0]
+        read_result = mcp_client.call_tool("fs.read_file", {"event_id": selected.get("event_id")}, confirmed=False)
+        tool_calls_made += 1
+        if not read_result.success or not isinstance(read_result.data, dict):
+            return {
+                "response": read_result.error or "I found a matching file, but could not read its extracted text.",
+                **display,
+                "tool_calls_made": tool_calls_made,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
+
+        data = read_result.data
+        file_name = str(data.get("file_name") or selected.get("file_name") or "selected file")
+        relative_path = str(data.get("relative_path") or selected.get("relative_path") or file_name)
+        content = str(data.get("content") or "")[:14000]
+        visual_status = str(data.get("visual_extraction_status") or "not_required")
+        close_matches = [m for m in matches[1:3] if float(m.get("score") or 0) >= max(0.35, float(selected.get("score") or 0) - 0.2)]
+        selection_note = f"I selected `{relative_path}`"
+        if close_matches:
+            alternatives = ", ".join(str(match.get("relative_path") or match.get("file_name")) for match in close_matches)
+            selection_note += f" as the strongest match. Other close matches: {alternatives}."
+        else:
+            selection_note += "."
+
+        if not content.strip():
+            limitation = " It looks image-heavy, so visual extraction is needed but not available for this text-only read." if visual_status == "needed" else ""
+            return {
+                "response": f"{selection_note}\n\nI found the file, but no readable text was extracted.{limitation}",
+                **display,
+                "tool_calls_made": tool_calls_made,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
+
+        try:
+            answer = model_router_service.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Answer the user's question using only the extracted local file text. Be concise and mention uncertainty or visual extraction limits when relevant.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"User request: {user_message}\n\n"
+                            f"Selected file: {relative_path}\n"
+                            f"Visual extraction status: {visual_status}\n\n"
+                            f"Extracted text:\n{content}"
+                        ),
+                    },
+                ],
+                requested_model_id=model_id,
+                options={"temperature": 0.2},
+            )
+            response = f"{selection_note}\n\n{answer.reply.strip()}"
+            if visual_status == "needed":
+                response += "\n\nNote: this file may contain visual content that was not read by text extraction."
+            return {
+                "response": response,
+                "model_used": answer.model_used,
+                "provider": answer.provider,
+                "model_display_name": answer.model_display_name,
+                "tool_calls_made": tool_calls_made,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
+        except Exception:
+            excerpt = content[:1600].rsplit(" ", 1)[0]
+            return {
+                "response": f"{selection_note}\n\nHere is the readable text I found in `{file_name}`:\n\n{excerpt}",
+                **display,
+                "tool_calls_made": tool_calls_made,
+                "pending_confirmations": none,
+                "requires_confirmation": False,
+            }
 
     def _deterministic_tool_fallback(self, user_message: str) -> list[McpChatToolCall]:
         """When the LLM fails to generate tool calls, deterministically decide
@@ -568,6 +775,12 @@ class McpToolRouterService:
         pending_confirmations: list[dict[str, Any]] = []
         tool_results_log: list[dict[str, Any]] = []
 
+        # Gmail intents always use the reliable deterministic handler (compose →
+        # preview → confirm), BEFORE asking the model. Local models otherwise emit
+        # unreliable/garbled tool calls for email and the draft/send never runs.
+        if self._is_gmail_intent(user_message):
+            return self._handle_gmail_intent(user_message, model_id)
+
         for round_num in range(max_rounds):
             result = model_router_service.generate(
                 messages=messages,
@@ -583,10 +796,9 @@ class McpToolRouterService:
             if not tool_calls:
                 # LLM didn't generate tool calls — try deterministic fallback on first round
                 if round_num == 0 and not tool_results_log:
-                    # Gmail intents get a dedicated handler (compose + preview + pending confirm),
-                    # since weak/local models often won't emit the tool call themselves.
-                    if self._is_gmail_intent(user_message):
-                        return self._handle_gmail_intent(user_message, model_id)
+                    # (Gmail intents are already short-circuited before the loop.)
+                    if self._is_filesystem_document_intent(user_message):
+                        return self._handle_filesystem_document_intent(user_message, model_id)
                     fallback_calls = self._deterministic_tool_fallback(user_message)
                     if fallback_calls:
                         # Execute the fallback tool call directly

@@ -28,6 +28,9 @@ from app.integrations.mcp.protocol import (
 from app.schemas.file_tasks import FileOperation
 from app.services.file_snapshot_service import file_snapshot_service
 from app.services.file_task_safety_service import file_task_safety_service
+from app.services.mcp_file_index_service import mcp_file_index_service
+from app.services.mcp_file_reader_service import mcp_file_reader_service
+from app.services.model_router_service import model_router_service
 
 # ---------------------------------------------------------------------------
 # TYPE_FOLDERS — same as FileTaskPlannerService
@@ -119,6 +122,47 @@ FILE_SYSTEM_TOOLS: list[McpToolDefinition] = [
         parameters=[
             McpToolParameter(name="root_path", type="string", description="Absolute path to the folder."),
             McpToolParameter(name="max_depth", type="integer", description="Maximum folder depth.", required=False, default=2),
+        ],
+        side_effect=False,
+        category="filesystem",
+    ),
+    McpToolDefinition(
+        name="fs.index_folder",
+        description="Read and index safe readable files under the configured root. Creates/updates MCP file memory events. Read-only.",
+        parameters=[
+            McpToolParameter(name="root_path", type="string", description="Optional absolute folder path inside the configured root.", required=False),
+            McpToolParameter(name="max_depth", type="integer", description="Maximum folder depth.", required=False, default=5),
+            McpToolParameter(name="max_files", type="integer", description="Maximum number of files to inspect.", required=False, default=2000),
+        ],
+        side_effect=False,
+        category="filesystem",
+    ),
+    McpToolDefinition(
+        name="fs.search_files",
+        description="Search files indexed by File System MCP by filename and extracted content. Read-only.",
+        parameters=[
+            McpToolParameter(name="query", type="string", description="Search query."),
+            McpToolParameter(name="limit", type="integer", description="Maximum matches to return.", required=False, default=10),
+        ],
+        side_effect=False,
+        category="filesystem",
+    ),
+    McpToolDefinition(
+        name="fs.read_file",
+        description="Read extracted text for one safe file inside the configured root, using the MCP index when possible. Read-only.",
+        parameters=[
+            McpToolParameter(name="relative_path", type="string", description="Relative path or filename inside the configured root.", required=False),
+            McpToolParameter(name="event_id", type="string", description="Indexed file event id.", required=False),
+        ],
+        side_effect=False,
+        category="filesystem",
+    ),
+    McpToolDefinition(
+        name="fs.summarize_file",
+        description="Summarize one indexed/readable file inside the configured root. Read-only.",
+        parameters=[
+            McpToolParameter(name="relative_path", type="string", description="Relative path or filename inside the configured root.", required=False),
+            McpToolParameter(name="event_id", type="string", description="Indexed file event id.", required=False),
         ],
         side_effect=False,
         category="filesystem",
@@ -228,6 +272,10 @@ class FileSystemMcpServer:
             "fs.move_file": self._move_file,
             "fs.file_exists": self._file_exists,
             "fs.folder_summary": self._folder_summary,
+            "fs.index_folder": self._index_folder,
+            "fs.search_files": self._search_files,
+            "fs.read_file": self._read_file,
+            "fs.summarize_file": self._summarize_file,
         }.get(tool_name)
         if handler is None:
             return McpToolCallResult(success=False, error=f"Unknown tool: {tool_name}")
@@ -503,6 +551,73 @@ class FileSystemMcpServer:
             },
         )
 
+    def _index_folder(self, args: dict[str, Any]) -> McpToolCallResult:
+        root_path, err = self._resolve_root(args)
+        if err:
+            return err
+        root, blocked = file_task_safety_service.validate_root(root_path)
+        if blocked:
+            return McpToolCallResult(success=False, error="; ".join(blocked))
+        result = mcp_file_index_service.index_folder(
+            root_path=str(root),
+            max_depth=int(args.get("max_depth", 5) or 5),
+            max_files=int(args.get("max_files", 2000) or 2000),
+            recursive=True,
+            reason="mcp_tool",
+        )
+        return McpToolCallResult(success=True, data=result)
+
+    def _search_files(self, args: dict[str, Any]) -> McpToolCallResult:
+        guard = self._ensure_configured()
+        if guard:
+            return guard
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return McpToolCallResult(success=False, error="Search query is required.")
+        matches = mcp_file_index_service.search_files(query, limit=int(args.get("limit", 10) or 10))
+        return McpToolCallResult(success=True, data={"query": query, "matches": matches, "total": len(matches)})
+
+    def _read_file(self, args: dict[str, Any]) -> McpToolCallResult:
+        guard = self._ensure_configured()
+        if guard:
+            return guard
+        relative_path = str(args.get("relative_path") or "").strip()
+        event_id = str(args.get("event_id") or "").strip()
+        try:
+            data = mcp_file_index_service.read_indexed_file(relative_path=relative_path or None, event_id=event_id or None)
+            return McpToolCallResult(success=True, data=data)
+        except ValueError:
+            if not relative_path:
+                return McpToolCallResult(success=False, error="Provide a relative_path or event_id.")
+            live = self._read_live_file(relative_path)
+            return McpToolCallResult(success=True, data=live)
+
+    def _summarize_file(self, args: dict[str, Any]) -> McpToolCallResult:
+        read_result = self._read_file(args)
+        if not read_result.success:
+            return read_result
+        data = read_result.data if isinstance(read_result.data, dict) else {}
+        content = str(data.get("content") or "")[:12000]
+        if not content.strip():
+            return McpToolCallResult(success=False, error="No readable text was found for that file.")
+        file_name = str(data.get("file_name") or data.get("relative_path") or "file")
+        try:
+            summary = model_router_service.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Summarize the local file accurately. Use only the provided extracted text. If visual content was not extracted, mention that limitation briefly.",
+                    },
+                    {"role": "user", "content": f"File: {file_name}\n\nExtracted text:\n{content}"},
+                ],
+                requested_model_id=str(args.get("model_id") or "") or None,
+                options={"temperature": 0.2},
+            )
+            summary_text = summary.reply.strip()
+        except Exception:
+            summary_text = self._fallback_summary(content)
+        return McpToolCallResult(success=True, data={**data, "summary": summary_text})
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -522,6 +637,44 @@ class FileSystemMcpServer:
         if category.endswith("s"):
             return category[:-1]
         return category
+
+    def _read_live_file(self, relative_path: str) -> dict[str, Any]:
+        if not self._root_path:
+            raise ValueError("File System MCP root path is not configured.")
+        normalized = relative_path.replace("\\", "/").strip()
+        if not normalized or normalized.startswith("/") or ":" in normalized:
+            raise ValueError("File path must be relative to the configured root.")
+        parts = [part for part in normalized.split("/") if part]
+        if any(part in {".", ".."} for part in parts):
+            raise ValueError("File path is invalid.")
+        root = Path(self._root_path).resolve()
+        target = root.joinpath(*parts).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as error:
+            raise ValueError("File path is outside the configured root.") from error
+        if not target.exists() or not target.is_file():
+            raise ValueError("File was not found.")
+        read = mcp_file_reader_service.read_text(target)
+        return {
+            "file_name": target.name,
+            "relative_path": str(target.relative_to(root)),
+            "extension": target.suffix.lower(),
+            "content": read.text,
+            "indexed_text_chars": len(read.text),
+            "visual_extraction_status": read.visual_extraction_status,
+            "warnings": list(read.warnings),
+            "missing": False,
+            "source": "live_read",
+        }
+
+    @staticmethod
+    def _fallback_summary(content: str) -> str:
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        excerpt = " ".join(lines[:12])
+        if len(excerpt) > 1200:
+            excerpt = excerpt[:1200].rsplit(" ", 1)[0] + "..."
+        return excerpt or "No readable text was found."
 
 
 file_system_mcp_server = FileSystemMcpServer()

@@ -715,14 +715,18 @@ class ChatService:
             "email to", "mail to", "create a draft", "create draft",
             "recent emails", "recent mail", "check my email", "check my inbox",
             "my inbox", "latest emails", "my emails", "my gmail",
+            "latest mails", "recent mails", "my mails", "check my mail",
         ]
         if any(kw in lower for kw in email_phrases):
             return True
-        email_words = ["email", "emails", "mail", "inbox", "gmail"]
-        email_actions = ["draft", "send", "sent", "compose", "write", "create", "check", "show", "list", "read", "recent"]
+        # Substring match for words so inflections like "mails" are caught
+        # ("mail" covers email / emails / mail / mails).
+        email_words = ["mail", "inbox", "gmail"]
+        email_actions = ["draft", "send", "sent", "compose", "write", "create", "check", "show",
+                         "list", "read", "recent", "latest", "summarize", "summary", "overview"]
         has_email_address = bool(_re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", message))
-        has_email_word = has_email_address or any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in email_words)
-        has_email_action = any(f" {w} " in f" {lower} " or lower.startswith(w) for w in email_actions)
+        has_email_word = has_email_address or any(w in lower for w in email_words)
+        has_email_action = any(f" {w} " in f" {lower} " or lower.startswith(w) or lower.endswith(w) for w in email_actions)
         if has_email_word and has_email_action:
             return True
 

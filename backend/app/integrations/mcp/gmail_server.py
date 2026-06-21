@@ -12,6 +12,7 @@ LLM caller is never trusted, and nothing is sent without a confirmed call.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.integrations.mcp.protocol import (
@@ -19,10 +20,13 @@ from app.integrations.mcp.protocol import (
     McpToolDefinition,
     McpToolParameter,
 )
-from app.schemas.file_index import IndexedFileAttachmentReference, IndexedFileSearchRequest
+from app.schemas.file_index import IndexedFileAttachmentReference
 from app.schemas.gmail import GmailDraftRequest, GmailSendRequest
-from app.services.file_index_service import file_index_service
-from app.services.gmail_service import GmailConnectorError, gmail_service
+from app.services.gmail_service import GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS, GmailConnectorError, gmail_service
+from app.services.mcp_config_service import mcp_config_service
+from app.services.mcp_file_index_service import mcp_file_index_service
+
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -159,44 +163,53 @@ class GmailMcpServer:
                 refs.append(IndexedFileAttachmentReference(source_id=str(item["source_id"]), relative_path=str(item["relative_path"])))
         return refs
 
+    @staticmethod
+    def _mcp_root() -> Path | None:
+        root = str((mcp_config_service.get_filesystem_config() or {}).get("root_path") or "").strip()
+        if not root:
+            return None
+        try:
+            resolved = Path(root).resolve()
+            return resolved if resolved.is_dir() else None
+        except Exception:
+            return None
+
     def search_attachments(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Search connected, indexed, attachable files. Returns plain dicts."""
+        """Search the File System MCP index for attachable, non-missing files."""
         if not query or not query.strip():
             return []
         try:
-            response = file_index_service.search(
-                IndexedFileSearchRequest(
-                    query=query.strip(),
-                    attachable_only=True,
-                    connected_sources_only=True,
-                    limit=limit,
-                )
-            )
+            matches = mcp_file_index_service.search_files(query.strip(), limit=limit * 3)
         except Exception:
             return []
-        return [
-            {
-                "source_id": match.source_id,
-                "relative_path": match.relative_path,
-                "file_name": match.file_name,
-                "extension": match.extension,
-                "size_bytes": match.size_bytes,
-                "score": match.score,
-            }
-            for match in response.matches
-        ]
+        results: list[dict[str, Any]] = []
+        for match in matches:
+            extension = str(match.get("extension") or "").lower()
+            if extension in GMAIL_BLOCKED_ATTACHMENT_EXTENSIONS:
+                continue
+            results.append(
+                {
+                    "relative_path": match.get("relative_path"),
+                    "file_name": match.get("file_name"),
+                    "extension": extension,
+                    "score": float(match.get("score") or 0),
+                }
+            )
+            if len(results) >= limit:
+                break
+        return results
 
-    def resolve_attachment_candidates(self, attachment_query: str, provided_refs: Any) -> dict[str, Any]:
-        """Decide attachment outcome: chosen ref(s), multiple candidates, or none.
+    def resolve_attachment_candidates(self, attachment_query: str, provided_paths: Any = None) -> dict[str, Any]:
+        """Decide attachment outcome from the MCP index: chosen path, candidates, or none.
 
-        Returns {indexed_attachments:[{source_id,relative_path}], attachments:[name], candidates:[...], note}.
+        Returns {attachment_paths:[rel], attachments:[name], candidates:[...], note}.
         """
-        result: dict[str, Any] = {"indexed_attachments": [], "attachments": [], "candidates": [], "note": None}
+        result: dict[str, Any] = {"attachment_paths": [], "attachments": [], "candidates": [], "note": None}
 
-        explicit = self._to_refs(provided_refs)
+        explicit = [str(p).strip() for p in (provided_paths or []) if str(p).strip()]
         if explicit:
-            result["indexed_attachments"] = [{"source_id": r.source_id, "relative_path": r.relative_path} for r in explicit]
-            result["attachments"] = [r.relative_path.replace("\\", "/").split("/")[-1] for r in explicit]
+            result["attachment_paths"] = explicit
+            result["attachments"] = [p.replace("\\", "/").split("/")[-1] for p in explicit]
             return result
 
         if not attachment_query or not attachment_query.strip():
@@ -204,18 +217,41 @@ class GmailMcpServer:
 
         matches = self.search_attachments(attachment_query)
         if not matches:
-            result["note"] = "No matching connected file was found."
+            result["note"] = "No matching file was found in the indexed folder."
             return result
 
         top = matches[0]
-        strong = len(matches) == 1 or top["score"] >= matches[1]["score"] * 1.5
+        strong = len(matches) == 1 or top["score"] >= matches[1]["score"] * 1.1
         if strong:
-            result["indexed_attachments"] = [{"source_id": top["source_id"], "relative_path": top["relative_path"]}]
+            result["attachment_paths"] = [top["relative_path"]]
             result["attachments"] = [top["file_name"]]
         else:
             result["candidates"] = matches[:5]
             result["note"] = "Multiple matching files were found. Ask the user which one to attach."
         return result
+
+    def _read_attachment_payloads(self, attachment_paths: Any) -> list[dict[str, Any]]:
+        """Read files from inside the configured MCP root into Gmail attachment payloads."""
+        paths = [str(p).strip() for p in (attachment_paths or []) if str(p).strip()]
+        if not paths:
+            return []
+        root = self._mcp_root()
+        if root is None:
+            raise GmailConnectorError("File System MCP root is not configured, so I cannot read the attachment.")
+        payloads: list[dict[str, Any]] = []
+        for raw in paths:
+            candidate = Path(raw)
+            target = (candidate if candidate.is_absolute() else (root / raw)).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                raise GmailConnectorError(f"Attachment is outside the allowed folder: {raw}")
+            if not target.exists() or not target.is_file():
+                raise GmailConnectorError(f"Attachment file was not found: {target.name}")
+            if target.stat().st_size > MAX_ATTACHMENT_BYTES:
+                raise GmailConnectorError(f"Attachment exceeds the 20 MB limit: {target.name}")
+            payloads.append({"filename": target.name, "content": target.read_bytes(), "size": target.stat().st_size})
+        return payloads
 
     # ------------------------------------------------------------------
     # Tool implementations
@@ -233,7 +269,7 @@ class GmailMcpServer:
         guard = self._require_capability("create_draft")
         if guard:
             return guard
-        resolved = self.resolve_attachment_candidates(str(args.get("attachment_query", "")), args.get("indexed_attachments"))
+        resolved = self.resolve_attachment_candidates(str(args.get("attachment_query", "")), args.get("attachment_paths"))
         return McpToolCallResult(
             success=True,
             data={
@@ -243,7 +279,7 @@ class GmailMcpServer:
                 "cc": self._as_list(args.get("cc")),
                 "bcc": self._as_list(args.get("bcc")),
                 "attachments": resolved["attachments"],
-                "indexed_attachments": resolved["indexed_attachments"],
+                "attachment_paths": resolved["attachment_paths"],
                 "candidates": resolved["candidates"],
                 "note": resolved["note"],
                 "action": "create_draft",
@@ -254,31 +290,55 @@ class GmailMcpServer:
         guard = self._require_capability("create_draft")
         if guard:
             return guard
-        request = GmailDraftRequest(
-            to=str(args.get("to", "")),
-            subject=str(args.get("subject", "")),
-            body=str(args.get("body", "")),
-            cc=self._as_list(args.get("cc")),
-            bcc=self._as_list(args.get("bcc")),
-            indexed_attachments=self._to_refs(args.get("indexed_attachments")),
-        )
-        response = gmail_service.create_draft(request)
+        attachments = self._read_attachment_payloads(args.get("attachment_paths"))
+        if attachments:
+            response = gmail_service.create_draft_with_attachments(
+                to=self._as_list(args.get("to")),
+                subject=str(args.get("subject", "")),
+                body=str(args.get("body", "")),
+                cc=self._as_list(args.get("cc")),
+                bcc=self._as_list(args.get("bcc")),
+                attachments=attachments,
+            )
+        else:
+            request = GmailDraftRequest(
+                to=str(args.get("to", "")),
+                subject=str(args.get("subject", "")),
+                body=str(args.get("body", "")),
+                cc=self._as_list(args.get("cc")),
+                bcc=self._as_list(args.get("bcc")),
+                indexed_attachments=self._to_refs(args.get("indexed_attachments")),
+            )
+            response = gmail_service.create_draft(request)
         return McpToolCallResult(success=True, data=response.model_dump())
 
     def _send_email(self, args: dict[str, Any]) -> McpToolCallResult:
         guard = self._require_capability("send_email")
         if guard:
             return guard
-        request = GmailSendRequest(
-            to=self._as_list(args.get("to")),
-            subject=str(args.get("subject", "")),
-            body=str(args.get("body", "")),
-            cc=self._as_list(args.get("cc")),
-            bcc=self._as_list(args.get("bcc")),
-            indexed_attachments=self._to_refs(args.get("indexed_attachments")),
-            confirmation=True,  # Only reached after the user confirms (side-effect gate).
-        )
-        response = gmail_service.send_message(request)
+        attachments = self._read_attachment_payloads(args.get("attachment_paths"))
+        recipients = self._as_list(args.get("to"))
+        if attachments:
+            response = gmail_service.send_message_with_attachments(
+                to=recipients,
+                subject=str(args.get("subject", "")),
+                body=str(args.get("body", "")),
+                confirmation=True,  # Only reached after the user confirms (side-effect gate).
+                cc=self._as_list(args.get("cc")),
+                bcc=self._as_list(args.get("bcc")),
+                attachments=attachments,
+            )
+        else:
+            request = GmailSendRequest(
+                to=recipients,
+                subject=str(args.get("subject", "")),
+                body=str(args.get("body", "")),
+                cc=self._as_list(args.get("cc")),
+                bcc=self._as_list(args.get("bcc")),
+                indexed_attachments=self._to_refs(args.get("indexed_attachments")),
+                confirmation=True,
+            )
+            response = gmail_service.send_message(request)
         return McpToolCallResult(success=True, data=response.model_dump())
 
 

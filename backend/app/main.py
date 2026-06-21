@@ -68,15 +68,29 @@ def startup() -> None:
     # Register MCP servers
     from app.integrations.mcp.client import mcp_client
     from app.integrations.mcp.file_system_server import file_system_mcp_server
+    from app.services.mcp_config_service import mcp_config_service
+    from app.services.mcp_file_watch_service import mcp_file_watch_service
+
     mcp_client.register_server(file_system_mcp_server.SERVER_ID, file_system_mcp_server)
+    filesystem_config = mcp_config_service.get_filesystem_config()
+    mcp_client.update_server_config(file_system_mcp_server.SERVER_ID, filesystem_config)
     # File System MCP starts enabled by default
     mcp_client.enable_server(file_system_mcp_server.SERVER_ID)
     logger.info("MCP File System server registered and enabled", extra={"mcp_server": "filesystem", "tools": len(file_system_mcp_server.list_tools())})
+    if filesystem_config.get("root_path"):
+        mcp_file_watch_service.start_for_config()
 
     from app.integrations.mcp.gmail_server import gmail_mcp_server
     mcp_client.register_server(gmail_mcp_server.SERVER_ID, gmail_mcp_server)
     mcp_client.enable_server(gmail_mcp_server.SERVER_ID)
     logger.info("MCP Gmail server registered and enabled", extra={"mcp_server": "gmail", "tools": len(gmail_mcp_server.list_tools())})
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    from app.services.mcp_file_watch_service import mcp_file_watch_service
+
+    mcp_file_watch_service.stop()
 
 
 @app.get("/")

@@ -9,3 +9,5 @@ httpx
 chromadb
 pypdf
 python-docx
+python-pptx
+watchdog

@@ -188,7 +188,14 @@ class McpClient:
         if tool_name == "fs.move_file":
             return {"action": "move_file", "root_path": arguments.get("root_path"), "from_path": arguments.get("from_path"), "to_path": arguments.get("to_path")}
         if tool_name in ("gmail.create_draft", "gmail.send_email"):
-            attachments = arguments.get("indexed_attachments") or []
+            attachment_paths = arguments.get("attachment_paths") or []
+            indexed = arguments.get("indexed_attachments") or []
+            names = [str(p).replace("\\", "/").split("/")[-1] for p in attachment_paths if str(p).strip()]
+            names += [
+                str(a.get("relative_path", "")).replace("\\", "/").split("/")[-1]
+                for a in indexed
+                if isinstance(a, dict) and a.get("relative_path")
+            ]
             return {
                 "action_type": "send_email" if tool_name == "gmail.send_email" else "create_draft",
                 "to": arguments.get("to"),
@@ -196,11 +203,7 @@ class McpClient:
                 "bcc": arguments.get("bcc") or [],
                 "subject": arguments.get("subject"),
                 "body": arguments.get("body"),
-                "attachments": [
-                    str(a.get("relative_path", "")).replace("\\", "/").split("/")[-1]
-                    for a in attachments
-                    if isinstance(a, dict) and a.get("relative_path")
-                ],
+                "attachments": names,
             }
         return None
 
